@@ -9,8 +9,8 @@
 [![Fish](https://img.shields.io/badge/Shell-Fish-4aa3df?style=for-the-badge&logo=fish-shell&logoColor=white)](https://fishshell.com/)
 [![Gruvbox](https://img.shields.io/badge/Theme-Gruvbox-a89984?style=for-the-badge&logoColor=white)](https://github.com/morhetz/gruvbox)
 
-[![Stargazers](https://img.shields.io/github/stars/YOUR_USERNAME/dotfiles?style=social)](https://github.com/YOUR_USERNAME/dotfiles)
-[![License](https://img.shields.io/github/license/YOUR_USERNAME/dotfiles)](LICENSE)
+[![Stargazers](https://img.shields.io/github/stars/NachoOsella/dotfiles?style=social)](https://github.com/NachoOsella/dotfiles)
+[![License](https://img.shields.io/github/license/NachoOsella/dotfiles)](LICENSE)
 
 A meticulously crafted, minimal yet functional Hyprland setup powered by Arch Linux.
 
@@ -57,7 +57,7 @@ A meticulously crafted, minimal yet functional Hyprland setup powered by Arch Li
 | ![Neovim](https://img.shields.io/badge/-Neovim-57a143?logo=neovim&logoColor=white) | Text editor |
 | ![Yazi](https://img.shields.io/badge/-Yazi-e74c3c?logoColor=white) | File manager |
 | ![Lazygit](https://img.shields.io/badge/-Lazygit-f447ff?logo=git&logoColor=white) | Git TUI |
-| ![Rofi](https://img.shields.io/badge/-Rodi-ef4444?logoColor=white) | Application launcher |
+| ![Rofi](https://img.shields.io/badge/-Rofi-ef4444?logoColor=white) | Application launcher |
 | ![Dunst](https://img.shields.io/badge/-Dunst-f59f00?logoColor=white) | Notification daemon |
 
 ---
@@ -74,7 +74,7 @@ A meticulously crafted, minimal yet functional Hyprland setup powered by Arch Li
 
 ```bash
 # Clone the repository
-git clone https://github.com/YOUR_USERNAME/dotfiles.git ~/dotfiles
+git clone https://github.com/NachoOsella/dotfiles.git ~/dotfiles
 cd ~/dotfiles
 
 # Install all required packages
@@ -94,7 +94,7 @@ cd ~/dotfiles
 #### 1. Clone Repository
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/dotfiles.git ~/dotfiles
+git clone https://github.com/NachoOsella/dotfiles.git ~/dotfiles
 cd ~/dotfiles
 ```
 
