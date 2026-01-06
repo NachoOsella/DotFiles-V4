@@ -220,43 +220,27 @@ return {
 
 ## 📸 Gallery
 
-<!-- ADD YOUR SCREENSHOTS HERE -->
-
-<!-- 
 ## Hyprland Workflow
 
-![Hyprland](assets/hyprland-workspace.png)
+![Hyprland](assets/rofi.png)
 
 **Workspace Management** - Tiling workspaces with gaps and borders
 
--->
 
-<!-- 
 ## Neovim Setup
 
-![Neovim](assets/neovim-coding.png)
+![Neovim](assets/nvim.png)
 
 **Development Environment** - LazyVim with LSP, treesitter, and status line
 
--->
 
-<!-- 
-## Terminal Setup
 
-![Terminal](assets/terminal-fish.png)
+## File Manager and Terminal Setup
 
-**Fish Shell** - Custom prompt with starship and helpful functions
-
--->
-
-<!-- 
-## File Manager
-
-![Yazi](assets/yazi-filemanager.png)
+![Yazi](assets/fish-yazi.png)
 
 **Yazi** - Modern TUI file manager with FZF integration
-
--->
+**Fish Shell** - Custom prompt with starship and helpful functions
 
 ---
 
