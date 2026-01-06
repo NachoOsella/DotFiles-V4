@@ -70,7 +70,7 @@ A comprehensive environment focused on keyboard-driven productivity and visual c
 
 ```bash
 # 1. Clone the repository
-git clone https://github.com/NachoOsella/dotfiles.git ~/dotfiles
+git clone https://github.com/NachoOsella/DotFiles-V4.git ~/dotfiles
 cd ~/dotfiles
 
 # 2. Install dependencies
@@ -91,7 +91,7 @@ If you prefer more control, you can install components individually.
 
 ```bash
 # Clone
-git clone https://github.com/NachoOsella/dotfiles.git ~/dotfiles
+git clone https://github.com/NachoOsella/DotFiles-V4.git ~/dotfiles
 cd ~/dotfiles
 
 # Install specific packages (e.g., just hyprland and kitty)
@@ -155,7 +155,7 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 
 <div align="center">
 
-[![License](https://img.shields.io/github/license/NachoOsella/dotfiles?style=flat-square)](LICENSE)
+[![License](https://img.shields.io/github/license/NachoOsella/DotFiles-V4?style=flat-square)](LICENSE)
 <br/>
 Made with ❤️ by <a href="https://github.com/NachoOsella">Nacho</a>
 
