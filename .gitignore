@@ -17,6 +17,13 @@ fish/.config/fish/fish_variables
 # Yazi plugins (reinstall with ya pack)
 yazi/.config/yazi/plugins/
 
+# Opencode
+opencode/.config/opencode/node_modules
+opencode/.config/opencode/bun.lock
+
+# KeePassXC databases
+keepassxc/.config/keepassxc/*.kdbx
+
 # Sensitive files
 *.pem
 *.key

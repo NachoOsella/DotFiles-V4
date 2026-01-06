@@ -1,0 +1,19 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "plugin": [
+    "opencode-gemini-auth@latest",
+    "opencode-openai-codex-auth@latest"
+  ],
+  "lsp": {
+    "pyright": {
+      "command": ["/home/nacho/.local/share/nvim/mason/bin/pyright"]
+    },
+    "jdtls": {
+      "command": ["/home/nacho/.local/share/nvim/mason/bin/jdtls"]
+    },
+    "typescript": {
+      "command": ["/home/nacho/.local/share/nvim/mason/bin/typescript-language-server", "--stdio"]
+    }
+  }
+}
+
