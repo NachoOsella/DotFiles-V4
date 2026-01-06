@@ -1,0 +1,57 @@
+[global]
+    font = "JetBrainsMono Nerd Font 12"
+    markup = full
+
+    # --- GEOMETRÍA Y POSICIONAMIENTO ---
+    # Ancho fijo (min, max)
+    width = (320, 320)
+
+    # Origen de coordenadas
+    origin = top-right
+
+    # --- FIX: Offset (X, Y) ---
+    # La sintaxis vieja era 20x40. La nueva es (20, 40)
+    offset = (20, 40)
+
+    # --- ESTÉTICA ---
+    icon_position = left
+    min_icon_size = 48
+    max_icon_size = 64
+    text_icon_padding = 16
+
+    # Boxie: Radio 0 = Cuadrado perfecto
+    corner_radius = 0
+    corners = all
+
+    padding = 16
+    horizontal_padding = 16
+    frame_width = 2
+    frame_color = "#d5c4a1"
+    separator_color = frame
+    separator_height = 1
+
+    format = "<span weight='bold' foreground='#ebdbb2'>%s</span>\n<span foreground='#a89984'>%b</span>"
+
+    icon_theme = Papirus-Dark
+    enable_recursive_icon_lookup = true
+    icon_path = /usr/share/icons:/home/nacho/.local/share/icons
+
+    timeout = 10
+    ignore_newline = no
+    word_wrap = yes
+
+[urgency_low]
+    background = "#1d2021"
+    foreground = "#ebdbb2"
+    timeout = 5
+
+[urgency_normal]
+    background = "#1d2021"
+    foreground = "#ebdbb2"
+    timeout = 20
+
+[urgency_critical]
+    background = "#1d2021"
+    foreground = "#fb4934"
+    frame_color = "#fb4934"
+    timeout = 0

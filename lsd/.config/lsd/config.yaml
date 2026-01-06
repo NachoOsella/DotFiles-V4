@@ -1,0 +1,34 @@
+# Columnas que querés mostrar (parecido a tu exa --long con extras)
+blocks:
+  - user             # dueño
+  - size             # tamaño en formato legible
+  - date             # fecha de modificación
+  - name             # nombre + íconos
+
+# Orden: directorios primero
+sorting:
+  column: name
+  reverse: false
+  directories_first: true
+  group_directories: true
+
+# Fecha: mostrar modificado y creado
+date: "+%Y-%m-%d %H:%M"
+
+# Tamaño: binario (KB, MB, GB)
+size: short
+
+# Mostrar cabecera (similar a --header en exa)
+header: true
+
+# Íconos y clasificación
+icons:
+  when: always
+  theme: fancy
+  separator: " "
+
+# Colores (siempre activados)
+color:
+  when: always
+  theme: custom
+

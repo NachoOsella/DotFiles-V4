@@ -1,0 +1,24 @@
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor
+*.swp
+*.swo
+*~
+
+# Nvim
+nvim/.config/nvim/lazy-lock.json
+nvim/.config/nvim/.luarc.json
+
+# Fish
+fish/.config/fish/fish_variables
+
+# Yazi plugins (reinstall with ya pack)
+yazi/.config/yazi/plugins/
+
+# Sensitive files
+*.pem
+*.key
+*credentials*
+*secret*

@@ -1,0 +1,65 @@
+[opener]
+image = [
+    { run = 'feh --geometry 800x600 --scale-down --auto-zoom "$@"',orphan = true, desc = "Abrir imagen con feh" }
+]
+video = [
+    { run = 'vlc "$@"', orphan = true, desc = "Reproducir con VLC", for = "unix" }
+]
+pdf = [
+    { run = 'zathura "$@"', orphan = true, desc = "Ver con Zathura", for = "unix" }
+]
+extract = [
+    { run = '7z x "$@"', desc = "Extraer archivo", for = "unix" }
+]
+edit = [
+    { run = 'nvim "$@"', block = true, desc = "Editar con Nvim", for = "unix" }
+]
+audio = [
+    { run = 'vlc "$@"', orphan = true, desc = "Reproducir audio con VLC", for = "unix" }
+]
+
+
+[open]
+rules = [
+    # Reglas para archivos de texto (MIME y extensiones)
+    { mime = "text/*", use = "edit" },
+    { name = "*.txt", use = "edit" },
+    { name = "*.md", use = "edit" },
+    { name = "*.py", use = "edit" },
+    { name = "*.rs", use = "edit" },
+    { name = "*.toml", use = "edit" },
+    # Añade más extensiones de texto si las necesitas
+    
+
+    # Reglas para imágenes
+    { mime = "image/*", use = "image" },
+    
+
+    # Reglas para videos
+    { mime = "video/*", use = "video" },
+
+    # Reglas para PDFs
+    { mime = "application/pdf", use = "pdf" },
+
+    # Reglas para audio
+    { mime = "audio/*", use = "audio" },
+    
+
+    # Reglas para archivos comprimidos
+    { name = "*.zip", use = "extract" },
+    { name = "*.tar", use = "extract" },
+    { name = "*.tar.gz", use = "extract" },
+    { name = "*.tgz", use = "extract" },
+    { name = "*.bz2", use = "extract" },
+    { name = "*.xz", use = "extract" },
+    { name = "*.7z", use = "extract" },
+    { name = "*.rar", use = "extract" },
+
+    # Reglas generales para archivos
+    { name = "*", use = "edit" }    
+
+]
+
+[mgr]
+sort_by = "mtime"
+sort_reverse = true

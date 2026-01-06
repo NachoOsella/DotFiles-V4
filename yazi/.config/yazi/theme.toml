@@ -1,0 +1,193 @@
+# ~/.config/yazi/theme.toml
+# Gruvbox Material - Dark Hard
+# Base (Hard): bg=#1d2021, fg=#d4be98, gray=#928374, border=#665c54
+# Accents: red=#ea6962, orange=#e78a4e, yellow=#d8a657, green=#a9b665,
+#          blue=#7daea3, purple=#d3869b, cyan=#89b482
+# UI bgs (Material): bg0=#282828 bg1=#32302f bg2=#3a3735 bg3=#45403d bg4=#504945  (útiles para paneles) :contentReference[oaicite:3]{index=3}
+
+# -------------------------------------------------------------------
+# App background (OSC 11)
+# -------------------------------------------------------------------
+[app]
+overall = { bg = "#1d2021" } # requiere soporte OSC 11 :contentReference[oaicite:4]{index=4}
+
+
+# -------------------------------------------------------------------
+# Manager
+# -------------------------------------------------------------------
+[mgr]
+cwd           = { fg = "#7daea3", bold = true }
+
+find_keyword  = { fg = "#a9b665", italic = true }
+find_position = { fg = "#e78a4e", italic = true }
+
+# marker_selected = { fg = "#1d2021", bg = "#a9b665", bold = true }
+marker_copied   = { fg = "#1d2021", bg = "#7daea3", bold = true }
+marker_cut      = { fg = "#1d2021", bg = "#ea6962", bold = true }
+marker_marked   = { fg = "#1d2021", bg = "#d8a657", bold = true }
+
+count_selected  = { fg = "#a9b665", bold = true }
+count_copied    = { fg = "#7daea3", bold = true }
+count_cut       = { fg = "#ea6962", bold = true }
+
+border_symbol = "│"
+border_style  = { fg = "#665c54" }
+
+# -------------------------------------------------------------------
+# Pane indicator bars
+# -------------------------------------------------------------------
+[indicator]
+parent  = { fg = "#45403d", bg = "#1d2021" }
+current = { fg = "#1d2021", bg = "#a9b665", bold = true }
+preview = { fg = "#1d2021", bg = "#d8a657", bold = true }
+
+# Esto es clave: hace que el indicador sea más notorio (cuadradito)
+padding = { open = "█", close = "█" }
+
+# -------------------------------------------------------------------
+# Tabs (reemplaza tab_active/tab_inactive/tab_width)
+# -------------------------------------------------------------------
+[tabs]
+active   = { fg = "#1d2021", bg = "#504945", bold = true }
+inactive = { fg = "#928374", bg = "#32302f" }
+sep_inner = { open = " ", close = " " }
+sep_outer = { open = "",  close = "" }
+
+# -------------------------------------------------------------------
+# Mode
+# -------------------------------------------------------------------
+[mode]
+normal_main = { fg = "#1d2021", bg = "#928374", bold = true }
+normal_alt  = { fg = "#1d2021", bg = "#928374", bold = true }
+
+select_main = { fg = "#1d2021", bg = "#a9b665", bold = true }
+select_alt  = { fg = "#1d2021", bg = "#a9b665", bold = true }
+
+unset_main  = { fg = "#1d2021", bg = "#d3869b", bold = true }
+unset_alt   = { fg = "#1d2021", bg = "#d3869b", bold = true }
+
+# -------------------------------------------------------------------
+# Status (reemplaza separator_open/close + permissions_*)
+# -------------------------------------------------------------------
+[status]
+overall   = { fg = "#d4be98", bg = "#32302f" }
+sep_left  = { open = "", close = "" }
+sep_right = { open = "", close = "" }
+
+progress_label  = { fg = "#d4be98", bold = true }
+progress_normal = { fg = "#504945", bg = "#3a3735" }
+progress_error  = { fg = "#ea6962", bg = "#3a3735" }
+
+perm_type  = { fg = "#928374" }
+perm_read  = { fg = "#a9b665" }
+perm_write = { fg = "#ea6962" }
+perm_exec  = { fg = "#d8a657" }
+perm_sep   = { fg = "#665c54" }
+
+# -------------------------------------------------------------------
+# Which
+# -------------------------------------------------------------------
+[which]
+cols = 2
+mask  = { bg = "#282828" }
+cand  = { fg = "#7daea3", bold = true }
+rest  = { fg = "#928374" }
+desc  = { fg = "#e78a4e" }
+separator = "  "
+separator_style = { fg = "#665c54" }
+
+# -------------------------------------------------------------------
+# Confirm / Spot / Notify
+# -------------------------------------------------------------------
+[confirm]
+border = { fg = "#665c54" }
+title  = { fg = "#d8a657", bold = true }
+body   = { fg = "#d4be98" }
+list   = { fg = "#928374" }
+btn_yes = { fg = "#1d2021", bg = "#a9b665", bold = true }
+btn_no  = { fg = "#1d2021", bg = "#ea6962", bold = true }
+btn_labels = ["Yes", "No"]
+
+
+[spot]
+border = { fg = "#665c54" }
+title  = { fg = "#d8a657", bold = true }
+
+# No colorees el fondo de toda la columna (así desaparece el “bloque gris”)
+tbl_col  = { fg = "#d4be98", bold = true }   # sin bg
+
+# Dejá el highlight fuerte SOLO en la celda activa
+tbl_cell = { fg = "#1d2021", bg = "#a9b665", bold = true }
+
+[notify]
+title_info  = { fg = "#89b482", bold = true }
+title_warn  = { fg = "#d8a657", bold = true }
+title_error = { fg = "#ea6962", bold = true }
+
+# -------------------------------------------------------------------
+# Pick / Input / Completion
+# -------------------------------------------------------------------
+[pick]
+border   = { fg = "#665c54" }
+active   = { fg = "#1d2021", bg = "#7daea3", bold = true }
+inactive = { fg = "#d4be98" }
+
+[input]
+border   = { fg = "#665c54" }
+title    = { fg = "#d8a657", bold = true }
+value    = { fg = "#d4be98" }
+selected = { reversed = true }
+
+[cmp]
+border       = { fg = "#665c54" }
+active       = { fg = "#1d2021", bg = "#504945" }
+inactive     = { fg = "#928374" }
+icon_file    = "󰈙"
+icon_folder  = "󰉋"
+icon_command = ""
+
+# -------------------------------------------------------------------
+# Tasks / Help
+# -------------------------------------------------------------------
+[tasks]
+border  = { fg = "#665c54" }
+title   = { fg = "#7daea3", bold = true }
+hovered = { fg = "#1d2021", bg = "#504945", bold = true }
+
+[help]
+on      = { fg = "#e78a4e", bold = true }
+run     = { fg = "#7daea3" }
+desc    = { fg = "#928374" }
+hovered = { bg = "#32302f", bold = true }
+footer  = { fg = "#d4be98", bg = "#504945" }
+icon_info  = ""
+icon_warn  = ""
+icon_error = ""
+
+# -------------------------------------------------------------------
+# Filetype rules
+# -------------------------------------------------------------------
+[filetype]
+rules = [
+  # Directories
+  { url = "*/", fg = "#7daea3", bold = true },
+
+  # Images / media
+  { mime = "image/*",           fg = "#d8a657" },
+  { mime = "{audio,video}/*",   fg = "#d3869b" },
+
+  # Archives
+  { mime = "application/zip",             fg = "#e78a4e" },
+  { mime = "application/gzip",            fg = "#e78a4e" },
+  { mime = "application/x-tar",           fg = "#e78a4e" },
+  { mime = "application/x-bzip",          fg = "#e78a4e" },
+  { mime = "application/x-bzip2",         fg = "#e78a4e" },
+  { mime = "application/x-7z-compressed", fg = "#e78a4e" },
+  { mime = "application/x-rar",           fg = "#e78a4e" },
+
+  # Executables / links
+  { url = "*", is = "exec",   fg = "#a9b665", bold = true },
+  { url = "*", is = "link",   fg = "#89b482" },
+  { url = "*", is = "orphan", fg = "#ea6962", bold = true },
+]
+
