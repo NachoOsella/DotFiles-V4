@@ -239,8 +239,8 @@ return {
 
 ![Yazi](assets/fish-yazi.png)
 
-**Yazi** - Modern TUI file manager with FZF integration
-**Fish Shell** - Custom prompt with starship and helpful functions
+- **Yazi** - Modern TUI file manager with FZF integration
+- **Fish Shell** - Custom prompt with starship and helpful functions
 
 ---
 
