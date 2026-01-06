@@ -383,7 +383,7 @@ Feel free to fork this repo and customize it to your liking. If you find bugs or
 
 ## 📄 License
 
-[![License](https://img.shields.io/github/license/YOUR_USERNAME/dotfiles)](LICENSE)
+[![License](https://img.shields.io/github/license/NachoOsella/DotFiles-V4)](LICENSE)
 
 This repository is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
@@ -402,6 +402,6 @@ This repository is licensed under the MIT License - see the [LICENSE](LICENSE) f
 
 **⭐ Star this repo if it helped you!**
 
-Made with ❤️ by [YOUR_NAME](https://github.com/YOUR_USERNAME)
+Made with ❤️ by [Nacho](https://github.com/NachoOsella)
 
 </div>
