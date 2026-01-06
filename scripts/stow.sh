@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ============================================================
-# Stow Manager - Gestiona symlinks de dotfiles
+# Stow Manager - Manages dotfiles symlinks
 # ============================================================
 
 set -e
@@ -21,7 +21,7 @@ log_success() { echo -e "${GREEN}[OK]${NC} $1"; }
 log_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 
-# Todos los paquetes stow disponibles
+# All available stow packages
 STOW_PACKAGES=(
 	hypr
 	kitty
@@ -46,51 +46,51 @@ STOW_PACKAGES=(
 
 usage() {
 	echo ""
-	echo -e "${CYAN}Stow Manager${NC} - Gestiona symlinks de dotfiles"
+	echo -e "${CYAN}Stow Manager${NC} - Manages dotfiles symlinks"
 	echo ""
-	echo "Uso: $0 [comando] [paquetes...]"
+	echo "Usage: $0 [command] [packages...]"
 	echo ""
-	echo "Comandos:"
-	echo "  install, i    Instala (stow) los paquetes especificados"
-	echo "  remove, r     Remueve (unstow) los paquetes especificados"
-	echo "  restow, re    Re-aplica stow (útil después de cambios)"
-	echo "  all           Instala todos los paquetes"
-	echo "  remove-all    Remueve todos los paquetes"
-	echo "  list, ls      Lista los paquetes disponibles"
-	echo "  status, st    Muestra el estado de los symlinks"
-	echo "  help, -h      Muestra esta ayuda"
+	echo "Commands:"
+	echo "  install, i    Install (stow) specified packages"
+	echo "  remove, r     Remove (unstow) specified packages"
+	echo "  restow, re    Re-apply stow (useful after changes)"
+	echo "  all           Install all packages"
+	echo "  remove-all    Remove all packages"
+	echo "  list, ls      List available packages"
+	echo "  status, st    Show symlink status"
+	echo "  help, -h      Show this help"
 	echo ""
-	echo "Ejemplos:"
-	echo "  $0 all                    # Instala todo"
-	echo "  $0 install hypr kitty     # Instala hypr y kitty"
-	echo "  $0 remove nvim            # Remueve nvim"
-	echo "  $0 restow hypr            # Re-aplica hypr"
+	echo "Examples:"
+	echo "  $0 all                    # Install everything"
+	echo "  $0 install hypr kitty     # Install hypr and kitty"
+	echo "  $0 remove nvim            # Remove nvim"
+	echo "  $0 restow hypr            # Re-apply hypr"
 	echo ""
-	echo "Paquetes disponibles:"
+	echo "Available packages:"
 	echo "  ${STOW_PACKAGES[*]}"
 	echo ""
 }
 
 check_stow() {
 	if ! command -v stow &>/dev/null; then
-		log_error "stow no está instalado. Instálalo con: sudo pacman -S stow"
+		log_error "stow is not installed. Install it with: sudo pacman -S stow"
 		exit 1
 	fi
 }
 
 check_dotfiles_dir() {
 	if [[ ! -d "$DOTFILES_DIR" ]]; then
-		log_error "Directorio de dotfiles no encontrado: $DOTFILES_DIR"
+		log_error "Dotfiles directory not found: $DOTFILES_DIR"
 		exit 1
 	fi
 }
 
 stow_package() {
 	local pkg="$1"
-	local action="$2" # "" para stow, "-D" para unstow, "-R" para restow
+	local action="$2" # "" for stow, "-D" for unstow, "-R" for restow
 
 	if [[ ! -d "$DOTFILES_DIR/$pkg" ]]; then
-		log_warn "Paquete no encontrado: $pkg"
+		log_warn "Package not found: $pkg"
 		return 1
 	fi
 
@@ -99,25 +99,25 @@ stow_package() {
 	case "$action" in
 	"")
 		if stow -v "$pkg" 2>&1; then
-			log_success "Instalado: $pkg"
+			log_success "Installed: $pkg"
 		else
-			log_error "Error instalando: $pkg"
+			log_error "Error installing: $pkg"
 			return 1
 		fi
 		;;
 	"-D")
 		if stow -v -D "$pkg" 2>&1; then
-			log_success "Removido: $pkg"
+			log_success "Removed: $pkg"
 		else
-			log_error "Error removiendo: $pkg"
+			log_error "Error removing: $pkg"
 			return 1
 		fi
 		;;
 	"-R")
 		if stow -v -R "$pkg" 2>&1; then
-			log_success "Re-aplicado: $pkg"
+			log_success "Re-applied: $pkg"
 		else
-			log_error "Error re-aplicando: $pkg"
+			log_error "Error re-applying: $pkg"
 			return 1
 		fi
 		;;
@@ -128,12 +128,12 @@ cmd_install() {
 	local packages=("$@")
 
 	if [[ ${#packages[@]} -eq 0 ]]; then
-		log_error "Especifica al menos un paquete"
+		log_error "Specify at least one package"
 		usage
 		exit 1
 	fi
 
-	log_info "Instalando paquetes..."
+	log_info "Installing packages..."
 	for pkg in "${packages[@]}"; do
 		stow_package "$pkg" ""
 	done
@@ -143,11 +143,11 @@ cmd_remove() {
 	local packages=("$@")
 
 	if [[ ${#packages[@]} -eq 0 ]]; then
-		log_error "Especifica al menos un paquete"
+		log_error "Specify at least one package"
 		exit 1
 	fi
 
-	log_info "Removiendo paquetes..."
+	log_info "Removing packages..."
 	for pkg in "${packages[@]}"; do
 		stow_package "$pkg" "-D"
 	done
@@ -157,18 +157,18 @@ cmd_restow() {
 	local packages=("$@")
 
 	if [[ ${#packages[@]} -eq 0 ]]; then
-		log_error "Especifica al menos un paquete"
+		log_error "Specify at least one package"
 		exit 1
 	fi
 
-	log_info "Re-aplicando paquetes..."
+	log_info "Re-applying packages..."
 	for pkg in "${packages[@]}"; do
 		stow_package "$pkg" "-R"
 	done
 }
 
 cmd_all() {
-	log_info "Instalando todos los paquetes..."
+	log_info "Installing all packages..."
 	cd "$DOTFILES_DIR"
 
 	for pkg in "${STOW_PACKAGES[@]}"; do
@@ -176,11 +176,11 @@ cmd_all() {
 	done
 
 	echo ""
-	log_success "Todos los paquetes instalados"
+	log_success "All packages installed"
 }
 
 cmd_remove_all() {
-	log_info "Removiendo todos los paquetes..."
+	log_info "Removing all packages..."
 	cd "$DOTFILES_DIR"
 
 	for pkg in "${STOW_PACKAGES[@]}"; do
@@ -188,18 +188,18 @@ cmd_remove_all() {
 	done
 
 	echo ""
-	log_success "Todos los paquetes removidos"
+	log_success "All packages removed"
 }
 
 cmd_list() {
 	echo ""
-	echo -e "${CYAN}Paquetes disponibles:${NC}"
+	echo -e "${CYAN}Available packages:${NC}"
 	echo ""
 
 	for pkg in "${STOW_PACKAGES[@]}"; do
 		if [[ -d "$DOTFILES_DIR/$pkg" ]]; then
 			local files=$(find "$DOTFILES_DIR/$pkg" -type f | wc -l)
-			printf "  ${GREEN}%-15s${NC} (%d archivos)\n" "$pkg" "$files"
+			printf "  ${GREEN}%-15s${NC} (%d files)\n" "$pkg" "$files"
 		fi
 	done
 	echo ""
@@ -207,19 +207,19 @@ cmd_list() {
 
 cmd_status() {
 	echo ""
-	echo -e "${CYAN}Estado de symlinks:${NC}"
+	echo -e "${CYAN}Symlink status:${NC}"
 	echo ""
 
 	for pkg in "${STOW_PACKAGES[@]}"; do
 		if [[ -d "$DOTFILES_DIR/$pkg/.config" ]]; then
-			# Buscar el primer directorio/archivo en .config
+			# Find first directory/file in .config
 			local target=$(ls "$DOTFILES_DIR/$pkg/.config" | head -1)
 			local link_path="$HOME/.config/$target"
 
 			if [[ -L "$link_path" ]]; then
 				printf "  ${GREEN}[LINKED]${NC}  %-15s -> %s\n" "$pkg" "$(readlink "$link_path")"
 			elif [[ -e "$link_path" ]]; then
-				printf "  ${YELLOW}[EXISTS]${NC}  %-15s (archivo/directorio existe, no es symlink)\n" "$pkg"
+				printf "  ${YELLOW}[EXISTS]${NC}  %-15s (file/directory exists, not a symlink)\n" "$pkg"
 			else
 				printf "  ${RED}[MISSING]${NC} %-15s\n" "$pkg"
 			fi
@@ -265,7 +265,7 @@ main() {
 		usage
 		;;
 	*)
-		log_error "Comando desconocido: $cmd"
+		log_error "Unknown command: $cmd"
 		usage
 		exit 1
 		;;
