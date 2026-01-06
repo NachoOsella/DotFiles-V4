@@ -286,3 +286,78 @@ git log --oneline -- hypr/.config/hypr/hyprland.conf
 # hyprland.conf
 source = ~/.config/hypr/local.conf  # No versionado
 ```
+
+---
+
+## Actualizar README
+
+### Agregar Screenshots
+
+1. **Tomar screenshots** con hyprshot o grim:
+
+```bash
+# Screenshot de región a archivo
+hyprshot -m region -o ~/Pictures
+
+# O desde clipboard: pega y guarda como .png
+```
+
+2. **Copiar a repo**:
+
+```bash
+mv ~/Pictures/hyprshot_*.png ~/dotfiles/assets/hyprland-workspace.png
+```
+
+3. **Actualizar README.md**:
+
+Descomenta las líneas en la sección "Gallery":
+
+```markdown
+<!-- 
+![Screenshot 1](assets/screenshot-1.png)
+-->
+```
+
+Cámbialo a:
+
+```markdown
+![Hyprland Workspace](assets/hyprland-workspace.png)
+```
+
+4. **Commit cambios**:
+
+```bash
+cd ~/dotfiles
+git add README.md assets/
+git commit -m "docs: add screenshots to README"
+git push
+```
+
+### Recomendaciones de Screenshots
+
+**Esenciales:**
+- Desktop completo (2-3 workspaces)
+- Neovim con proyecto
+- Terminal con fish/starship
+- Rofi launcher
+- Yazi file manager
+
+**Dimensiones:**
+- Desktop: 1920x1080 o 2560x1440
+- Window: Ajustado al contenido, sin redimensionar
+
+Evita redimensionar imágenes - causa pérdida de calidad.
+
+### Actualizar Badges
+
+Para agregar nuevos badges al README, usa [shields.io](https://shields.io/):
+
+```markdown
+[![Nombre](https://img.shields.io/badge/NOMBRE-COLOR?style=for-the-badge&logo=nombre&logoColor=white)](URL)
+```
+
+Colores hex comunes:
+- `1793d1` - Arch Blue
+- `00b4d8` - Hyprland Cyan
+- `57a143` - Neovim Green
+- `f05032` - Git Red
