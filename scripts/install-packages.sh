@@ -2,12 +2,12 @@
 
 # ============================================================
 # Dotfiles Package Installer
-# Instala los paquetes esenciales para este setup Hyprland
+# Installs essential packages for this Hyprland setup
 # ============================================================
 
 set -e
 
-# Colores
+# Colors
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -20,10 +20,10 @@ log_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 
 # ============================================================
-# PAQUETES
+# PACKAGES
 # ============================================================
 
-# Sistema base y utilidades
+# Base system and utilities
 BASE_PACKAGES=(
 	base-devel
 	git
@@ -39,7 +39,7 @@ BASE_PACKAGES=(
 	zoxide
 )
 
-# Hyprland y Wayland
+# Hyprland and Wayland
 HYPRLAND_PACKAGES=(
 	hyprland
 	hyprpaper
@@ -60,7 +60,7 @@ HYPRLAND_PACKAGES=(
 	uwsm
 )
 
-# Terminal y shell
+# Terminal and shell
 TERMINAL_PACKAGES=(
 	kitty
 	fish
@@ -92,7 +92,7 @@ AUDIO_PACKAGES=(
 	vlc
 )
 
-# Fuentes
+# Fonts
 FONT_PACKAGES=(
 	ttf-jetbrains-mono-nerd
 	ttf-firacode-nerd
@@ -103,7 +103,7 @@ FONT_PACKAGES=(
 	noto-fonts-emoji
 )
 
-# Theming Qt/GTK
+# Qt/GTK theming
 THEMING_PACKAGES=(
 	qt5ct
 	qt6ct
@@ -113,7 +113,7 @@ THEMING_PACKAGES=(
 	papirus-icon-theme
 )
 
-# Desarrollo
+# Development
 DEV_PACKAGES=(
 	go
 	npm
@@ -126,7 +126,7 @@ DEV_PACKAGES=(
 	maven
 )
 
-# Apps
+# Applications
 APP_PACKAGES=(
 	zathura-pdf-poppler
 	keepassxc
@@ -145,7 +145,7 @@ NETWORK_PACKAGES=(
 	openssh
 )
 
-# Paquetes AUR (requieren yay)
+# AUR packages (require yay)
 AUR_PACKAGES=(
 	brave-bin
 	visual-studio-code-bin
@@ -154,34 +154,34 @@ AUR_PACKAGES=(
 )
 
 # ============================================================
-# FUNCIONES
+# FUNCTIONS
 # ============================================================
 
 check_root() {
 	if [[ $EUID -eq 0 ]]; then
-		log_error "No ejecutes este script como root"
+		log_error "Do not run this script as root"
 		exit 1
 	fi
 }
 
 check_arch() {
 	if ! command -v pacman &>/dev/null; then
-		log_error "Este script es solo para Arch Linux"
+		log_error "This script is for Arch Linux only"
 		exit 1
 	fi
 }
 
 install_yay() {
 	if ! command -v yay &>/dev/null; then
-		log_info "Instalando yay..."
+		log_info "Installing yay..."
 		git clone https://aur.archlinux.org/yay.git /tmp/yay
 		cd /tmp/yay
 		makepkg -si --noconfirm
 		cd -
 		rm -rf /tmp/yay
-		log_success "yay instalado"
+		log_success "yay installed"
 	else
-		log_success "yay ya está instalado"
+		log_success "yay already installed"
 	fi
 }
 
@@ -194,9 +194,9 @@ install_packages() {
 		return
 	fi
 
-	log_info "Instalando paquetes: $name"
+	log_info "Installing packages: $name"
 	sudo pacman -S --needed --noconfirm "${packages[@]}" 2>/dev/null || {
-		log_warn "Algunos paquetes de $name fallaron, continuando..."
+		log_warn "Some $name packages failed, continuing..."
 	}
 }
 
@@ -205,47 +205,47 @@ install_aur_packages() {
 		return
 	fi
 
-	log_info "Instalando paquetes AUR..."
+	log_info "Installing AUR packages..."
 	yay -S --needed --noconfirm "${AUR_PACKAGES[@]}" 2>/dev/null || {
-		log_warn "Algunos paquetes AUR fallaron, continuando..."
+		log_warn "Some AUR packages failed, continuing..."
 	}
 }
 
 enable_services() {
-	log_info "Habilitando servicios..."
+	log_info "Enabling services..."
 
 	sudo systemctl enable --now NetworkManager 2>/dev/null || true
 	sudo systemctl enable --now bluetooth 2>/dev/null || true
 	sudo systemctl enable --now docker 2>/dev/null || true
 	sudo systemctl enable --now sddm 2>/dev/null || true
 
-	# Agregar usuario a grupo docker
+	# Add user to docker group
 	sudo usermod -aG docker "$USER" 2>/dev/null || true
 
-	log_success "Servicios configurados"
+	log_success "Services configured"
 }
 
 print_summary() {
 	echo ""
 	echo -e "${GREEN}============================================${NC}"
-	echo -e "${GREEN}  Instalación completada${NC}"
+	echo -e "${GREEN}  Installation completed${NC}"
 	echo -e "${GREEN}============================================${NC}"
 	echo ""
-	echo "Paquetes instalados:"
-	echo "  - Base y utilidades"
-	echo "  - Hyprland + componentes"
+	echo "Installed packages:"
+	echo "  - Base and utilities"
+	echo "  - Hyprland + components"
 	echo "  - Terminal (kitty, fish, starship)"
-	echo "  - Editores (neovim, vim)"
+	echo "  - Editors (neovim, vim)"
 	echo "  - Audio (pipewire)"
-	echo "  - Fuentes Nerd"
-	echo "  - Theming Qt/GTK"
-	echo "  - Desarrollo (go, node, java, docker)"
+	echo "  - Nerd fonts"
+	echo "  - Qt/GTK theming"
+	echo "  - Development (go, node, java, docker)"
 	echo "  - Apps (brave, vscode, obsidian, etc)"
 	echo ""
-	echo -e "${YELLOW}Siguiente paso:${NC}"
+	echo -e "${YELLOW}Next step:${NC}"
 	echo "  cd ~/dotfiles && ./scripts/stow-all.sh"
 	echo ""
-	echo -e "${YELLOW}Reinicia la sesión para aplicar cambios de grupo (docker)${NC}"
+	echo -e "${YELLOW}Restart session to apply group changes (docker)${NC}"
 }
 
 # ============================================================
@@ -262,7 +262,7 @@ main() {
 	check_root
 	check_arch
 
-	log_info "Actualizando sistema..."
+	log_info "Updating system..."
 	sudo pacman -Syu --noconfirm
 
 	install_packages "Base" "${BASE_PACKAGES[@]}"
@@ -284,7 +284,7 @@ main() {
 	print_summary
 }
 
-# Ejecutar si no es sourced
+# Run if not sourced
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
 	main "$@"
 fi
