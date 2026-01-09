@@ -46,3 +46,6 @@ fish_add_path /home/nacho/.termcast/compiled/tuitube/bin
 
 # nvim mason
 fish_add_path ~/.local/share/nvim/mason/bin
+
+# opencode
+fish_add_path /home/nacho/.opencode/bin
