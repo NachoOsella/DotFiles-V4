@@ -1,223 +1,234 @@
 {
   "$schema": "https://opencode.ai/theme.json",
   "defs": {
-    "gruvbox0": "#1d2021",
-    "gruvbox1": "#282828",
-    "gruvbox2": "#3c3836",
-    "gruvbox3": "#665c54",
-    "gruvbox4": "#d5c4a1",
-    "gruvbox5": "#ebdbb2",
-    "gruvbox6": "#fbf1c7",
-    "gruvbox7": "#8ec07c",
-    "gruvbox8": "#83a598",
-    "gruvbox9": "#d3869b",
-    "gruvbox10": "#458588",
-    "gruvbox11": "#cc241d",
-    "gruvbox12": "#d65d0e",
-    "gruvbox13": "#d79921",
-    "gruvbox14": "#b8bb26",
-    "gruvbox15": "#b16286"
+    "bg0": "#1d2021",
+    "bg1": "#282828",
+    "bg2": "#32302f",
+    "bg3": "#3c3836",
+    "bg4": "#504945",
+    "bg5": "#665c54",
+    "bg6": "#7c6f64",
+    "fg0": "#d4be98",
+    "fg1": "#ddc7a1",
+    "fg2": "#e6d5ae",
+    "grey0": "#7c6f64",
+    "grey1": "#928374",
+    "grey2": "#a89984",
+    "red": "#ea6962",
+    "orange": "#e78a4e",
+    "yellow": "#d8a657",
+    "green": "#a9b665",
+    "aqua": "#89b482",
+    "blue": "#7daea3",
+    "purple": "#d3869b",
+    "red_dim": "#c14a4a",
+    "orange_dim": "#c35e0a",
+    "yellow_dim": "#b47109",
+    "green_dim": "#6c782e",
+    "aqua_dim": "#4c7a5d",
+    "blue_dim": "#45707a",
+    "purple_dim": "#945e80"
   },
   "theme": {
     "primary": {
-      "dark": "gruvbox8",
-      "light": "gruvbox10"
+      "dark": "blue",
+      "light": "blue"
     },
     "secondary": {
-      "dark": "gruvbox9",
-      "light": "gruvbox9"
+      "dark": "purple",
+      "light": "purple"
     },
     "accent": {
-      "dark": "gruvbox7",
-      "light": "gruvbox7"
+      "dark": "aqua",
+      "light": "aqua"
     },
     "error": {
-      "dark": "gruvbox11",
-      "light": "gruvbox11"
+      "dark": "red",
+      "light": "red"
     },
     "warning": {
-      "dark": "gruvbox12",
-      "light": "gruvbox12"
+      "dark": "orange",
+      "light": "orange"
     },
     "success": {
-      "dark": "gruvbox14",
-      "light": "gruvbox14"
+      "dark": "green",
+      "light": "green"
     },
     "info": {
-      "dark": "gruvbox8",
-      "light": "gruvbox10"
+      "dark": "blue",
+      "light": "blue"
     },
     "text": {
-      "dark": "gruvbox4",
-      "light": "gruvbox0"
+      "dark": "fg0",
+      "light": "bg0"
     },
     "textMuted": {
-      "dark": "gruvbox3",
-      "light": "gruvbox1"
+      "dark": "grey1",
+      "light": "grey0"
     },
     "background": {
-      "dark": "gruvbox0",
-      "light": "gruvbox6"
+      "dark": "bg0",
+      "light": "fg1"
     },
     "backgroundPanel": {
-      "dark": "gruvbox1",
-      "light": "gruvbox5"
+      "dark": "bg1",
+      "light": "fg0"
     },
     "backgroundElement": {
-      "dark": "gruvbox1",
-      "light": "gruvbox4"
+      "dark": "bg2",
+      "light": "fg2"
     },
     "border": {
-      "dark": "gruvbox2",
-      "light": "gruvbox3"
+      "dark": "bg3",
+      "light": "bg5"
     },
     "borderActive": {
-      "dark": "gruvbox3",
-      "light": "gruvbox2"
+      "dark": "bg4",
+      "light": "bg4"
     },
     "borderSubtle": {
-      "dark": "gruvbox2",
-      "light": "gruvbox3"
+      "dark": "bg3",
+      "light": "bg5"
     },
     "diffAdded": {
-      "dark": "gruvbox14",
-      "light": "gruvbox14"
+      "dark": "green",
+      "light": "green"
     },
     "diffRemoved": {
-      "dark": "gruvbox11",
-      "light": "gruvbox11"
+      "dark": "red",
+      "light": "red"
     },
     "diffContext": {
-      "dark": "gruvbox3",
-      "light": "gruvbox3"
+      "dark": "grey1",
+      "light": "grey1"
     },
     "diffHunkHeader": {
-      "dark": "gruvbox3",
-      "light": "gruvbox3"
+      "dark": "grey1",
+      "light": "grey1"
     },
     "diffHighlightAdded": {
-      "dark": "gruvbox14",
-      "light": "gruvbox14"
+      "dark": "green",
+      "light": "green"
     },
     "diffHighlightRemoved": {
-      "dark": "gruvbox11",
-      "light": "gruvbox11"
+      "dark": "red",
+      "light": "red"
     },
     "diffAddedBg": {
-      "dark": "#3c3836",
-      "light": "#ebdbb2"
+      "dark": "bg3",
+      "light": "fg0"
     },
     "diffRemovedBg": {
-      "dark": "#3c3836",
-      "light": "#ebdbb2"
+      "dark": "bg3",
+      "light": "fg0"
     },
     "diffContextBg": {
-      "dark": "gruvbox1",
-      "light": "gruvbox5"
+      "dark": "bg1",
+      "light": "fg1"
     },
     "diffLineNumber": {
-      "dark": "gruvbox2",
-      "light": "gruvbox4"
+      "dark": "grey1",
+      "light": "grey1"
     },
     "diffAddedLineNumberBg": {
-      "dark": "#3c3836",
-      "light": "#ebdbb2"
+      "dark": "bg3",
+      "light": "fg0"
     },
     "diffRemovedLineNumberBg": {
-      "dark": "#3c3836",
-      "light": "#ebdbb2"
+      "dark": "bg3",
+      "light": "fg0"
     },
     "markdownText": {
-      "dark": "gruvbox4",
-      "light": "gruvbox0"
+      "dark": "fg0",
+      "light": "bg0"
     },
     "markdownHeading": {
-      "dark": "gruvbox8",
-      "light": "gruvbox10"
+      "dark": "blue",
+      "light": "blue"
     },
     "markdownLink": {
-      "dark": "gruvbox9",
-      "light": "gruvbox9"
+      "dark": "purple",
+      "light": "purple"
     },
     "markdownLinkText": {
-      "dark": "gruvbox7",
-      "light": "gruvbox7"
+      "dark": "aqua",
+      "light": "aqua"
     },
     "markdownCode": {
-      "dark": "gruvbox14",
-      "light": "gruvbox14"
+      "dark": "green",
+      "light": "green"
     },
     "markdownBlockQuote": {
-      "dark": "gruvbox3",
-      "light": "gruvbox3"
+      "dark": "grey1",
+      "light": "grey1"
     },
     "markdownEmph": {
-      "dark": "gruvbox12",
-      "light": "gruvbox12"
+      "dark": "orange",
+      "light": "orange"
     },
     "markdownStrong": {
-      "dark": "gruvbox13",
-      "light": "gruvbox13"
+      "dark": "yellow",
+      "light": "yellow"
     },
     "markdownHorizontalRule": {
-      "dark": "gruvbox3",
-      "light": "gruvbox3"
+      "dark": "grey1",
+      "light": "grey1"
     },
     "markdownListItem": {
-      "dark": "gruvbox8",
-      "light": "gruvbox10"
+      "dark": "blue",
+      "light": "blue"
     },
     "markdownListEnumeration": {
-      "dark": "gruvbox7",
-      "light": "gruvbox7"
+      "dark": "aqua",
+      "light": "aqua"
     },
     "markdownImage": {
-      "dark": "gruvbox9",
-      "light": "gruvbox9"
+      "dark": "purple",
+      "light": "purple"
     },
     "markdownImageText": {
-      "dark": "gruvbox7",
-      "light": "gruvbox7"
+      "dark": "aqua",
+      "light": "aqua"
     },
     "markdownCodeBlock": {
-      "dark": "gruvbox4",
-      "light": "gruvbox0"
+      "dark": "fg0",
+      "light": "bg0"
     },
     "syntaxComment": {
-      "dark": "gruvbox3",
-      "light": "gruvbox3"
+      "dark": "grey1",
+      "light": "grey1"
     },
     "syntaxKeyword": {
-      "dark": "gruvbox9",
-      "light": "gruvbox9"
+      "dark": "red",
+      "light": "red"
     },
     "syntaxFunction": {
-      "dark": "gruvbox8",
-      "light": "gruvbox8"
+      "dark": "green",
+      "light": "green"
     },
     "syntaxVariable": {
-      "dark": "gruvbox7",
-      "light": "gruvbox7"
+      "dark": "blue",
+      "light": "blue"
     },
     "syntaxString": {
-      "dark": "gruvbox14",
-      "light": "gruvbox14"
+      "dark": "green",
+      "light": "green"
     },
     "syntaxNumber": {
-      "dark": "gruvbox15",
-      "light": "gruvbox15"
+      "dark": "purple",
+      "light": "purple"
     },
     "syntaxType": {
-      "dark": "gruvbox7",
-      "light": "gruvbox7"
+      "dark": "yellow",
+      "light": "yellow"
     },
     "syntaxOperator": {
-      "dark": "gruvbox9",
-      "light": "gruvbox9"
+      "dark": "orange",
+      "light": "orange"
     },
     "syntaxPunctuation": {
-      "dark": "gruvbox4",
-      "light": "gruvbox0"
+      "dark": "fg0",
+      "light": "bg0"
     }
   }
 }
