@@ -1,151 +1,97 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
-# ============================================================
-# Dotfiles Package Installer
-# Installs essential packages for this Hyprland setup
-# ============================================================
+# ==============================================================================
+#  🛠️  PROFESSIONAL PACKAGE INSTALLER
+# ==============================================================================
+#  Interactive, modular, and animated installer for Hyprland setup.
+#  Author: Nacho
+# ==============================================================================
 
-set -e
+# --- Safety & Init ---
+set -u
+IFS=$'\n\t'
+trap "tput cnorm; exit 1" SIGINT SIGTERM # Restore cursor on exit
 
-# Colors
+# --- Visuals & Colors (Gruvbox Inspired) ---
+BOLD='\033[1m'
+DIM='\033[2m'
+RESET='\033[0m'
+INVERSE='\033[7m'
+
 RED='\033[0;31m'
 GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
+YELLOW='\033[0;33m'
 BLUE='\033[0;34m'
-NC='\033[0m' # No Color
+PURPLE='\033[0;35m'
+CYAN='\033[0;36m'
+ORANGE='\033[0;91m'
 
-log_info() { echo -e "${BLUE}[INFO]${NC} $1"; }
-log_success() { echo -e "${GREEN}[OK]${NC} $1"; }
-log_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
-log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
+ICON_OK="✔"
+ICON_FAIL="✖"
+ICON_WARN="⚠"
+ICON_INFO="ℹ"
+ICON_PKG="📦"
+ICON_SEL_ON="[✔]"
+ICON_SEL_OFF="[ ]"
 
-# ============================================================
-# PACKAGES
-# ============================================================
+# --- Packages Definition ---
+# Format: "Group_Name:Description:Package1 Package2 ..."
 
-# Base system and utilities
-BASE_PACKAGES=(
-	base-devel
-	git
-	stow
-	wget
-	unzip
-	unrar
-	zip
-	less
-	ripgrep
-	fd
-	fzf
-	zoxide
-)
+declare -A PACKAGES_MAP
+declare -a GROUPS_ORDER
 
-# Hyprland and Wayland
-HYPRLAND_PACKAGES=(
-	hyprland
-	hyprpaper
-	hyprlock
-	hypridle
-	hyprpicker
-	hyprshot
-	xdg-desktop-portal-hyprland
-	waybar
-	rofi
-	rofi-emoji
-	dunst
-	wlogout
-	grim
-	slurp
-	cliphist
-	polkit-kde-agent
-	uwsm
-)
+add_group() {
+	local key="$1"
+	local desc="$2"
+	shift 2
+	PACKAGES_MAP["$key"]="$desc|$*"
+	GROUPS_ORDER+=("$key")
+}
 
-# Terminal and shell
-TERMINAL_PACKAGES=(
-	kitty
-	fish
-	starship
-	btop
-	htop
-	fastfetch
-	yazi
-	lazygit
-	lsd
-	eza
-	viu
-)
+# 1. Base System
+add_group "Base" "Essential tools (git, wget, stow, fzf)" \
+	base-devel git stow wget unzip unrar zip less ripgrep fd fzf zoxide
 
-# Editores
-EDITOR_PACKAGES=(
-	neovim
-	vim
-)
+# 2. Hyprland Core
+add_group "Hyprland" "Window manager, lock, idle, portal" \
+	hyprland hyprpaper hyprlock hypridle hyprpicker hyprshot \
+	xdg-desktop-portal-hyprland waybar rofi rofi-emoji dunst \
+	wlogout grim slurp cliphist polkit-kde-agent uwsm
 
-# Audio/Video
-AUDIO_PACKAGES=(
-	pipewire
-	pipewire-alsa
-	pipewire-pulse
-	pipewire-jack
-	wireplumber
-	libpulse
-	vlc
-)
+# 3. Terminal
+add_group "Terminal" "Kitty, Fish, Starship, Btop" \
+	kitty fish starship btop htop fastfetch yazi lazygit lsd eza viu
 
-# Fonts
-FONT_PACKAGES=(
-	ttf-jetbrains-mono-nerd
-	ttf-firacode-nerd
-	ttf-dejavu
-	ttf-liberation
-	noto-fonts
-	noto-fonts-cjk
-	noto-fonts-emoji
-)
+# 4. Editors
+add_group "Editors" "Neovim, Vim" \
+	neovim vim
 
-# Qt/GTK theming
-THEMING_PACKAGES=(
-	qt5ct
-	qt6ct
-	kvantum-qt5
-	qt5-wayland
-	qt6-wayland
-	papirus-icon-theme
-)
+# 5. Audio
+add_group "Audio" "Pipewire, Wireplumber, VLC" \
+	pipewire pipewire-alsa pipewire-pulse pipewire-jack wireplumber libpulse vlc
 
-# Development
-DEV_PACKAGES=(
-	go
-	npm
-	pnpm
-	python-pip
-	docker
-	docker-compose
-	jdk17-openjdk
-	jdk21-openjdk
-	maven
-)
+# 6. Fonts
+add_group "Fonts" "Nerd Fonts, Emojis" \
+	ttf-jetbrains-mono-nerd ttf-firacode-nerd ttf-dejavu ttf-liberation \
+	noto-fonts noto-fonts-cjk noto-fonts-emoji
 
-# Applications
-APP_PACKAGES=(
-	zathura-pdf-poppler
-	keepassxc
-	feh
-	imagemagick
-	obsidian
-	spotify-launcher
-	yt-dlp
-)
+# 7. Theming
+add_group "Theming" "Qt/GTK themes, Icons" \
+	qt5ct qt6ct kvantum-qt5 qt5-wayland qt6-wayland papirus-icon-theme
 
-# Networking
-NETWORK_PACKAGES=(
-	networkmanager
-	bluez
-	bluez-utils
-	openssh
-)
+# 8. Dev Tools
+add_group "Dev" "Go, Node, Python, Docker, Java" \
+	go npm pnpm python-pip docker docker-compose jdk17-openjdk jdk21-openjdk maven
 
-# AUR packages (require yay)
+# 9. Apps
+add_group "Apps" "Daily apps (PDF, Passwords)" \
+	zathura-pdf-poppler keepassxc feh imagemagick obsidian spotify-launcher yt-dlp
+
+# 10. Network
+add_group "Network" "NetworkManager, Bluetooth, SSH" \
+	networkmanager bluez bluez-utils openssh
+
+# 11. AUR (Special handling)
 AUR_PACKAGES=(
 	brave-bin
 	visual-studio-code-bin
@@ -153,138 +99,258 @@ AUR_PACKAGES=(
 	gruvbox-dark-icons-gtk
 )
 
-# ============================================================
-# FUNCTIONS
-# ============================================================
+# --- UI Functions ---
 
-check_root() {
-	if [[ $EUID -eq 0 ]]; then
-		log_error "Do not run this script as root"
-		exit 1
-	fi
+banner() {
+	clear
+	echo -e "${ORANGE}${BOLD}"
+	echo "    ____           __        ____           "
+	echo "   /  _/___  _____/ /_____ _/ / /__  _____  "
+	echo "   / // __ \/ ___/ __/ __ \/ / / _ \/ ___/  "
+	echo " _/ // / / (__  ) /_/ /_/ / / /  __/ /      "
+	echo "/___/_/ /_/____/\__/\__,_/_/_/\___/_/       "
+	echo -e "${RESET}"
+	echo -e "${DIM}  Hyprland Setup Installer v2.0 ${RESET}"
+	echo ""
 }
 
-check_arch() {
-	if ! command -v pacman &>/dev/null; then
-		log_error "This script is for Arch Linux only"
-		exit 1
-	fi
+show_spinner() {
+	local pid=$1
+	local delay=0.1
+	local spinstr='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
+
+	tput civis # Hide cursor
+	while ps -p "$pid" >/dev/null; do
+		local temp=${spinstr#?}
+		printf "  ${CYAN}%c${RESET}  " "$spinstr"
+		local spinstr=$temp${spinstr%"$temp"}
+		sleep $delay
+		printf "\b\b\b\b\b"
+	done
+	tput cnorm # Show cursor
+	printf "     \b\b\b\b\b"
 }
 
-install_yay() {
-	if ! command -v yay &>/dev/null; then
-		log_info "Installing yay..."
-		git clone https://aur.archlinux.org/yay.git /tmp/yay
-		cd /tmp/yay
-		makepkg -si --noconfirm
-		cd -
-		rm -rf /tmp/yay
-		log_success "yay installed"
+log_task() {
+	printf "${BLUE}${ICON_PKG}${RESET}  %-35s" "$1"
+}
+
+# --- Selector Logic ---
+
+select_groups() {
+	local options=("${GROUPS_ORDER[@]}")
+	local selected=()
+	# Default select all
+	for ((i = 0; i < ${#options[@]}; i++)); do selected[i]=true; done
+
+	local current=0
+
+	while true; do
+		banner
+		echo -e "${YELLOW}${BOLD}Select components to install:${RESET} (SPACE to toggle, ENTER to confirm)"
+		echo ""
+
+		for ((i = 0; i < ${#options[@]}; i++)); do
+			local key="${options[i]}"
+			local info="${PACKAGES_MAP[$key]}"
+			local desc="${info%%|*}" # Get description part
+
+			local checkbox="${ICON_SEL_OFF}"
+			local style="${DIM}"
+			local cursor=" "
+
+			if [[ "${selected[i]}" == "true" ]]; then
+				checkbox="${GREEN}${ICON_SEL_ON}${RESET}"
+				style="${RESET}"
+			fi
+
+			if [[ $i -eq $current ]]; then
+				cursor="${CYAN}➜${RESET}"
+				style="${BOLD}${CYAN}"
+			fi
+
+			printf " %b %b %b %-12s ${DIM}- %s${RESET}\n" "$cursor" "$checkbox" "$style" "$key" "$desc"
+		done
+
+		# Input handling
+		read -rsn1 input
+		if [[ "$input" == "" ]]; then break; fi # Enter
+
+		case "$input" in
+		"A") [[ $current -gt 0 ]] && ((current--)) ;;                       # Up
+		"B") [[ $current -lt $((${#options[@]} - 1)) ]] && ((current++)) ;; # Down
+		" ")                                                                # Space
+			if [[ "${selected[current]}" == "true" ]]; then
+				selected[current]=false
+			else
+				selected[current]=true
+			fi
+			;;
+		esac
+	done
+
+	# Return selected keys
+	SELECTED_GROUPS=()
+	for ((i = 0; i < ${#options[@]}; i++)); do
+		if [[ "${selected[i]}" == "true" ]]; then
+			SELECTED_GROUPS+=("${options[i]}")
+		fi
+	done
+}
+
+# --- Install Logic ---
+
+check_aur_helper() {
+	if command -v paru &>/dev/null; then
+		echo "paru"
+	elif command -v yay &>/dev/null; then
+		echo "yay"
 	else
-		log_success "yay already installed"
+		echo "none"
 	fi
 }
 
-install_packages() {
-	local name="$1"
-	shift
-	local packages=("$@")
+install_yay_auto() {
+	log_task "Installing AUR Helper (yay)"
 
-	if [[ ${#packages[@]} -eq 0 ]]; then
-		return
+	# Check if already running as root (bad for makepkg)
+	if [[ $EUID -eq 0 ]]; then
+		printf "${RED}${ICON_FAIL} Cannot build yay as root${RESET}\n"
+		return 1
 	fi
 
-	log_info "Installing packages: $name"
-	sudo pacman -S --needed --noconfirm "${packages[@]}" 2>/dev/null || {
-		log_warn "Some $name packages failed, continuing..."
-	}
-}
+	(
+		git clone https://aur.archlinux.org/yay.git /tmp/yay &>/dev/null
+		cd /tmp/yay
+		makepkg -si --noconfirm &>/dev/null
+	) &
+	show_spinner $!
 
-install_aur_packages() {
-	if [[ ${#AUR_PACKAGES[@]} -eq 0 ]]; then
-		return
+	if command -v yay &>/dev/null; then
+		printf "${GREEN}${ICON_OK}${RESET}\n"
+	else
+		printf "${RED}${ICON_FAIL}${RESET}\n"
 	fi
-
-	log_info "Installing AUR packages..."
-	yay -S --needed --noconfirm "${AUR_PACKAGES[@]}" 2>/dev/null || {
-		log_warn "Some AUR packages failed, continuing..."
-	}
+	rm -rf /tmp/yay
 }
 
-enable_services() {
-	log_info "Enabling services..."
+install_pacman_pkg() {
+	local pkgs=($@)
+	if [[ ${#pkgs[@]} -eq 0 ]]; then return; fi
 
-	sudo systemctl enable --now NetworkManager 2>/dev/null || true
-	sudo systemctl enable --now bluetooth 2>/dev/null || true
-	sudo systemctl enable --now docker 2>/dev/null || true
-	sudo systemctl enable --now sddm 2>/dev/null || true
+	sudo pacman -S --needed --noconfirm "${pkgs[@]}" >/dev/null 2>&1 &
+	show_spinner $!
 
-	# Add user to docker group
-	sudo usermod -aG docker "$USER" 2>/dev/null || true
-
-	log_success "Services configured"
+	if [[ $? -eq 0 ]]; then
+		printf "${GREEN}${ICON_OK}${RESET}\n"
+	else
+		printf "${RED}${ICON_FAIL} (See /var/log/pacman.log)${RESET}\n"
+	fi
 }
 
-print_summary() {
-	echo ""
-	echo -e "${GREEN}============================================${NC}"
-	echo -e "${GREEN}  Installation completed${NC}"
-	echo -e "${GREEN}============================================${NC}"
-	echo ""
-	echo "Installed packages:"
-	echo "  - Base and utilities"
-	echo "  - Hyprland + components"
-	echo "  - Terminal (kitty, fish, starship)"
-	echo "  - Editors (neovim, vim)"
-	echo "  - Audio (pipewire)"
-	echo "  - Nerd fonts"
-	echo "  - Qt/GTK theming"
-	echo "  - Development (go, node, java, docker)"
-	echo "  - Apps (brave, vscode, obsidian, etc)"
-	echo ""
-	echo -e "${YELLOW}Next step:${NC}"
-	echo "  cd ~/dotfiles && ./scripts/stow-all.sh"
-	echo ""
-	echo -e "${YELLOW}Restart session to apply group changes (docker)${NC}"
+install_aur_pkg() {
+	local helper="$1"
+	local pkgs=("${@:2}")
+	if [[ ${#pkgs[@]} -eq 0 ]]; then return; fi
+
+	$helper -S --needed --noconfirm "${pkgs[@]}" >/dev/null 2>&1 &
+	show_spinner $!
+
+	if [[ $? -eq 0 ]]; then
+		printf "${GREEN}${ICON_OK}${RESET}\n"
+	else
+		printf "${RED}${ICON_FAIL}${RESET}\n"
+	fi
 }
 
-# ============================================================
-# MAIN
-# ============================================================
+# --- Main Execution ---
 
 main() {
+	# Check Arch
+	if ! command -v pacman &>/dev/null; then
+		echo -e "${RED}Error: This script requires Pacman (Arch Linux).${RESET}"
+		exit 1
+	fi
+
+	# 1. Selection Phase
+	select_groups
+
+	if [[ ${#SELECTED_GROUPS[@]} -eq 0 ]]; then
+		echo -e "\n${YELLOW}No packages selected. Exiting.${RESET}"
+		exit 0
+	fi
+
+	# 2. Confirmation
+	banner
+	echo -e "${GREEN}${BOLD}Ready to install:${RESET}"
+	printf "  ${CYAN}%s${RESET} " "${SELECTED_GROUPS[@]}"
+	echo -e "\n\n${DIM}This process may take a while.${RESET}"
+
+	read -p "Continue? [Y/n] " -n 1 -r
 	echo ""
-	echo -e "${BLUE}╔════════════════════════════════════════════╗${NC}"
-	echo -e "${BLUE}║     Dotfiles Package Installer             ║${NC}"
-	echo -e "${BLUE}╚════════════════════════════════════════════╝${NC}"
-	echo ""
+	if [[ ! $REPLY =~ ^[Yy]$ ]] && [[ -n $REPLY ]]; then
+		exit 0
+	fi
 
-	check_root
-	check_arch
+	# 3. System Update
+	echo -e "\n${BOLD}:: Updating System...${RESET}"
+	log_task "Synchronizing databases"
+	sudo pacman -Sy --noconfirm >/dev/null 2>&1 &
+	show_spinner $!
+	printf "${GREEN}${ICON_OK}${RESET}\n"
 
-	log_info "Updating system..."
-	sudo pacman -Syu --noconfirm
+	# 4. Install Selected Groups
+	for group in "${SELECTED_GROUPS[@]}"; do
+		local info="${PACKAGES_MAP[$group]}"
+		local pkg_list="${info#*|}" # Get package list part
 
-	install_packages "Base" "${BASE_PACKAGES[@]}"
-	install_packages "Hyprland" "${HYPRLAND_PACKAGES[@]}"
-	install_packages "Terminal" "${TERMINAL_PACKAGES[@]}"
-	install_packages "Editores" "${EDITOR_PACKAGES[@]}"
-	install_packages "Audio" "${AUDIO_PACKAGES[@]}"
-	install_packages "Fuentes" "${FONT_PACKAGES[@]}"
-	install_packages "Theming" "${THEMING_PACKAGES[@]}"
-	install_packages "Desarrollo" "${DEV_PACKAGES[@]}"
-	install_packages "Apps" "${APP_PACKAGES[@]}"
-	install_packages "Network" "${NETWORK_PACKAGES[@]}"
+		echo -e "\n${BOLD}:: Installing $group${RESET}"
+		log_task "Processing packages..."
+		install_pacman_pkg $pkg_list
+	done
 
-	install_yay
-	install_aur_packages
+	# 5. AUR Packages (if selected any group, we assume user might want AUR tools)
+	# Ideally this should be a separate selectable group or tied to specific ones.
+	# For now, let's ask explicitly.
+	echo -e "\n${BOLD}:: AUR Configuration${RESET}"
+	local helper=$(check_aur_helper)
 
-	enable_services
+	if [[ "$helper" == "none" ]]; then
+		echo -e "${YELLOW}AUR helper not found.${RESET}"
+		read -p "Install yay? [Y/n] " -n 1 -r
+		echo ""
+		if [[ $REPLY =~ ^[Yy]$ ]] || [[ -z $REPLY ]]; then
+			install_yay_auto
+			helper="yay"
+		fi
+	else
+		log_task "Found AUR helper ($helper)"
+		printf "${GREEN}${ICON_OK}${RESET}\n"
+	fi
 
-	print_summary
+	if [[ "$helper" != "none" ]]; then
+		read -p "Install external apps (Brave, VSCode, etc) via AUR? [Y/n] " -n 1 -r
+		echo ""
+		if [[ $REPLY =~ ^[Yy]$ ]] || [[ -z $REPLY ]]; then
+			log_task "Installing AUR apps..."
+			install_aur_pkg "$helper" "${AUR_PACKAGES[@]}"
+		fi
+	fi
+
+	# 6. Services
+	echo -e "\n${BOLD}:: System Services${RESET}"
+	log_task "Enabling Network & Bluetooth"
+	(
+		sudo systemctl enable --now NetworkManager 2>/dev/null
+		sudo systemctl enable --now bluetooth 2>/dev/null
+		sudo systemctl enable --now docker 2>/dev/null
+	) &
+	show_spinner $!
+	printf "${GREEN}${ICON_OK}${RESET}\n"
+
+	# 7. Finish
+	echo -e "\n${GREEN}${BOLD}✔ Installation Complete!${RESET}"
+	echo -e "Don't forget to run: ${CYAN}./scripts/stow.sh install${RESET}"
 }
 
-# Run if not sourced
-if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
-	main "$@"
-fi
+main "$@"

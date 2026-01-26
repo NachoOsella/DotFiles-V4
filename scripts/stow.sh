@@ -1,272 +1,316 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
-# ============================================================
-# Stow Manager - Manages dotfiles symlinks
-# ============================================================
+# ==============================================================================
+#  🛠️  PROFESSIONAL STOW MANAGER
+# ==============================================================================
+#  A minimal, animated, and robust dotfiles manager for Hyprland setups.
+#  Author: Nacho
+# ==============================================================================
 
-set -e
+# --- Safety First ---
+set -euo pipefail
+IFS=$'\n\t'
 
-DOTFILES_DIR="${DOTFILES_DIR:-$HOME/dotfiles}"
+# --- Configuration ---
+DOTFILES_DIR="${HOME}/dotfiles"
+BACKUP_DIR="${HOME}/.dotfiles_backup_$(date +%Y%m%d_%H%M%S)"
 
-# Colores
+# --- Gruvbox Palette & Styling ---
+BOLD='\033[1m'
+DIM='\033[2m'
+RESET='\033[0m'
+
 RED='\033[0;31m'
 GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
+YELLOW='\033[0;33m'
 BLUE='\033[0;34m'
+PURPLE='\033[0;35m'
 CYAN='\033[0;36m'
-NC='\033[0m'
+ORANGE='\033[0;91m' # Approx
 
-log_info() { echo -e "${BLUE}[INFO]${NC} $1"; }
-log_success() { echo -e "${GREEN}[OK]${NC} $1"; }
-log_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
-log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
+# Icons
+ICON_OK="✔"
+ICON_FAIL="✖"
+ICON_WARN="⚠"
+ICON_INFO="ℹ"
+ICON_PKG="📦"
 
-# All available stow packages
-STOW_PACKAGES=(
-	hypr
-	kitty
-	fish
-	nvim
-	waybar
-	rofi
-	dunst
-	lazygit
-	yazi
-	btop
-	fastfetch
-	lsd
-	wlogout
-	zathura
-	gtk
-	qt
-	starship
-	opencode
-	keepassxc
+# --- Packages List ---
+# Agrega aquí tus carpetas a gestionar
+PACKAGES=(
+	"hypr"
+	"kitty"
+	"fish"
+	"nvim"
+	"waybar"
+	"rofi"
+	"dunst"
+	"lazygit"
+	"yazi"
+	"btop"
+	"fastfetch"
+	"lsd"
+	"wlogout"
+	"zathura"
+	"gtk"
+	"qt"
+	"starship"
+	"opencode"
+	"keepassxc"
 )
 
-usage() {
-	echo ""
-	echo -e "${CYAN}Stow Manager${NC} - Manages dotfiles symlinks"
-	echo ""
-	echo "Usage: $0 [command] [packages...]"
-	echo ""
-	echo "Commands:"
-	echo "  install, i    Install (stow) specified packages"
-	echo "  remove, r     Remove (unstow) specified packages"
-	echo "  restow, re    Re-apply stow (useful after changes)"
-	echo "  all           Install all packages"
-	echo "  remove-all    Remove all packages"
-	echo "  list, ls      List available packages"
-	echo "  status, st    Show symlink status"
-	echo "  help, -h      Show this help"
-	echo ""
-	echo "Examples:"
-	echo "  $0 all                    # Install everything"
-	echo "  $0 install hypr kitty     # Install hypr and kitty"
-	echo "  $0 remove nvim            # Remove nvim"
-	echo "  $0 restow hypr            # Re-apply hypr"
-	echo ""
-	echo "Available packages:"
-	echo "  ${STOW_PACKAGES[*]}"
+# --- UI Functions ---
+
+banner() {
+	clear
+	echo -e "${ORANGE}${BOLD}"
+	echo "   _____ __                 __  "
+	echo "  / ___// /_____ _      __ / /  "
+	echo "  \__ \/ __/ __ \ | /| / // /   "
+	echo " ___/ / /_/ /_/ / |/ |/ //_/    "
+	echo "/____/\__/\____/|__/|__(_)      "
+	echo -e "${RESET}"
+	echo -e "${DIM}  Dotfiles Manager v2.0 ${RESET}"
+	echo -e "${DIM}  Directory: ${DOTFILES_DIR} ${RESET}"
 	echo ""
 }
 
-check_stow() {
-	if ! command -v stow &>/dev/null; then
-		log_error "stow is not installed. Install it with: sudo pacman -S stow"
-		exit 1
-	fi
+show_spinner() {
+	local pid=$1
+	local delay=0.1
+	local spinstr='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
+
+	tput civis # Hide cursor
+
+	while ps -p "$pid" >/dev/null; do
+		local temp=${spinstr#?}
+		printf "  ${CYAN}%c${RESET}  " "$spinstr"
+		local spinstr=$temp${spinstr%"$temp"}
+		sleep $delay
+		printf "\b\b\b\b\b"
+	done
+
+	tput cnorm # Show cursor
+	printf "     \b\b\b\b\b"
 }
 
-check_dotfiles_dir() {
-	if [[ ! -d "$DOTFILES_DIR" ]]; then
-		log_error "Dotfiles directory not found: $DOTFILES_DIR"
-		exit 1
-	fi
+log_task() {
+	local message="$1"
+	printf "${BLUE}${ICON_PKG}${RESET}  %-30s" "$message"
 }
 
-stow_package() {
-	local pkg="$1"
-	local action="$2" # "" for stow, "-D" for unstow, "-R" for restow
+log_success() {
+	printf "${GREEN}${ICON_OK} Success${RESET}\n"
+}
 
-	if [[ ! -d "$DOTFILES_DIR/$pkg" ]]; then
-		log_warn "Package not found: $pkg"
+log_fail() {
+	printf "${RED}${ICON_FAIL} Failed${RESET}\n"
+}
+
+log_skip() {
+	printf "${YELLOW}${ICON_WARN} Skipped${RESET}\n"
+}
+
+# --- Core Logic ---
+
+# Executes a command with a spinner and error handling
+execute() {
+	local cmd="$1"
+	local msg="$2"
+	local log_file="/tmp/stow_debug.log"
+
+	log_task "$msg"
+
+	# Run command in background and capture output
+	eval "$cmd" >"$log_file" 2>&1 &
+	local pid=$!
+
+	# Show spinner while process is running
+	show_spinner "$pid"
+
+	# Wait for process to finish and get exit code
+	wait "$pid"
+	local exit_code=$?
+
+	if [ $exit_code -eq 0 ]; then
+		log_success
+	else
+		log_fail
+		echo -e "\n${RED}Error Output:${RESET}"
+		cat "$log_file"
+		echo ""
 		return 1
 	fi
-
-	cd "$DOTFILES_DIR"
-
-	case "$action" in
-	"")
-		if stow -v "$pkg" 2>&1; then
-			log_success "Installed: $pkg"
-		else
-			log_error "Error installing: $pkg"
-			return 1
-		fi
-		;;
-	"-D")
-		if stow -v -D "$pkg" 2>&1; then
-			log_success "Removed: $pkg"
-		else
-			log_error "Error removing: $pkg"
-			return 1
-		fi
-		;;
-	"-R")
-		if stow -v -R "$pkg" 2>&1; then
-			log_success "Re-applied: $pkg"
-		else
-			log_error "Error re-applying: $pkg"
-			return 1
-		fi
-		;;
-	esac
 }
 
-cmd_install() {
-	local packages=("$@")
-
-	if [[ ${#packages[@]} -eq 0 ]]; then
-		log_error "Specify at least one package"
-		usage
+check_requirements() {
+	if ! command -v stow &>/dev/null; then
+		echo -e "${RED}${ICON_FAIL} GNU Stow is not installed.${RESET}"
+		echo "Install it with: sudo pacman -S stow"
 		exit 1
 	fi
 
-	log_info "Installing packages..."
-	for pkg in "${packages[@]}"; do
-		stow_package "$pkg" ""
+	if [[ ! -d "$DOTFILES_DIR" ]]; then
+		echo -e "${RED}${ICON_FAIL} Dotfiles directory not found.${RESET}"
+		exit 1
+	fi
+}
+
+stow_pkg() {
+	local pkg=$1
+	local action=${2:-""} # "" = install, -D = delete, -R = restow
+
+	# Check if package directory exists
+	if [[ ! -d "${DOTFILES_DIR}/${pkg}" ]]; then
+		printf "${YELLOW}${ICON_WARN}  %-30s ${DIM}Directory not found${RESET}\n" "$pkg"
+		return 0
+	fi
+
+	# Handle conflicts strictly by backing up if installing
+	if [[ -z "$action" ]]; then
+		# This is a basic conflict check logic if needed in future
+		# For now, we trust stow's output which we capture
+		:
+	fi
+
+	execute "cd $DOTFILES_DIR && stow $action $pkg" "$pkg"
+}
+
+# --- Commands ---
+
+cmd_install() {
+	local targets=("${@}")
+	if [[ ${#targets[@]} -eq 0 ]]; then targets=("${PACKAGES[@]}"); fi
+
+	echo -e "${GREEN}${BOLD}Installing configurations...${RESET}\n"
+
+	for pkg in "${targets[@]}"; do
+		stow_pkg "$pkg" ""
 	done
 }
 
 cmd_remove() {
-	local packages=("$@")
-
-	if [[ ${#packages[@]} -eq 0 ]]; then
-		log_error "Specify at least one package"
+	local targets=("${@}")
+	if [[ ${#targets[@]} -eq 0 ]]; then
+		echo -e "${RED}Please specify packages to remove or use 'remove-all'${RESET}"
 		exit 1
 	fi
 
-	log_info "Removing packages..."
-	for pkg in "${packages[@]}"; do
-		stow_package "$pkg" "-D"
+	echo -e "${RED}${BOLD}Removing configurations...${RESET}\n"
+
+	for pkg in "${targets[@]}"; do
+		stow_pkg "$pkg" "-D"
 	done
 }
 
 cmd_restow() {
-	local packages=("$@")
+	local targets=("${@}")
+	if [[ ${#targets[@]} -eq 0 ]]; then targets=("${PACKAGES[@]}"); fi
 
-	if [[ ${#packages[@]} -eq 0 ]]; then
-		log_error "Specify at least one package"
-		exit 1
-	fi
+	echo -e "${PURPLE}${BOLD}Refreshing configurations...${RESET}\n"
 
-	log_info "Re-applying packages..."
-	for pkg in "${packages[@]}"; do
-		stow_package "$pkg" "-R"
+	for pkg in "${targets[@]}"; do
+		stow_pkg "$pkg" "-R"
 	done
-}
-
-cmd_all() {
-	log_info "Installing all packages..."
-	cd "$DOTFILES_DIR"
-
-	for pkg in "${STOW_PACKAGES[@]}"; do
-		stow_package "$pkg" ""
-	done
-
-	echo ""
-	log_success "All packages installed"
-}
-
-cmd_remove_all() {
-	log_info "Removing all packages..."
-	cd "$DOTFILES_DIR"
-
-	for pkg in "${STOW_PACKAGES[@]}"; do
-		stow_package "$pkg" "-D" 2>/dev/null || true
-	done
-
-	echo ""
-	log_success "All packages removed"
-}
-
-cmd_list() {
-	echo ""
-	echo -e "${CYAN}Available packages:${NC}"
-	echo ""
-
-	for pkg in "${STOW_PACKAGES[@]}"; do
-		if [[ -d "$DOTFILES_DIR/$pkg" ]]; then
-			local files=$(find "$DOTFILES_DIR/$pkg" -type f | wc -l)
-			printf "  ${GREEN}%-15s${NC} (%d files)\n" "$pkg" "$files"
-		fi
-	done
-	echo ""
 }
 
 cmd_status() {
-	echo ""
-	echo -e "${CYAN}Symlink status:${NC}"
-	echo ""
+	echo -e "${CYAN}${BOLD}Link Status Report:${RESET}\n"
 
-	for pkg in "${STOW_PACKAGES[@]}"; do
-		if [[ -d "$DOTFILES_DIR/$pkg/.config" ]]; then
-			# Find first directory/file in .config
-			local target=$(ls "$DOTFILES_DIR/$pkg/.config" | head -1)
-			local link_path="$HOME/.config/$target"
+	local count=0
+	for pkg in "${PACKAGES[@]}"; do
+		# Check first config file found to guess status
+		local config_dir="${DOTFILES_DIR}/${pkg}/.config"
 
-			if [[ -L "$link_path" ]]; then
-				printf "  ${GREEN}[LINKED]${NC}  %-15s -> %s\n" "$pkg" "$(readlink "$link_path")"
-			elif [[ -e "$link_path" ]]; then
-				printf "  ${YELLOW}[EXISTS]${NC}  %-15s (file/directory exists, not a symlink)\n" "$pkg"
+		if [[ -d "$config_dir" ]]; then
+			# Get the first subfolder/file inside the package's .config
+			local target_name=$(ls -A "$config_dir" | head -n 1)
+
+			if [[ -z "$target_name" ]]; then continue; fi
+
+			local target_path="${HOME}/.config/${target_name}"
+
+			if [[ -L "$target_path" ]]; then
+				printf "  ${GREEN}${ICON_OK}${RESET} %-15s ${DIM}-> Linked${RESET}\n" "$pkg"
+			elif [[ -e "$target_path" ]]; then
+				printf "  ${YELLOW}${ICON_WARN}${RESET} %-15s ${DIM}-> Exists (No Link)${RESET}\n" "$pkg"
 			else
-				printf "  ${RED}[MISSING]${NC} %-15s\n" "$pkg"
+				printf "  ${DIM}${ICON_INFO}${RESET} %-15s ${DIM}-> Not installed${RESET}\n" "$pkg"
+			fi
+		else
+			# Try root level mapping (like .zshrc)
+			local root_file=$(ls -A "${DOTFILES_DIR}/${pkg}" | grep -vE "^\.config$" | head -n 1)
+			if [[ -n "$root_file" ]]; then
+				if [[ -L "${HOME}/${root_file}" ]]; then
+					printf "  ${GREEN}${ICON_OK}${RESET} %-15s ${DIM}-> Linked${RESET}\n" "$pkg"
+				else
+					printf "  ${DIM}${ICON_INFO}${RESET} %-15s ${DIM}-> Not installed${RESET}\n" "$pkg"
+				fi
 			fi
 		fi
 	done
 	echo ""
 }
 
-# ============================================================
-# MAIN
-# ============================================================
+show_help() {
+	echo -e "${BOLD}Usage:${RESET} ./stow.sh [command] [package]"
+	echo ""
+	echo -e "  ${GREEN}install, i${RESET}   [pkg]   Install package(s) (Default: all)"
+	echo -e "  ${RED}remove, r${RESET}    [pkg]   Remove package(s)"
+	echo -e "  ${PURPLE}restow, re${RESET}   [pkg]   Re-apply links (fix broken links)"
+	echo -e "  ${CYAN}status, st${RESET}           Show connection status"
+	echo -e "  ${YELLOW}list, ls${RESET}             List managed packages"
+	echo ""
+}
+
+# --- Main Entry Point ---
 
 main() {
-	check_stow
-	check_dotfiles_dir
+	check_requirements
 
-	local cmd="${1:-help}"
-	shift 2>/dev/null || true
+	if [[ $# -eq 0 ]]; then
+		banner
+		show_help
+		exit 0
+	fi
+
+	local cmd="$1"
+	shift
 
 	case "$cmd" in
-	install | i)
+	install | i | all)
+		banner
 		cmd_install "$@"
 		;;
 	remove | r)
+		banner
 		cmd_remove "$@"
 		;;
+	remove-all)
+		banner
+		cmd_remove "${PACKAGES[@]}"
+		;;
 	restow | re)
+		banner
 		cmd_restow "$@"
 		;;
-	all)
-		cmd_all
-		;;
-	remove-all)
-		cmd_remove_all
-		;;
-	list | ls)
-		cmd_list
-		;;
 	status | st)
+		banner
 		cmd_status
 		;;
-	help | -h | --help)
-		usage
+	list | ls)
+		banner
+		echo -e "${CYAN}Managed Packages:${RESET}"
+		printf "  %s\n" "${PACKAGES[@]}"
+		echo ""
+		;;
+	help | --help | -h)
+		banner
+		show_help
 		;;
 	*)
-		log_error "Unknown command: $cmd"
-		usage
+		echo -e "${RED}Unknown command: $cmd${RESET}"
+		show_help
 		exit 1
 		;;
 	esac
