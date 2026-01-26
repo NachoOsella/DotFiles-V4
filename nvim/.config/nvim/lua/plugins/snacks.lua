@@ -29,6 +29,9 @@ return {
                 ignored = true, -- por si .env está gitignored
             })
 
+            opts.lazygit = opts.lazygit or {}
+            opts.lazygit.configure = false -- Esto desactiva que snacks genere el tema
+
             return opts
         end,
     },
