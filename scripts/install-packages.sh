@@ -59,8 +59,8 @@ add_group "Hyprland" "Window manager, lock, idle, portal" \
 	wlogout grim slurp cliphist polkit-kde-agent uwsm
 
 # 3. Terminal
-add_group "Terminal" "Ghostty, Fish, Starship, Btop" \
-	ghostty fish starship btop htop fastfetch yazi lazygit lsd eza viu
+add_group "Terminal" "Kitty, Fish, Starship, Btop" \
+	kitty fish starship btop htop fastfetch yazi lazygit lsd eza viu
 
 # 4. Editors
 add_group "Editors" "Neovim, Vim" \

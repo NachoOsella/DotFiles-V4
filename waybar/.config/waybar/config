@@ -109,7 +109,7 @@
     "interval": 10,
     "format": " {percentage}%",
     "max-length": 30,
-    "on-click": "ghostty -e btop"
+    "on-click": "kitty -e btop"
   },
 
   "custom/power": {
@@ -117,3 +117,4 @@
     "on-click": "wlogout"
   }
 }
+
