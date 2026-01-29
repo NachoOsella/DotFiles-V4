@@ -39,7 +39,7 @@ ICON_PKG="📦"
 # Agrega aquí tus carpetas a gestionar
 PACKAGES=(
 	"hypr"
-	"kitty"
+	"ghostty"
 	"fish"
 	"nvim"
 	"waybar"
@@ -52,12 +52,15 @@ PACKAGES=(
 	"lsd"
 	"wlogout"
 	"zathura"
+	"fontconfig"
 	"gtk"
 	"qt"
 	"starship"
 	"opencode"
 	"keepassxc"
 )
+
+BACKUP_CREATED=false
 
 # --- UI Functions ---
 
@@ -166,14 +169,49 @@ stow_pkg() {
 		return 0
 	fi
 
-	# Handle conflicts strictly by backing up if installing
+	# Handle conflicts by backing up existing targets when installing
 	if [[ -z "$action" ]]; then
-		# This is a basic conflict check logic if needed in future
-		# For now, we trust stow's output which we capture
-		:
+		backup_conflicts "$pkg"
 	fi
 
 	execute "cd $DOTFILES_DIR && stow $action $pkg" "$pkg"
+}
+
+backup_conflicts() {
+	local pkg="$1"
+	local root="${DOTFILES_DIR}/${pkg}"
+
+	# Move any conflicting files/symlinks out of the way so stow can link.
+	while IFS= read -r -d '' src; do
+		local rel="${src#${root}/}"
+		local dest="${HOME}/${rel}"
+
+		# Ignore non-symlink directories
+		if [[ -d "$dest" && ! -L "$dest" ]]; then
+			continue
+		fi
+
+		# No conflict if target doesn't exist
+		if [[ ! -e "$dest" && ! -L "$dest" ]]; then
+			continue
+		fi
+
+		# If it's already a symlink into this package, keep it
+		if [[ -L "$dest" ]]; then
+			local resolved="$(readlink -f -- "$dest" 2>/dev/null || true)"
+			if [[ -n "$resolved" && "$resolved" == "${root}/"* ]]; then
+				continue
+			fi
+		fi
+
+		if [[ "$BACKUP_CREATED" != "true" ]]; then
+			mkdir -p -- "$BACKUP_DIR"
+			BACKUP_CREATED=true
+		fi
+
+		mkdir -p -- "${BACKUP_DIR}/$(dirname -- "$rel")"
+		mv -f -- "$dest" "${BACKUP_DIR}/${rel}"
+	done < <(find "$root" \( -type f -o -type l \) -print0)
 }
 
 # --- Commands ---

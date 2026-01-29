@@ -6,5 +6,5 @@ run = [ '''
 
 [[mgr.prepend_keymap]]
 on  = "<C-t>"
-run = "shell --orphan -- kitty --single-instance"
-desc = "Abrir Kitty en el CWD"
+run = "shell --orphan -- ghostty"
+desc = "Abrir Ghostty en el CWD"

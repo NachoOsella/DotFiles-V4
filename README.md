@@ -37,7 +37,7 @@ A comprehensive environment focused on keyboard-driven productivity and visual c
 |----------|-----------|-------------|
 | **Window Manager** | Hyprland | Dynamic tiling with smooth animations and blur |
 | **Theme** | Gruvbox Dark | Consistent color scheme across all applications |
-| **Terminal** | Kitty | GPU-accelerated terminal with ligature support |
+| **Terminal** | Ghostty | Fast terminal emulator with modern defaults |
 | **Editor** | Neovim | LazyVim distribution for a full IDE experience |
 | **Shell** | Fish | Modern shell with autosuggestions and starship prompt |
 | **File Manager** | Yazi | Blazing fast TUI file manager with image preview |
@@ -94,11 +94,11 @@ If you prefer more control, you can install components individually.
 git clone https://github.com/NachoOsella/DotFiles-V4.git ~/dotfiles
 cd ~/dotfiles
 
-# Install specific packages (e.g., just hyprland and kitty)
-sudo pacman -S hyprland kitty
+# Install specific packages (e.g., just hyprland and ghostty)
+sudo pacman -S hyprland ghostty
 
 # Link specific configs
-./scripts/stow.sh install hypr kitty
+./scripts/stow.sh install hypr ghostty
 ```
 </details>
 
@@ -113,7 +113,7 @@ sudo pacman -S hyprland kitty
 ├── hypr/       # Window Manager
 ├── nvim/       # Editor (LazyVim)
 ├── fish/       # Shell config
-├── kitty/      # Terminal
+├── ghostty/    # Terminal
 ├── waybar/     # Status bar
 ├── rofi/       # Launcher
 └── scripts/    # Automation
