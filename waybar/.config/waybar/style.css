@@ -75,7 +75,15 @@ window#waybar {
   padding-right: 7px;
 }
 
-#window.empty,
+window#waybar.empty #window {
+  background: transparent;
+  border: 0;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+  min-height: 0;
+}
+
 #custom-spotify.empty,
 #custom-spotify.paused {
   color: @muted;
