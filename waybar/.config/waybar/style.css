@@ -1,118 +1,174 @@
-/* === Waybar - Gruvbox Material (gris, +contraste, minimal) ===
-   bg0 #1d2021, bg1 #282828, bg2 #3c3836, bg3 #504945, bg4 #665c54
-   fg  #d4be98, fg-muted #bdae93, gray #928374
-*/
+@define-color base #1d2021;
+@define-color surface0 #282828;
+@define-color surface1 #32302f;
+@define-color surface2 #3a3735;
+@define-color border #665c54;
+@define-color foreground #d4be98;
+@define-color muted #928374;
 
-/* Barra continua (un poco más clara para separar de la terminal) */
-window#waybar {
-  background: #3c3836;
-  color: #d4be98;
-  border: none;
-  box-shadow: none;
-  padding-top: 4px;
-  padding-bottom: 4px;
-  border-bottom: 1px solid #504945; /* apoyo visual sutil */
-}
+@define-color green #a9b665;
+@define-color yellow #d8a657;
+@define-color red #ea6962;
+@define-color blue #7daea3;
+@define-color orange #e78a4e;
+@define-color purple #d3869b;
+@define-color aqua #89b482;
 
-/* Tipografía / altura */
 * {
-  font-family: 'JetBrainsMono Nerd Font';
-  font-size: 18px;
-  min-height: 24px;
-  padding-top: 0;
-  padding-bottom: 0;
-}
-
-/* ---- Tooltip (calendario, etc.) ---- */
-tooltip {
-  background: #504945;
-  color: #d4be98;
-  border: 1px solid #665c54;
-  border-radius: 0; /* sin redondeos */
-  box-shadow: none;
-}
-tooltip label {
-  color: #d4be98;
-}
-
-/* ---- Módulos “planchados” (sin cajas ni redondeos) ---- */
-#window,
-#custom-arch,
-#workspaces,
-#pulseaudio,
-#network,
-#clock,
-.custom-spotify,
-#tray,
-#memory,
-#custom-power {
-  background: transparent;
-  color: #d4be98; /* texto unificado */
-  border: none;
+  font-family: "JetBrainsMono Nerd Font", "JetBrains Mono", "Iosevka Nerd Font", monospace;
+  font-size: 15px;
+  font-weight: 500;
+  min-height: 0;
   border-radius: 0;
   box-shadow: none;
-  margin: 0 8px 0 0;
-  padding: 0 12px;
 }
 
-/* Evita offsets verticales (sin islas) */
-#window,
+window#waybar {
+  background: @base;
+  color: @foreground;
+  border: 0;
+}
+
 #custom-arch,
 #workspaces,
-#pulseaudio,
+#window,
+#custom-spotify,
 #network,
-#clock,
-.custom-spotify,
-#tray,
+#pulseaudio,
 #memory,
+#tray,
+#clock,
 #custom-power {
-  margin-top: 0;
+  background: @surface0;
+  color: @foreground;
+  border: 1px solid @border;
+  border-radius: 0;
+  margin: 4px 2px;
+  padding: 3px 8px;
+  min-height: 18px;
 }
 
-/* ---- Workspaces “flat” y neutros ---- */
+#custom-arch {
+  margin-left: 6px;
+  min-width: 18px;
+  padding-left: 7px;
+  padding-right: 7px;
+}
+
+#window {
+  margin-right: 7px;
+}
+
+#custom-spotify {
+  margin-left: 7px;
+  margin-right: 7px;
+}
+
+#network {
+  margin-left: 7px;
+}
+
+#custom-power {
+  margin-right: 6px;
+  min-width: 18px;
+  padding-left: 7px;
+  padding-right: 7px;
+}
+
+#window.empty,
+#custom-spotify.empty,
+#custom-spotify.paused {
+  color: @muted;
+}
+
 #workspaces {
-  margin: 0 8px 0 0;
   padding: 0;
 }
+
 #workspaces button {
   background: transparent;
-  color: #bdae93; /* muted por defecto */
-  border: none;
+  color: @muted;
+  border: 1px solid @border;
   border-radius: 0;
-  padding: 0 12px;
-  margin: 0 2px;
-  box-shadow: none;
+  margin: 0;
+  padding: 3px 8px;
 }
+
 #workspaces button:hover {
-  color: #d4be98;
+  background: @surface1;
+  color: @foreground;
 }
+
 #workspaces button.active {
-  color: #d4be98;
+  background: @surface2;
+  color: @foreground;
+  border-color: @aqua;
+}
+
+#workspaces button.urgent {
   background: transparent;
-  border-bottom: 3px solid #d4be98; /* indicador plano y visible */
+  color: @red;
+  border-color: @red;
 }
 
-/* ---- Título de ventana ---- */
-#window {
-  color: #e0d1b0; /* un pelo más claro p/ legibilidad */
-  margin-right: 12px;
+#custom-arch:hover,
+#window:hover,
+#custom-spotify:hover,
+#network:hover,
+#pulseaudio:hover,
+#memory:hover,
+#tray:hover,
+#clock:hover,
+#custom-power:hover {
+  background: @surface1;
 }
 
-/* ---- Acentos mínimos (grisáceos) por módulo ---- */
-#pulseaudio,
-#network,
-#clock,
-.custom-spotify,
-#tray,
-#memory,
-#custom-power,
-#custom-arch {
-  color: #cfc1a3; /* sutil, sin “colorines” */
+#pulseaudio.muted {
+  color: @muted;
 }
 
-/* Estados opcionales (neutros) */
-#pulseaudio.muted,
-#network.disconnected,
+#network.disconnected {
+  color: @red;
+}
+
+#battery.charging,
+#battery.plugged {
+  color: @green;
+}
+
+#battery.warning:not(.charging) {
+  color: @yellow;
+}
+
+#battery.critical:not(.charging) {
+  color: @red;
+}
+
+#temperature.warning,
+#cpu.warning,
+#memory.warning {
+  color: @yellow;
+}
+
+#temperature.critical,
+#cpu.critical,
 #memory.critical {
-  color: #928374;
+  color: @red;
+}
+
+#tray > .passive,
+#tray > .needs-attention {
+  -gtk-icon-effect: none;
+}
+
+tooltip {
+  background: @surface0;
+  color: @foreground;
+  border: 1px solid @border;
+  border-radius: 0;
+  padding: 4px 6px;
+}
+
+tooltip label {
+  color: @foreground;
 }

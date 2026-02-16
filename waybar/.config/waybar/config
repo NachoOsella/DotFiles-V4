@@ -4,10 +4,10 @@
 
   "modules-left": ["custom/arch", "hyprland/workspaces", "hyprland/window"],
   "modules-center": ["custom/spotify"],
-  "modules-right": ["memory", "network", "pulseaudio", "tray", "clock", "custom/power"],
+  "modules-right": ["network", "pulseaudio", "memory", "tray", "clock", "custom/power"],
 
   "custom/arch": {
-    "format": "  ",
+    "format": "",
     "tooltip": false,
     "on-click": "rofi -show drun"
   },
@@ -31,13 +31,14 @@
 
   "hyprland/window": {
     "format": "{initialClass}",
-    "max-length": 60
+    "max-length": 28
   },
+
   "clock": {
     "timezone": "America/Argentina/Cordoba",
     "interval": 1,
     "format": " {:%H:%M}",
-    "format-alt": " {:%H:%M   %Y-%m-%d %a}",
+    "format-alt": " {:%H:%M  %Y-%m-%d %a}",
     "tooltip-format": "<tt><small>{calendar}</small></tt>",
     "calendar": {
       "mode": "year",
@@ -45,11 +46,11 @@
       "weeks-pos": "right",
       "on-scroll": 1,
       "format": {
-        "months": "<span color='#ffead3'><b>{}</b></span>",
-        "days": "<span color='#ecc6d9'><b>{}</b></span>",
-        "weeks": "<span color='#99ffdd'><b>W{}</b></span>",
-        "weekdays": "<span color='#ffcc66'><b>{}</b></span>",
-        "today": "<span color='#ff6699'><b><u>{}</u></b></span>"
+        "months": "<span color='#d4be98'><b>{}</b></span>",
+        "days": "<span color='#d4be98'><b>{}</b></span>",
+        "weeks": "<span color='#928374'><b>W{}</b></span>",
+        "weekdays": "<span color='#928374'><b>{}</b></span>",
+        "today": "<span color='#a9b665'><b><u>{}</u></b></span>"
       }
     },
     "actions": {
@@ -59,7 +60,9 @@
       "on-scroll-up": "shift_up",
       "on-scroll-down": "shift_down"
     }
-  },  "pulseaudio": {
+  },
+
+  "pulseaudio": {
     "on-click": "pactl set-sink-mute @DEFAULT_SINK@ toggle",
     "on-click-right": "pavucontrol",
     "format": "{icon} {volume}%",
@@ -78,11 +81,11 @@
   },
 
   "network": {
-    "format-wifi": "󰤢  {bandwidthDownBits}",
-    "format-ethernet": "󰈀  {bandwidthDownBits}",
-    "format-disconnected": "󰤠  Sin red",
+    "format-wifi": "󰤢 {bandwidthDownBits}",
+    "format-ethernet": "󰈀 {bandwidthDownBits}",
+    "format-disconnected": "󰤠 Sin red",
     "interval": 5,
-    
+
     "tooltip": true,
     "tooltip-format": "Red: {ifname}",
     "tooltip-format-wifi": "Wi-Fi: {essid}\nSeñal: {signalStrength}%\nIP: {ipaddr}",
@@ -97,12 +100,12 @@
     "on-click": "playerctl play-pause --player spotify",
     "on-scroll-up": "playerctl next --player spotify",
     "on-scroll-down": "playerctl previous --player spotify",
-    "max-length": 80
+    "max-length": 55
   },
 
   "tray": {
-    "spacing": 8,
-    "show-passive-items": true
+    "spacing": 4,
+    "show-passive-items": false
   },
 
   "memory": {
@@ -117,4 +120,3 @@
     "on-click": "wlogout"
   }
 }
-
