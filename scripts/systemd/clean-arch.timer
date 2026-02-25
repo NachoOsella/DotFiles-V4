@@ -1,0 +1,11 @@
+[Unit]
+Description=Run clean-arch weekly
+
+[Timer]
+OnCalendar=weekly
+RandomizedDelaySec=2h
+Persistent=true
+Unit=clean-arch.service
+
+[Install]
+WantedBy=timers.target

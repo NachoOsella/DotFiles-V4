@@ -1,0 +1,13 @@
+[Unit]
+Description=Clean Arch (deep cleanup)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+# Phase 1: weekly visibility report
+ExecStart=/usr/bin/fish /home/nacho/Documents/scripts/clean_arch.fish --dry-run --yes --no-spinner --config=/home/nacho/Documents/scripts/clean_arch.conf --report-json=/tmp/clean-arch/last-dry-run.json
+# Phase 2: real cleanup
+ExecStart=/usr/bin/fish /home/nacho/Documents/scripts/clean_arch.fish --yes --no-spinner --config=/home/nacho/Documents/scripts/clean_arch.conf --report-json=/tmp/clean-arch/last-run.json
+Nice=10
+IOSchedulingClass=idle
