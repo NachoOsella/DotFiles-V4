@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 
+ROFI_WIFI_THEME="${ROFI_WIFI_THEME:-${XDG_CONFIG_HOME:-$HOME/.config}/rofi/wifi-menu.rasi}"
+
 notify-send "Getting list of available Wi-Fi networks..."
 # Get a list of available wifi connections and morph it into a nice-looking list
 wifi_list=$(nmcli --fields "SECURITY,SSID" device wifi list | sed 1d | sed 's/  */ /g' | sed -E "s/WPA*.?\S/ /g" | sed "s/^--/ /g" | sed "s/  //g" | sed "/--/d")
@@ -12,7 +14,7 @@ elif [[ "$connected" =~ "disabled" ]]; then
 fi
 
 # Use rofi to select wifi network
-chosen_network=$(echo -e "$toggle\n$wifi_list" | uniq -u | rofi -dmenu -i -selected-row 1 -p "Wi-Fi SSID: ")
+chosen_network=$(echo -e "$toggle\n$wifi_list" | uniq -u | rofi -dmenu -i -selected-row 1 -p "" -theme "$ROFI_WIFI_THEME")
 # Get name of connection
 read -r chosen_id <<<"${chosen_network:3}"
 
@@ -31,7 +33,7 @@ else
         nmcli connection up id "$chosen_id" | grep "successfully" && notify-send "Connection Established" "$success_message"
     else
         if [[ "$chosen_network" =~ "" ]]; then
-            wifi_password=$(rofi -dmenu -p "Password: ")
+            wifi_password=$(rofi -dmenu -p "Password: " -theme "$ROFI_WIFI_THEME")
         fi
         nmcli device wifi connect "$chosen_id" password "$wifi_password" | grep "successfully" && notify-send "Connection Established" "$success_message"
     fi

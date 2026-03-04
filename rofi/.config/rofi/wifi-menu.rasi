@@ -1,0 +1,35 @@
+@import "~/.config/rofi/config.rasi"
+
+window {
+    width: 760px;
+}
+
+mainbox {
+    padding: 18px;
+}
+
+inputbar {
+    border: 3px solid;
+    border-color: #ea6962;
+}
+
+textbox-prompt-colon {
+    str: "Wi-Fi:";
+}
+
+entry {
+    padding: 5px 8px;
+}
+
+listview {
+    lines: 12;
+    fixed-height: false;
+}
+
+element {
+    padding: 7px 10px;
+}
+
+element-text {
+    horizontal-align: 0.0;
+}

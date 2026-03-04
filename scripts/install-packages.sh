@@ -72,7 +72,7 @@ add_group "Audio" "Pipewire, Wireplumber, VLC" \
 
 # 6. Fonts
 add_group "Fonts" "Nerd Fonts, Emojis" \
-	ttf-jetbrains-mono-nerd ttf-firacode-nerd ttf-dejavu ttf-liberation \
+	ttf-jetbrains-mono-nerd ttf-dejavu ttf-liberation \
 	noto-fonts noto-fonts-cjk noto-fonts-emoji
 
 # 7. Theming
