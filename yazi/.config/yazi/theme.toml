@@ -191,3 +191,12 @@ rules = [
   { url = "*", is = "orphan", fg = "#ea6962", bold = true },
 ]
 
+# -------------------------------------------------------------------
+# Icon overrides
+# -------------------------------------------------------------------
+[icon]
+# Workaround para catppuccin/yazi#35 y casos similares:
+# forzamos el color del icono de cualquier directorio por glob (prioridad alta).
+prepend_globs = [
+  { url = "*/", text = "", fg = "#7daea3" },
+]

@@ -4,14 +4,20 @@
     "logo": {
         "source": "~/.config/fastfetch/logo.png",
         "type": "kitty-direct",
-        // "width": 20,
-        // "height": 50,
+        "width": 25,
+        "preserveAspectRatio": true,
         "padding": {
+            "top": 2,
             "left": 4,
         }
     },
     "display": {
-        "separator": " "
+        "separator": " ",
+        "color": {
+            "keys": "#d4be98",
+            "output": "#ddc7a1",
+            "separator": "#a89984"
+        }
     },
     "modules": [
         {
@@ -19,55 +25,55 @@
             "type": "custom"
         },
         {
-            "key": "║ {#31} user    {#keys}║",
+            "key": "║ {#ea6962} user    {#keys}║",
             "type": "title",
             "format": "{user-name}"
         },
         {
-            "key": "║ {#32}󰇅 hname   {#keys}║",
+            "key": "║ {#a9b665}󰇅 hname   {#keys}║",
             "type": "title",
             "format": "{host-name}"
         },
         {
-            "key": "║ {#33}󰅐 uptime  {#keys}║",
+            "key": "║ {#d8a657}󰅐 uptime  {#keys}║",
             "type": "uptime"
         },
         {
-            "key": "║ {#34}{icon} distro  {#keys}║",
+            "key": "║ {#7daea3}{icon} distro  {#keys}║",
             "type": "os"
         },
         {
-            "key": "║ {#35} kernel  {#keys}║",
+            "key": "║ {#d3869b} kernel  {#keys}║",
             "type": "kernel"
         },
         {
-            "key": "║ {#36}󰇄 desktop {#keys}║",
+            "key": "║ {#89b482}󰇄 desktop {#keys}║",
             "type": "de"
         },
         {
-            "key": "║ {#31} term    {#keys}║",
+            "key": "║ {#ea6962} term    {#keys}║",
             "type": "terminal"
         },
         {
-            "key": "║ {#32} shell   {#keys}║",
+            "key": "║ {#a9b665} shell   {#keys}║",
             "type": "shell"
         },
         {
-            "key": "║ {#33}󰍛 cpu     {#keys}║",
+            "key": "║ {#e78a4e}󰍛 cpu     {#keys}║",
             "type": "cpu",
             "showPeCoreCount": true
         },
         {
-            "key": "║ {#34}󰉉 disk    {#keys}║",
+            "key": "║ {#7daea3}󰉉 disk    {#keys}║",
             "type": "disk",
             "folders": "/"
         },
         {
-            "key": "║ {#35} memory  {#keys}║",
+            "key": "║ {#d3869b} memory  {#keys}║",
             "type": "memory"
         },
         {
-            "key": "║ {#36}󰩟 network {#keys}║",
+            "key": "║ {#89b482}󰩟 network {#keys}║",
             "type": "localip",
             "format": "{ipv4} ({ifname})"
         },
@@ -76,7 +82,7 @@
             "type": "custom"
         },
         {
-            "key": "║ {#39} colors  {#keys}║",
+            "key": "║ {#e78a4e} colors  {#keys}║",
             "type": "colors",
             "symbol": "circle"
         },

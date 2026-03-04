@@ -376,7 +376,7 @@ function get_total_free_kb
     test -d /tmp; and set -a candidates /tmp
     test -d /var/tmp; and set -a candidates /var/tmp
     for p in $candidates
-        df -Pk "$p" 2>/dev/null | awk 'NR==2 {print $6 " " $4}'
+        df -Pk "$p" 2>/dev/null | awk 'NR==2 {print $1 " " $4}'
     end | sort -u | awk '{sum += $2} END {print sum + 0}'
 end
 
@@ -456,14 +456,9 @@ function run_task
     if test $DRY_RUN -eq 1
         set freed_bytes 0
     end
-    set -g TOTAL_FREED_BYTES (math "$TOTAL_FREED_BYTES + $freed_bytes")
-
     switch $rc
         case 0
             set -l meta (fmt_duration_ms $duration_ms)
-            if test $freed_bytes -gt 0
-                set meta "$meta | freed "(format_bytes $freed_bytes)
-            end
             end_task_ok "$meta"
             append_task_result "$key" "ok" $duration_ms "" $freed_bytes
         case 10
@@ -865,7 +860,7 @@ test $delta_kb -lt 0; and set delta_kb 0
 set -l delta_bytes (math "$delta_kb * 1024")
 if test $DRY_RUN -eq 1
     set -g TOTAL_FREED_BYTES 0
-else if test $TOTAL_FREED_BYTES -lt $delta_bytes
+else
     set -g TOTAL_FREED_BYTES $delta_bytes
 end
 
