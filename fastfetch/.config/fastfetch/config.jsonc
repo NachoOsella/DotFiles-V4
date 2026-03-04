@@ -14,7 +14,7 @@
     "display": {
         "separator": " ",
         "color": {
-            "keys": "#d4be98",
+            "keys": "#a9b665",
             "output": "#ddc7a1",
             "separator": "#a89984"
         }
@@ -25,55 +25,55 @@
             "type": "custom"
         },
         {
-            "key": "║ {#ea6962} user    {#keys}║",
+            "key": "║ {##ea6962} user    {#keys}║",
             "type": "title",
             "format": "{user-name}"
         },
         {
-            "key": "║ {#a9b665}󰇅 hname   {#keys}║",
+            "key": "║ {##a9b665}󰇅 hname   {#keys}║",
             "type": "title",
             "format": "{host-name}"
         },
         {
-            "key": "║ {#d8a657}󰅐 uptime  {#keys}║",
+            "key": "║ {##d8a657}󰅐 uptime  {#keys}║",
             "type": "uptime"
         },
         {
-            "key": "║ {#7daea3}{icon} distro  {#keys}║",
+            "key": "║ {##7daea3}{icon} distro  {#keys}║",
             "type": "os"
         },
         {
-            "key": "║ {#d3869b} kernel  {#keys}║",
+            "key": "║ {##d3869b} kernel  {#keys}║",
             "type": "kernel"
         },
         {
-            "key": "║ {#89b482}󰇄 desktop {#keys}║",
+            "key": "║ {##89b482}󰇄 desktop {#keys}║",
             "type": "de"
         },
         {
-            "key": "║ {#ea6962} term    {#keys}║",
+            "key": "║ {##ea6962} term    {#keys}║",
             "type": "terminal"
         },
         {
-            "key": "║ {#a9b665} shell   {#keys}║",
+            "key": "║ {##a9b665} shell   {#keys}║",
             "type": "shell"
         },
         {
-            "key": "║ {#e78a4e}󰍛 cpu     {#keys}║",
+            "key": "║ {##e78a4e}󰍛 cpu     {#keys}║",
             "type": "cpu",
             "showPeCoreCount": true
         },
         {
-            "key": "║ {#7daea3}󰉉 disk    {#keys}║",
+            "key": "║ {##7daea3}󰉉 disk    {#keys}║",
             "type": "disk",
             "folders": "/"
         },
         {
-            "key": "║ {#d3869b} memory  {#keys}║",
+            "key": "║ {##d3869b} memory  {#keys}║",
             "type": "memory"
         },
         {
-            "key": "║ {#89b482}󰩟 network {#keys}║",
+            "key": "║ {##89b482}󰩟 network {#keys}║",
             "type": "localip",
             "format": "{ipv4} ({ifname})"
         },
@@ -82,7 +82,7 @@
             "type": "custom"
         },
         {
-            "key": "║ {#e78a4e} colors  {#keys}║",
+            "key": "║ {##e78a4e} colors  {#keys}║",
             "type": "colors",
             "symbol": "circle"
         },
