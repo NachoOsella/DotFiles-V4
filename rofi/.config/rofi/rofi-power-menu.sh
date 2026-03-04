@@ -12,14 +12,6 @@ HIBERNATE='  Hibernate'
 REBOOT='  Reboot'
 SHUTDOWN='  Shutdown'
 
-confirm() {
-    local action="$1"
-    local answer
-
-    answer=$(printf 'No\nYes\n' | rofi -dmenu -i -no-custom -p "$action?" -theme "$ROFI_THEME")
-    [[ "$answer" == "Yes" ]]
-}
-
 run_lock() {
     if command -v betterlockscreen >/dev/null 2>&1; then
         betterlockscreen -l
@@ -50,28 +42,18 @@ case "$choice" in
         run_lock
         ;;
     "$LOGOUT")
-        if confirm "Logout"; then
-            run_logout
-        fi
+        run_logout
         ;;
     "$SUSPEND")
-        if confirm "Suspend"; then
-            systemctl suspend
-        fi
+        systemctl suspend
         ;;
     "$HIBERNATE")
-        if confirm "Hibernate"; then
-            systemctl hibernate
-        fi
+        systemctl hibernate
         ;;
     "$REBOOT")
-        if confirm "Reboot"; then
-            systemctl reboot
-        fi
+        systemctl reboot
         ;;
     "$SHUTDOWN")
-        if confirm "Shutdown"; then
-            systemctl poweroff
-        fi
+        systemctl poweroff
         ;;
 esac

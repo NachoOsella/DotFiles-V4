@@ -90,7 +90,8 @@
     "tooltip-format": "Red: {ifname}",
     "tooltip-format-wifi": "Wi-Fi: {essid}\nSeñal: {signalStrength}%\nIP: {ipaddr}",
     "tooltip-format-ethernet": "Ethernet: {ifname}\nIP: {ipaddr}",
-    "tooltip-format-disconnected": "Sin conexión"
+    "tooltip-format-disconnected": "Sin conexión",
+    "on-click": "~/.config/rofi/rofi-wifi-menu.sh"
   },
 
   "custom/spotify": {
