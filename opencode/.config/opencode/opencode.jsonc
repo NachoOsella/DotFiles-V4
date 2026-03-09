@@ -26,14 +26,6 @@
     }
   },
   "agent": {
-    "explore": {
-      "model": "openai/gpt-5.2",
-      "variant": "none",
-      "tools": {
-        "skill": true
-      },
-      "prompt": "Load and follow the instructions from the 'explore' skill."
-    },
     "ui-agent": {
       "description": "Audits and actively remediates UI code for WCAG compliance, semantic HTML, and responsive CSS.",
       "mode": "subagent",
