@@ -4,7 +4,7 @@
 
   "modules-left": ["custom/arch", "hyprland/workspaces", "hyprland/window"],
   "modules-center": ["custom/spotify"],
-  "modules-right": ["network", "pulseaudio", "memory", "tray", "clock", "custom/power"],
+  "modules-right": ["network", "pulseaudio", "battery", "memory", "tray", "clock", "custom/power"],
 
   "custom/arch": {
     "format": "",
@@ -114,6 +114,20 @@
     "format": " {percentage}%",
     "max-length": 30,
     "on-click": "kitty -e btop"
+  },
+
+  "battery": {
+    "states": {
+      "warning": 30,
+      "critical": 15
+    },
+    "format": "{icon} {capacity}%",
+    "format-charging": " {capacity}%",
+    "format-plugged": " {capacity}%",
+    "format-icons": ["", "", "", "", ""],
+    "interval": 30,
+    "tooltip": true,
+    "tooltip-format": "{timeTo}\n{capacity}%"
   },
 
   "custom/power": {

@@ -4,10 +4,14 @@ return {
         formatters_by_ft = {
             python = { "ruff_format" },
             lua = { "stylua" },
-            typescript = { "prettierd" },
-            javascript = { "prettierd" },
-            html = { "prettierd" },
-            css = { "prettierd" },
+            typescript = { "prettierd", "prettier" },
+            typescriptreact = { "prettierd", "prettier" },
+            javascript = { "prettierd", "prettier" },
+            javascriptreact = { "prettierd", "prettier" },
+            json = { "prettierd", "prettier" },
+            yaml = { "prettierd", "prettier" },
+            html = { "prettierd", "prettier" },
+            css = { "prettierd", "prettier" },
         },
     },
 }

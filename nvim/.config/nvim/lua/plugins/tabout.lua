@@ -3,7 +3,6 @@ return {
     lazy = false,
     dependencies = {
         "nvim-treesitter/nvim-treesitter",
-        "hrsh7th/nvim-cmp", -- si lo usás
         "L3MON4D3/LuaSnip", -- si usás snippets
     },
     config = function()

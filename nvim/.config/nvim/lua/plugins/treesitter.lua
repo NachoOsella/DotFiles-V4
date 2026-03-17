@@ -6,6 +6,7 @@ return {
         ensure_installed = {
             "bash",
             "c",
+            "dockerfile",
             "html",
             "java",
             "javascript",
@@ -13,8 +14,11 @@ return {
             "lua",
             "markdown",
             "python",
+            "regex",
+            "tsx",
             "typescript",
             "angular",
+            "yaml",
             "go",
         },
         incremental_selection = {
@@ -23,13 +27,6 @@ return {
                 init_selection = "<C-space>",
                 node_incremental = "<C-space>",
                 node_decremental = "<bs>",
-            },
-        },
-        textobjects = {
-            move = {
-                enable = true,
-                goto_next_start = { ["]f"] = "@function.outer" },
-                ...,
             },
         },
     },
