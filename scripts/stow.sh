@@ -57,6 +57,7 @@ PACKAGES=(
 	"starship"
 	"opencode"
 	"keepassxc"
+	"systemd-user"
 )
 
 # --- UI Functions ---

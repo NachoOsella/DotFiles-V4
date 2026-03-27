@@ -4,9 +4,17 @@
 
 ```
 ~/dotfiles/
+├── packages/                  # Manifiestos de paquetes
+├── hosts/                     # Overlays por host
+├── system/                    # Config versionada de /etc
 ├── scripts/
-│   ├── install-packages.sh   # Instala paquetes necesarios
-│   └── stow.sh               # Gestiona symlinks
+│   ├── bootstrap.sh          # Orquestación completa
+│   ├── install-packages.sh   # Instala paquetes desde manifests
+│   ├── apply-system.sh       # Copia system/etc a /etc
+│   ├── enable-services.sh    # Habilita units declaradas
+│   ├── capture-system.sh     # Regenera manifests desde la máquina
+│   ├── check.sh              # Validaciones rápidas
+│   └── stow.sh               # Gestiona symlinks de usuario
 ├── hypr/                     # Hyprland config
 ├── kitty/                    # Terminal
 ├── fish/                     # Shell
@@ -23,6 +31,7 @@
 ├── zathura/                  # PDF viewer
 ├── gtk/                      # GTK 3/4 theming
 ├── qt/                       # Qt5/6 + Kvantum theming
+├── systemd-user/             # Units de usuario via stow
 └── starship/                 # Prompt
 ```
 
@@ -40,13 +49,16 @@ cd ~/dotfiles
 ### 2. Instalar paquetes
 
 ```bash
-./scripts/install-packages.sh
+./scripts/bootstrap.sh
 ```
 
-### 3. Aplicar dotfiles
+### 3. Re-aplicar por partes
 
 ```bash
-./scripts/stow.sh all
+./scripts/install-packages.sh   # Paquetes
+./scripts/apply-system.sh       # /etc
+./scripts/stow.sh install       # ~/.config y afines
+./scripts/enable-services.sh    # systemd system/user
 ```
 
 ### 4. Reiniciar sesión
@@ -65,6 +77,18 @@ cd ~/dotfiles
 ./scripts/stow.sh status
 ```
 
+### Verificar manifests y scripts
+
+```bash
+./scripts/check.sh
+```
+
+### Regenerar manifests desde la máquina actual
+
+```bash
+./scripts/capture-system.sh
+```
+
 ### Re-aplicar después de cambios
 
 Si agregas archivos nuevos a un paquete:
@@ -77,12 +101,6 @@ Si agregas archivos nuevos a un paquete:
 
 ```bash
 ./scripts/stow.sh remove hypr
-```
-
-### Instalar paquetes específicos
-
-```bash
-./scripts/stow.sh install hypr kitty fish
 ```
 
 ---
@@ -158,7 +176,7 @@ git push
 ```bash
 cd ~/dotfiles
 git pull
-./scripts/stow.sh restow PAQUETE_MODIFICADO
+./scripts/bootstrap.sh
 ```
 
 ---

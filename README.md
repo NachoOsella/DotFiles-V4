@@ -2,7 +2,7 @@
 
 <img src="assets/wallpaper.png" width="100%" alt="Hyprland Banner" style="border-radius: 10px; margin-bottom: 20px;">
 
-# ⚡ Hyprland Dotfiles
+# ⚡ Hyprland Dotfiles + System Bootstrap
 
 [![Arch Linux](https://img.shields.io/badge/Arch_Linux-1793d1?style=for-the-badge&logo=arch-linux&logoColor=white)](https://archlinux.org/)
 [![Hyprland](https://img.shields.io/badge/Hyprland-00b4d8?style=for-the-badge&logo=hyprland&logoColor=white)](https://wiki.hyprland.org/)
@@ -11,9 +11,9 @@
 
 <br/>
 
-**A meticulously crafted, minimal, and functional Hyprland setup powered by Arch Linux.**
+**A reproducible Arch Linux setup with Hyprland, user dotfiles, system config, and bootstrap automation.**
 <br/>
-*Aesthetic • Performance • Workflow*
+*Aesthetic • Provisioning • Workflow*
 
 <br/>
 
@@ -43,6 +43,9 @@ A comprehensive environment focused on keyboard-driven productivity and visual c
 | **File Manager** | Yazi | Blazing fast TUI file manager with image preview |
 | **Bar** | Waybar | Highly customizable status bar with functional modules |
 | **Launcher** | Rofi | Application launcher and power menu |
+| **Provisioning** | Bash + Stow | Reproducible install flow for packages, `/etc`, services and user config |
+| **Power** | TLP | Battery thresholds and laptop power configuration |
+| **Network** | NetworkManager + iwd | Global wireless backend and service state managed from the repo |
 
 ---
 
@@ -65,6 +68,14 @@ A comprehensive environment focused on keyboard-driven productivity and visual c
 
 ## 📦 Installation
 
+This repository now manages:
+
+- user dotfiles with `stow`
+- explicit package manifests for `pacman` and AUR
+- selected global config under `/etc`
+- system and user `systemd` services
+- host-specific overrides
+
 <details>
 <summary><strong>Quick Start</strong></summary>
 
@@ -73,13 +84,10 @@ A comprehensive environment focused on keyboard-driven productivity and visual c
 git clone https://github.com/NachoOsella/DotFiles-V4.git ~/dotfiles
 cd ~/dotfiles
 
-# 2. Install dependencies
-./scripts/install-packages.sh
+# 2. Bootstrap the machine
+./scripts/bootstrap.sh
 
-# 3. Apply configurations
-./scripts/stow.sh all
-
-# 4. Reboot
+# 3. Reboot
 reboot
 ```
 </details>
@@ -94,11 +102,17 @@ If you prefer more control, you can install components individually.
 git clone https://github.com/NachoOsella/DotFiles-V4.git ~/dotfiles
 cd ~/dotfiles
 
-# Install specific packages (e.g., just hyprland and kitty)
-sudo pacman -S hyprland kitty
+# Install packages from manifests
+./scripts/install-packages.sh
 
-# Link specific configs
-./scripts/stow.sh install hypr kitty
+# Apply versioned /etc config
+./scripts/apply-system.sh
+
+# Link user config
+./scripts/stow.sh install
+
+# Enable declared services
+./scripts/enable-services.sh
 ```
 </details>
 
@@ -110,14 +124,48 @@ sudo pacman -S hyprland kitty
 
 ```tree
 ~/dotfiles/
-├── hypr/       # Window Manager
-├── nvim/       # Editor (LazyVim)
-├── fish/       # Shell config
-├── kitty/      # Terminal
-├── waybar/     # Status bar
-├── rofi/       # Launcher
-└── scripts/    # Automation
+├── packages/     # Package manifests (pacman/AUR)
+├── hosts/        # Host-specific overlays
+├── system/       # Versioned /etc files
+├── systemd-user/ # User units managed with stow
+├── hypr/         # Window Manager
+├── nvim/         # Editor (LazyVim)
+├── fish/         # Shell config
+├── kitty/        # Terminal
+├── waybar/       # Status bar
+├── rofi/         # Launcher
+└── scripts/      # Automation
 ```
+
+### Provisioning Flow
+
+```bash
+# Apply everything on the current host
+./scripts/bootstrap.sh
+
+# Refresh package manifests from the current machine
+./scripts/capture-system.sh
+
+# Validate manifests and scripts
+./scripts/check.sh
+```
+
+### Managed System Areas
+
+- `system/etc/NetworkManager/conf.d/`
+  - Global NetworkManager behavior, including `iwd` backend.
+- `hosts/<host>/system/etc/tlp.d/`
+  - Host-specific TLP battery thresholds.
+- `hosts/<host>/services/*.txt`
+  - Services to enable and conflicting units to disable or mask.
+
+### Real Host State Captured
+
+The current `archlinux` host profile includes:
+
+- `NetworkManager.service` and `iwd.service` as the active networking stack
+- `wpa_supplicant.service` and `systemd-networkd*` disabled/masked to avoid conflicts
+- TLP charge thresholds at `40/60`
 
 ### Keybindings
 

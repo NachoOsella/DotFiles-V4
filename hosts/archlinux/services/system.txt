@@ -1,0 +1,14 @@
+bluetooth.service
+docker.service
+fstrim.timer
+getty@.service
+iwd.service
+NetworkManager-dispatcher.service
+NetworkManager.service
+NetworkManager-wait-online.service
+remote-fs.target
+sddm.service
+systemd-resolved.service
+systemd-timesyncd.service
+systemd-userdbd.socket
+tlp.service

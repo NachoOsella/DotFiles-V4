@@ -1,0 +1,6 @@
+# System units that must stay disabled/masked on this host.
+dbus-fi.w1.wpa_supplicant1.service
+systemd-networkd.service
+systemd-networkd.socket
+systemd-networkd-wait-online.service
+wpa_supplicant.service

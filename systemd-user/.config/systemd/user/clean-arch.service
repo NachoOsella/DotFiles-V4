@@ -1,0 +1,6 @@
+[Unit]
+Description=Clean Arch caches and temporary files
+
+[Service]
+Type=oneshot
+ExecStart=%h/dotfiles/scripts/clean_arch.fish
