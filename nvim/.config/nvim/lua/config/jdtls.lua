@@ -48,7 +48,7 @@ M.setup = function()
                     settings = {
                         -- Usar el prefijo file:// y asegurar ruta absoluta
                         url = "file://" .. xml_path,
-                        profile = "IntelliJ_IDEA_Default",
+                        profile = "IntelliJ",
                     },
                 },
                 signatureHelp = { enabled = true },
