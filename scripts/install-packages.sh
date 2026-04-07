@@ -18,29 +18,32 @@ EOF
 
 while [[ $# -gt 0 ]]; do
 	case "$1" in
-		--host)
-			shift
-			[[ $# -gt 0 ]] || die "--host requires a value"
-			HOST="$1"
-			;;
-		--dry-run)
-			DRY_RUN=1
-			;;
-		--pacman-only)
-			PACMAN_ONLY=1
-			;;
-		-h | --help)
-			usage
-			exit 0
-			;;
-		*)
-			die "Unknown argument: $1"
-			;;
+	--host)
+		shift
+		[[ $# -gt 0 ]] || die "--host requires a value"
+		HOST="$1"
+		;;
+	--dry-run)
+		DRY_RUN=1
+		;;
+	--pacman-only)
+		PACMAN_ONLY=1
+		;;
+	-h | --help)
+		usage
+		exit 0
+		;;
+	*)
+		die "Unknown argument: $1"
+		;;
 	esac
 	shift
 done
 
 require_command pacman
+
+overlay_host_root "$HOST" >/dev/null || true
+export DOTFILES_OVERLAY_NOTICE_KEY="${DOTFILES_OVERLAY_NOTICE_KEY:-}"
 
 mapfile -t PACMAN_PACKAGES < <(collect_manifest_packages "$HOST" pacman | sort -u)
 mapfile -t AUR_PACKAGES < <(collect_manifest_packages "$HOST" aur | sort -u)
@@ -50,7 +53,7 @@ install_yay() {
 		return 0
 	fi
 
-	if (( DRY_RUN )); then
+	if ((DRY_RUN)); then
 		log "[dry-run] Would install yay from AUR"
 		return 0
 	fi
@@ -70,9 +73,9 @@ install_yay() {
 	)
 }
 
-if (( ${#PACMAN_PACKAGES[@]} > 0 )); then
+if ((${#PACMAN_PACKAGES[@]} > 0)); then
 	log "Installing pacman packages for host '$HOST'"
-	if (( DRY_RUN )); then
+	if ((DRY_RUN)); then
 		printf '%s\n' "${PACMAN_PACKAGES[@]}"
 	else
 		sudo pacman -Sy --needed --noconfirm "${PACMAN_PACKAGES[@]}"
@@ -81,11 +84,11 @@ else
 	warn "No pacman packages declared for host '$HOST'"
 fi
 
-if (( PACMAN_ONLY )); then
+if ((PACMAN_ONLY)); then
 	exit 0
 fi
 
-if (( ${#AUR_PACKAGES[@]} == 0 )); then
+if ((${#AUR_PACKAGES[@]} == 0)); then
 	log "No AUR packages declared for host '$HOST'"
 	exit 0
 fi
@@ -100,7 +103,7 @@ if command_exists paru; then
 fi
 
 log "Installing AUR packages with $HELPER"
-if (( DRY_RUN )); then
+if ((DRY_RUN)); then
 	printf '%s\n' "${AUR_PACKAGES[@]}"
 else
 	"$HELPER" -S --needed --noconfirm "${AUR_PACKAGES[@]}"

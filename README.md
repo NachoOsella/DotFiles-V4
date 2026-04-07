@@ -76,6 +76,54 @@ This repository now manages:
 - system and user `systemd` services
 - host-specific overrides
 
+### Beginner Step-by-Step (copy/paste friendly)
+
+If this is your first time setting up dotfiles, follow these exact steps.
+
+1) **Boot into your fresh Arch install and connect to internet**
+
+2) **Install Git**
+
+```bash
+sudo pacman -Sy --noconfirm git
+```
+
+3) **Clone this repo**
+
+```bash
+git clone https://github.com/NachoOsella/DotFiles-V4.git ~/dotfiles
+```
+
+4) **Enter the directory**
+
+```bash
+cd ~/dotfiles
+```
+
+5) **Run the full automated setup**
+
+```bash
+./scripts/bootstrap.sh
+```
+
+6) **Reboot**
+
+```bash
+reboot
+```
+
+7) **Log back in and verify**
+
+```bash
+cd ~/dotfiles
+./scripts/check.sh
+```
+
+Notes:
+- The install can take a while (many packages are installed).
+- The script will ask for your `sudo` password when needed.
+- If you want to preview actions first, run: `./scripts/bootstrap.sh --dry-run`.
+
 <details>
 <summary><strong>Quick Start</strong></summary>
 

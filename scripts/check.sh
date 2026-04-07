@@ -42,6 +42,7 @@ done
 check_file "$PACKAGES_DIR/pacman.txt"
 check_file "$PACKAGES_DIR/aur.txt"
 check_file "$DOTFILES_DIR/scripts/bootstrap.sh"
+check_file "$DOTFILES_DIR/scripts/preflight.sh"
 check_file "$DOTFILES_DIR/scripts/apply-system.sh"
 check_file "$DOTFILES_DIR/scripts/enable-services.sh"
 check_file "$DOTFILES_DIR/systemd-user/.config/systemd/user/clean-arch.timer"
@@ -58,6 +59,7 @@ fi
 
 for script in \
 	"$DOTFILES_DIR/scripts/bootstrap.sh" \
+	"$DOTFILES_DIR/scripts/preflight.sh" \
 	"$DOTFILES_DIR/scripts/install-packages.sh" \
 	"$DOTFILES_DIR/scripts/apply-system.sh" \
 	"$DOTFILES_DIR/scripts/enable-services.sh" \
@@ -70,7 +72,7 @@ for script in \
 	fi
 done
 
-if (( STATUS == 0 )); then
+if ((STATUS == 0)); then
 	log "Checks passed"
 fi
 

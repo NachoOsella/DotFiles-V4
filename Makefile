@@ -1,7 +1,10 @@
-.PHONY: bootstrap apply-system enable-services capture check install-packages
+.PHONY: bootstrap preflight apply-system enable-services capture check install-packages
 
 bootstrap:
 	./scripts/bootstrap.sh
+
+preflight:
+	./scripts/preflight.sh
 
 install-packages:
 	./scripts/install-packages.sh

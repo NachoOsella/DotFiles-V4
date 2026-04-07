@@ -6,7 +6,7 @@ starship init fish | source
 zoxide init fish | source
 
 # Environment Variables
-set -x HYPRSHOT_DIR /home/nacho/Documents/imagenes/screenshots/
+set -x HYPRSHOT_DIR "$HOME/Documents/imagenes/screenshots/"
 set -x QT_QPA_PLATFORMTHEME qt5ct
 set -x MOZ_ENABLE_WAYLAND 1
 set -x GTK_THEME Adwaita:dark
@@ -36,11 +36,8 @@ set -gx LS_COLORS "di=38;2;125;174;163:ex=38;2;234;105;98:ln=38;2;211;134;155:or
 set --export BUN_INSTALL "$HOME/.bun"
 set --export PATH $BUN_INSTALL/bin $PATH
 
-# tuitube
-fish_add_path /home/nacho/.termcast/compiled/tuitube/bin
-
 # nvim mason
 fish_add_path ~/.local/share/nvim/mason/bin
 
 # opencode
-fish_add_path /home/nacho/.opencode/bin
+fish_add_path "$HOME/.opencode/bin"

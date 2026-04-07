@@ -18,21 +18,21 @@ EOF
 
 while [[ $# -gt 0 ]]; do
 	case "$1" in
-		--host)
-			shift
-			[[ $# -gt 0 ]] || die "--host requires a value"
-			HOST="$1"
-			;;
-		--dry-run)
-			DRY_RUN=1
-			;;
-		-h | --help)
-			usage
-			exit 0
-			;;
-		*)
-			die "Unknown argument: $1"
-			;;
+	--host)
+		shift
+		[[ $# -gt 0 ]] || die "--host requires a value"
+		HOST="$1"
+		;;
+	--dry-run)
+		DRY_RUN=1
+		;;
+	-h | --help)
+		usage
+		exit 0
+		;;
+	*)
+		die "Unknown argument: $1"
+		;;
 	esac
 	shift
 done
@@ -52,7 +52,7 @@ apply_tree() {
 		local dst="$destination_root/$rel"
 
 		if [[ -d "$entry" ]]; then
-			if (( DRY_RUN )); then
+			if ((DRY_RUN)); then
 				log "[dry-run] mkdir -p $dst"
 			else
 				sudo install -d -m 0755 "$dst"
@@ -65,7 +65,7 @@ apply_tree() {
 			mode="0755"
 		fi
 
-		if (( DRY_RUN )); then
+		if ((DRY_RUN)); then
 			log "[dry-run] install -m $mode $entry -> $dst"
 		else
 			sudo install -D -m "$mode" "$entry" "$dst"
@@ -75,4 +75,9 @@ apply_tree() {
 
 log "Applying versioned system configuration for host '$HOST'"
 apply_tree "$SYSTEM_DIR/etc" /etc
-apply_tree "$(host_system_dir "$HOST")/etc" /etc
+
+HOST_OVERLAY_SYSTEM_DIR=""
+overlay_host_system_dir "$HOST" HOST_OVERLAY_SYSTEM_DIR || true
+if [[ -n "$HOST_OVERLAY_SYSTEM_DIR" ]]; then
+	apply_tree "$HOST_OVERLAY_SYSTEM_DIR/etc" /etc
+fi

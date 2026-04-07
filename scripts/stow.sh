@@ -12,7 +12,8 @@ set -euo pipefail
 IFS=$'\n\t'
 
 # --- Configuration ---
-DOTFILES_DIR="${HOME}/dotfiles"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+DOTFILES_DIR="${DOTFILES_DIR:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 BACKUP_DIR="${HOME}/.dotfiles_backup_$(date +%Y%m%d_%H%M%S)"
 
 # --- Gruvbox Palette & Styling ---
