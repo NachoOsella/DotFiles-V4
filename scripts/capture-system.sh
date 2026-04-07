@@ -18,21 +18,21 @@ EOF
 
 while [[ $# -gt 0 ]]; do
 	case "$1" in
-		--host)
-			shift
-			[[ $# -gt 0 ]] || die "--host requires a value"
-			HOST="$1"
-			;;
-		--skip-services)
-			CAPTURE_SERVICES=0
-			;;
-		-h | --help)
-			usage
-			exit 0
-			;;
-		*)
-			die "Unknown argument: $1"
-			;;
+	--host)
+		shift
+		[[ $# -gt 0 ]] || die "--host requires a value"
+		HOST="$1"
+		;;
+	--skip-services)
+		CAPTURE_SERVICES=0
+		;;
+	-h | --help)
+		usage
+		exit 0
+		;;
+	*)
+		die "Unknown argument: $1"
+		;;
 	esac
 	shift
 done
@@ -59,20 +59,28 @@ if [[ -r /etc/tlp.conf ]]; then
 	' /etc/tlp.conf >"$(host_system_dir "$HOST")/etc/tlp.d/10-battery.conf"
 fi
 
-if (( CAPTURE_SERVICES )); then
+if [[ -d /etc/tlp.d ]]; then
+	mkdir -p "$(host_system_dir "$HOST")/etc/tlp.d"
+	find /etc/tlp.d -maxdepth 1 -type f -name '*.conf' -print0 |
+		while IFS= read -r -d '' file; do
+			install -D -m 0644 "$file" "$(host_system_dir "$HOST")/etc/tlp.d/$(basename "$file")"
+		done
+fi
+
+if ((CAPTURE_SERVICES)); then
 	if command_exists systemctl; then
 		if systemctl list-unit-files --state=enabled --no-legend >/dev/null 2>&1; then
-			systemctl list-unit-files --state=enabled --no-legend \
-				| awk '{print $1}' \
-				| sort -u >"$(host_services_dir "$HOST")/system.txt"
+			systemctl list-unit-files --state=enabled --no-legend |
+				awk '{print $1}' |
+				sort -u >"$(host_services_dir "$HOST")/system.txt"
 		else
 			warn "Could not query system services; skipping system.txt"
 		fi
 
 		if systemctl --user list-unit-files --state=enabled --no-legend >/dev/null 2>&1; then
-			systemctl --user list-unit-files --state=enabled --no-legend \
-				| awk '{print $1}' \
-				| sort -u >"$(host_services_dir "$HOST")/user.txt"
+			systemctl --user list-unit-files --state=enabled --no-legend |
+				awk '{print $1}' |
+				sort -u >"$(host_services_dir "$HOST")/user.txt"
 		else
 			warn "Could not query user services; skipping user.txt"
 		fi
@@ -86,8 +94,8 @@ fi
 
 if [[ -d /etc/NetworkManager/conf.d ]]; then
 	mkdir -p "$SYSTEM_DIR/etc/NetworkManager/conf.d"
-	find /etc/NetworkManager/conf.d -maxdepth 1 -type f -name '*.conf' -print0 \
-		| while IFS= read -r -d '' file; do
+	find /etc/NetworkManager/conf.d -maxdepth 1 -type f -name '*.conf' -print0 |
+		while IFS= read -r -d '' file; do
 			install -D -m 0644 "$file" "$SYSTEM_DIR/etc/NetworkManager/conf.d/$(basename "$file")"
 		done
 fi
