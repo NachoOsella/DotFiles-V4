@@ -59,6 +59,7 @@ PACKAGES=(
 	"opencode"
 	"keepassxc"
 	"systemd-user"
+	"pi"
 )
 
 # --- UI Functions ---

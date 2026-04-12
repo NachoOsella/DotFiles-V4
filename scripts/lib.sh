@@ -26,6 +26,24 @@ overlay_notice() {
 	warn "$message"
 }
 
+# --- Gruvbox Palette & Styling ---
+BOLD='\033[1m'
+DIM='\033[2m'
+RESET='\033[0m'
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+BLUE='\033[0;34m'
+PURPLE='\033[0;35m'
+CYAN='\033[0;36m'
+ORANGE='\033[0;91m'
+
+# Icons
+ICON_INFO="✦"
+ICON_WARN="⚠"
+ICON_ERR="✖"
+ICON_OK="✔"
+
 color() {
 	local code="$1"
 	shift
@@ -33,20 +51,28 @@ color() {
 }
 
 log() {
-	printf '%s %s\n' "$(color '0;34' '[INFO]')" "$*"
+	printf "${BLUE}${BOLD}%s${RESET}  %s\n" "$ICON_INFO" "$*"
 }
 
 warn() {
-	printf '%s %s\n' "$(color '0;33' '[WARN]')" "$*" >&2
+	printf "${YELLOW}${BOLD}%s${RESET}  %s\n" "$ICON_WARN" "$*" >&2
 }
 
 error() {
-	printf '%s %s\n' "$(color '0;31' '[ERR ]')" "$*" >&2
+	printf "${RED}${BOLD}%s${RESET}  %s\n" "$ICON_ERR" "$*" >&2
 }
 
 die() {
 	error "$*"
 	exit 1
+}
+
+log_task() {
+	printf "\n${PURPLE}${BOLD}:: %s${RESET}\n" "$*"
+}
+
+log_step() {
+	printf "   ${CYAN}➜${RESET}  %s\n" "$*"
 }
 
 command_exists() {
@@ -210,4 +236,57 @@ repo_relative() {
 	else
 		printf '%s\n' "$path"
 	fi
+}
+
+show_spinner() {
+	local pid=$1
+	local delay=0.1
+	local spinstr='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
+
+	tput civis 2>/dev/null || true
+	while ps -p "$pid" >/dev/null 2>&1; do
+		local temp=${spinstr#?}
+		printf "  ${CYAN}%c${RESET}  " "$spinstr"
+		local spinstr=$temp${spinstr%"$temp"}
+		sleep $delay
+		printf "\b\b\b\b\b"
+	done
+	tput cnorm 2>/dev/null || true
+	printf "     \b\b\b\b\b"
+}
+
+execute_spinner() {
+	local msg="$1"
+	local cmd="$2"
+	local log_file="/tmp/dotfiles_spinner.log"
+
+	printf "   ${CYAN}➜${RESET}  %-40s" "$msg"
+
+	# Run command in background and capture output
+	eval "$cmd" >"$log_file" 2>&1 &
+	local pid=$!
+
+	show_spinner "$pid"
+	wait "$pid"
+	local exit_code=$?
+
+	if [ $exit_code -eq 0 ]; then
+		printf "${GREEN}${ICON_OK}${RESET}\n"
+	else
+		printf "${RED}${ICON_ERR}${RESET}\n"
+		echo -e "\n${RED}Error Output:${RESET}"
+		cat "$log_file"
+		echo ""
+		return 1
+	fi
+}
+
+print_package_grid() {
+	local pkgs=("$@")
+	local out=""
+	for pkg in "${pkgs[@]}"; do
+		out+="${pkg}, "
+	done
+	out="${out%, }"
+	echo -e "${DIM}${out}${RESET}" | fold -s -w 80 | sed 's/^/      /'
 }

@@ -74,11 +74,12 @@ install_yay() {
 }
 
 if ((${#PACMAN_PACKAGES[@]} > 0)); then
-	log "Installing pacman packages for host '$HOST'"
+	log "Installing ${#PACMAN_PACKAGES[@]} official packages for host '$HOST'"
+	print_package_grid "${PACMAN_PACKAGES[@]}"
 	if ((DRY_RUN)); then
-		printf '%s\n' "${PACMAN_PACKAGES[@]}"
+		execute_spinner "Simulating pacman installation" "sleep 1.5"
 	else
-		sudo pacman -Sy --needed --noconfirm "${PACMAN_PACKAGES[@]}"
+		execute_spinner "Running pacman" "sudo pacman -Sy --needed --noconfirm ${PACMAN_PACKAGES[*]}"
 	fi
 else
 	warn "No pacman packages declared for host '$HOST'"
@@ -102,9 +103,10 @@ if command_exists paru; then
 	HELPER="paru"
 fi
 
-log "Installing AUR packages with $HELPER"
+log "Installing ${#AUR_PACKAGES[@]} AUR packages with $HELPER"
+print_package_grid "${AUR_PACKAGES[@]}"
 if ((DRY_RUN)); then
-	printf '%s\n' "${AUR_PACKAGES[@]}"
+	execute_spinner "Simulating $HELPER installation" "sleep 1.5"
 else
-	"$HELPER" -S --needed --noconfirm "${AUR_PACKAGES[@]}"
+	execute_spinner "Running $HELPER" "$HELPER -S --needed --noconfirm ${AUR_PACKAGES[*]}"
 fi

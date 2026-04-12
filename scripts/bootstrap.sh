@@ -74,19 +74,41 @@ if ((SKIP_SERVICES)); then
 	PREFLIGHT_ARGS+=(--skip-services)
 fi
 
+banner() {
+	if [[ -t 1 && -n ${TERM:-} ]]; then
+		clear || true
+	fi
+	echo -e "${ORANGE}${BOLD}"
+	echo "   _____ __                 __  "
+	echo "  / ___// /_____ _      __ / /  "
+	echo "  \__ \/ __/ __ \ | /| / // /   "
+	echo " ___/ / /_/ /_/ / |/ |/ //_/    "
+	echo "/____/\__/\____/|__/|__(_)      "
+	echo -e "${RESET}"
+	echo -e "${DIM}  Automated System Bootstrap ${RESET}"
+	echo -e "${DIM}  Target Host: ${HOST} ${RESET}"
+	echo ""
+}
+
+banner
+
+log_task "Starting Preflight Checks"
 bash "$SCRIPT_DIR/preflight.sh" "${PREFLIGHT_ARGS[@]}"
 
-log "Bootstrapping host '$HOST'"
+log_task "Bootstrapping Environment"
 
 if ((!SKIP_PACKAGES)); then
+	log_step "Installing Packages"
 	"$SCRIPT_DIR/install-packages.sh" --host "$HOST" $([[ $DRY_RUN -eq 1 ]] && printf '%s' --dry-run)
 fi
 
 if ((!SKIP_SYSTEM)); then
+	log_step "Applying System Configuration"
 	"$SCRIPT_DIR/apply-system.sh" --host "$HOST" $([[ $DRY_RUN -eq 1 ]] && printf '%s' --dry-run)
 fi
 
 if ((!SKIP_STOW)); then
+	log_step "Linking User Configuration (Stow)"
 	require_command stow
 	if ((DRY_RUN)); then
 		log "[dry-run] ./scripts/stow.sh install"
@@ -96,5 +118,11 @@ if ((!SKIP_STOW)); then
 fi
 
 if ((!SKIP_SERVICES)); then
+	log_step "Enabling System & User Services"
 	"$SCRIPT_DIR/enable-services.sh" --host "$HOST" $([[ $DRY_RUN -eq 1 ]] && printf '%s' --dry-run)
 fi
+
+echo ""
+echo -e "${GREEN}${BOLD}${ICON_OK} System bootstrap complete!${RESET}"
+echo -e "${DIM}Please reboot your system for all changes to take effect.${RESET}"
+echo ""
