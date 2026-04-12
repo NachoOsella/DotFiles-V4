@@ -1,0 +1,14 @@
+{
+  "lastChangelogVersion": "0.66.1",
+  "theme": "gruvbox-material-dark-hard",
+  "defaultProvider": "qwen-cli",
+  "defaultModel": "coder-model",
+  "defaultThinkingLevel": "high",
+  "hideThinkingBlock": false,
+  "quietStartup": true,
+  "packages": [
+    "git:github.com/nicobailon/pi-web-access"
+  ],
+  "enableSkillCommands": true,
+  "permissionLevel": "medium"
+}

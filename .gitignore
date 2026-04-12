@@ -24,6 +24,12 @@ opencode/.config/opencode/bun.lock
 # KeePassXC databases
 keepassxc/.config/keepassxc/*.kdbx
 
+# Pi agent
+pi/.pi/agent/sessions/
+pi/.pi/agent/git/
+pi/.pi/agent/auth.json
+pi/.pi/agent/pi-crash.log
+
 # Sensitive files
 *.pem
 *.key

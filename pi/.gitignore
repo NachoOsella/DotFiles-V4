@@ -1,0 +1,9 @@
+# Sensitive
+auth.json
+
+# Runtime
+pi-crash.log
+sessions/
+
+# Cached git repos
+git/
