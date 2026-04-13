@@ -24,6 +24,9 @@ opencode/.config/opencode/bun.lock
 # KeePassXC databases
 keepassxc/.config/keepassxc/*.kdbx
 
+# Pcmanfm-qt (runtime data)
+pcmanfm-qt/.config/pcmanfm-qt/default/recent-files.conf
+
 # Pi agent
 pi/.pi/agent/sessions/
 pi/.pi/agent/git/

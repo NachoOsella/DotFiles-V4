@@ -60,6 +60,7 @@ PACKAGES=(
 	"keepassxc"
 	"systemd-user"
 	"pi"
+	"pcmanfm-qt"
 )
 
 # --- UI Functions ---
