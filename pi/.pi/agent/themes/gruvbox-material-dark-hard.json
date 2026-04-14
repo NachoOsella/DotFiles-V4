@@ -39,9 +39,9 @@
     "customMessageBg": "bg1",
     "customMessageText": "fg2",
     "customMessageLabel": "purple",
-    "toolPendingBg": "#2c2a27",
-    "toolSuccessBg": "#27331f",
-    "toolErrorBg": "#32211f",
+    "toolPendingBg": "bg0",
+    "toolSuccessBg": "bg0",
+    "toolErrorBg": "bg0",
     "toolTitle": "aqua",
     "toolOutput": "fg1",
 
