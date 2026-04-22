@@ -1,0 +1,47 @@
+# {{PROJECT_NAME}}
+
+> One-line value proposition describing what this project does and who it is for.
+
+## Features
+
+- Core capability with a brief benefit
+- Another capability with a brief benefit
+- Distinctive feature that sets this apart
+
+## Installation
+
+```bash
+# Install via package manager
+npm install {{PACKAGE_NAME}}
+# or
+pip install {{PACKAGE_NAME}}
+```
+
+## Quick Start
+
+```{{LANGUAGE}}
+// Minimal, copy-pasteable example that runs immediately
+import { example } from '{{PACKAGE_NAME}}';
+
+const result = example.run();
+console.log(result);
+```
+
+## Configuration
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `timeout` | `number` | `5000` | Request timeout in milliseconds |
+| `retries` | `number` | `3` | Number of retry attempts |
+
+## API Reference
+
+See [API documentation](./docs/API.md) or generated docs at `https://{{PROJECT_DOCS_URL}}`.
+
+## Contributing
+
+Please read [CONTRIBUTING.md](./CONTRIBUTING.md) for guidelines on pull requests, code style, and development setup.
+
+## License
+
+[{{LICENSE}}](./LICENSE)

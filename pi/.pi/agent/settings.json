@@ -1,21 +1,20 @@
 {
-    "lastChangelogVersion": "0.67.68",
-    "theme": "gruvbox-material-dark-hard",
-    "defaultThinkingLevel": "high",
-    "hideThinkingBlock": false,
-    "quietStartup": true,
-    "packages": [
-        "git:github.com/nicobailon/pi-web-access",
-        "git:github.com/tintinweb/pi-subagents",
-        "git:github.com/tintinweb/pi-tasks",
-        "git:https://github.com/samfoy/pi-memory"
-    ],
-    "enableSkillCommands": true,
-    "extensions": [
-        "~/.pi/agent/extensions/agent-todo/index.ts",
-        "~/.pi/agent/extensions/codex-tools.ts"
-    ],
-    "defaultProvider": "github-copilot",
-    "defaultModel": "gpt-5-mini"
+  "lastChangelogVersion": "0.68.0",
+  "theme": "gruvbox-material-dark-hard",
+  "defaultThinkingLevel": "minimal",
+  "hideThinkingBlock": false,
+  "quietStartup": true,
+  "packages": [
+    "git:github.com/nicobailon/pi-web-access",
+    "git:github.com/tintinweb/pi-subagents",
+    "git:github.com/tintinweb/pi-tasks",
+    "git:https://github.com/samfoy/pi-memory"
+  ],
+  "enableSkillCommands": true,
+  "extensions": [
+    "~/.pi/agent/extensions/agent-todo/index.ts",
+    "~/.pi/agent/extensions/codex-tools.ts"
+  ],
+  "defaultProvider": "openai-codex",
+  "defaultModel": "gpt-5.4-mini"
 }
-

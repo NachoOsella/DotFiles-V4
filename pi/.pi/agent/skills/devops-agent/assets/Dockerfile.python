@@ -1,0 +1,49 @@
+# Multi-stage Dockerfile template for Python applications
+# Targets: dependencies, build, production
+# Best practices: non-root user, virtualenv, distroless or slim final image
+
+# ---- Dependencies ----
+FROM python:3.12-slim AS dependencies
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+WORKDIR /app
+
+# Install build dependencies if compiling packages (e.g., psycopg2)
+RUN apt-get update && apt-get install -y --no-install-recommends gcc libpq-dev && rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt ./
+RUN python -m venv /opt/venv && \
+    /opt/venv/bin/pip install --upgrade pip && \
+    /opt/venv/bin/pip install -r requirements.txt
+
+# ---- Build ----
+FROM python:3.12-slim AS build
+WORKDIR /app
+COPY . .
+
+# Run any build steps (collectstatic, compilemessages, etc.)
+# ENV DJANGO_SETTINGS_MODULE=myapp.settings.production
+# RUN /opt/venv/bin/python manage.py collectstatic --noinput
+
+# ---- Production ----
+FROM python:3.12-slim AS production
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+WORKDIR /app
+
+# Security: create non-root user
+RUN groupadd -r appgroup && useradd -r -g appgroup appuser
+
+# Copy virtualenv and application
+COPY --from=dependencies /opt/venv /opt/venv
+COPY --chown=appuser:appgroup . /app
+
+# Make sure we use the venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+USER appuser
+EXPOSE 8000
+
+CMD ["gunicorn", "-w", "4", "-b", "0.0.0.0:8000", "myapp.wsgi:application"]
