@@ -1,6 +1,6 @@
 ---
 name: explore
-description: "Fast agent specialized for exploring and understanding codebases. Use when you need to: (1) find files by name patterns (e.g., \"find all React components\"), (2) search code for specific keywords, functions, or classes, (3) understand project structure or architecture, (4) trace how features are implemented across files, (5) answer questions about unfamiliar codebases, or (6) locate configuration files, entry points, or test directories."
+description: Use for exploring codebases, searching code, and mapping architecture.
 ---
 
 ## Workflow Differentiation

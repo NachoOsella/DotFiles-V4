@@ -1,6 +1,6 @@
 ---
 name: review
-description: "Reviews codebases or pull requests and provides feedback on correctness, security, performance, maintainability, testing, and documentation. Use when you need to: (1) audit code for potential issues before deployment, (2) review a PR for correctness and security, (3) assess code quality and maintainability, (4) identify missing tests or documentation, or (5) get a second opinion on implementation approaches."
+description: Use for reviewing code and PRs for quality and security.
 ---
 
 ## Review Process

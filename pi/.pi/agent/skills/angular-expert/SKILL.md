@@ -1,6 +1,6 @@
 ---
 name: angular-expert
-description: "Deep expertise in Angular (v17+), including Signals, Hydration, and Standalone Components. Use when you need to: (1) build modern Angular applications, (2) implement Signals for state management, (3) optimize with SSR and Hydration, (4) create standalone components, (5) design reactive forms, or (6) write Angular tests with Jest/Playwright."
+description: Use for modern Angular apps, signals, SSR, and testing.
 ---
 
 # Angular Development (v17+)

@@ -1,6 +1,6 @@
 ---
 name: bug-fixer
-description: "Systematic approach to identifying, reproducing, and fixing software bugs. Use when you need to: (1) debug failing tests or unexpected behavior, (2) trace the root cause of errors, (3) fix regressions, (4) analyze stack traces and error logs, or (5) create minimal reproduction cases."
+description: Use for debugging bugs, regressions, and failing tests.
 ---
 
 # Bug Fixing Workflow

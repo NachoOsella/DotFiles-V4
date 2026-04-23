@@ -1,6 +1,6 @@
 ---
 name: sql-optimizer
-description: "Optimize SQL queries and database schemas for performance. Use when you need to: (1) analyze slow queries, (2) add or optimize indexes, (3) review database schemas, (4) interpret EXPLAIN plans, (5) fix N+1 query problems, or (6) design efficient data models."
+description: Use for optimizing SQL queries, indexes, and schemas.
 ---
 
 # SQL Optimization

@@ -1,6 +1,6 @@
 ---
 name: extending-pi
-description: Guide for extending Pi — decide between skills, extensions, prompt templates, themes, context files, or custom models, then scaffold files, configure manifests, and package them. Use when someone wants to extend Pi, add capabilities, create a skill, build an extension, make a Pi package, scaffold extension files, or configure a manifest.json.
+description: Use for extending Pi with skills, extensions, templates, or packages.
 ---
 
 # Extending Pi

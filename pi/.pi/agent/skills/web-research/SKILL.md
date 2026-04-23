@@ -1,11 +1,11 @@
 ---
 name: web-research
-description: "Conduct thorough, evidence-backed web research using search engines, page fetching, and code documentation lookup. Use when you need to: (1) answer factual questions that require current or external information, (2) investigate technologies, libraries, APIs, or frameworks, (3) gather evidence with source citations for claims, (4) extract and analyze content from specific URLs, YouTube videos, or GitHub repositories, (5) compare products, tools, or approaches using real-world data, or (6) synthesize information from multiple web sources into structured reports."
+description: Use for researched facts with sources and citations.
 ---
 
 # Web Research
 
-Conduct systematic, multi-source research with verifiable evidence and citations.
+Conduct systematic research with verifiable evidence and citations.
 
 ## Available Tools
 
@@ -16,7 +16,16 @@ Conduct systematic, multi-source research with verifiable evidence and citations
 | `code_search` | Search for code examples, API documentation, and library usage patterns from GitHub, Stack Overflow, and official docs |
 | `get_search_content` | Retrieve full stored content from a previous `web_search` or `fetch_content` call via `responseId` |
 
-## Research Workflow
+## When to use this skill
+
+Use it when the answer depends on information that may have changed, needs source attribution, or requires reading outside the current conversation. Typical cases:
+
+- latest status, news, pricing, policies, schedules, or product specs
+- technical questions that need official docs, standards, papers, or release notes
+- comparisons that should be grounded in real sources
+- extracting content from URLs, YouTube, PDFs, or GitHub repos
+
+## Research workflow
 
 ### Phase 1: Plan
 
@@ -28,6 +37,12 @@ Before searching, clarify:
 ### Phase 2: Search Strategically
 
 Use `web_search` with **multiple varied queries** (2-4) rather than a single query. Each query gets its own synthesized answer, so varying phrasing, scope, and angle gives broader coverage.
+
+Prefer primary sources when the topic is technical:
+
+- official docs, standards, RFCs, release notes
+- original papers, vendor docs, repository READMEs
+- reputable benchmarks or issue trackers when docs are incomplete
 
 ```
 # Good — varied angles covering different aspects
@@ -44,10 +59,10 @@ queries:
 ```
 
 **Key parameters:**
-- `recencyFilter`: Use `"month"` or `"year"` for fast-moving topics (tech, security, pricing)
-- `domainFilter`: Scope to authoritative domains (e.g., `["docs.python.org", "peps.python.org"]`) or exclude noise (e.g., `["-pinterest.com", "-quora.com"]`)
-- `provider`: `"auto"` (default), or force `"perplexity"`, `"gemini"`, `"exa"`
-- `includeContent`: Set `true` when you need full page text stored for later retrieval
+- `recencyFilter`: use `"month"` or `"year"` for fast-moving topics like tech, security, and pricing
+- `domainFilter`: scope to authoritative domains, or exclude noise with `-` prefixes
+- `provider`: `"auto"` by default; override only when you need a specific backend
+- `includeContent`: set `true` when you need full page text stored for later retrieval
 - `numResults`: 5-20 results per query
 
 ### Phase 3: Fetch Deep Content
@@ -96,6 +111,8 @@ Produce a structured output:
 4. **Caveats & uncertainty** — note conflicting sources, outdated info, or speculation
 5. **Sources** — numbered list with URLs and brief descriptions
 
+If the user asked for "latest" or "today", include exact dates and compare publish date vs event date when they differ.
+
 ## Quality Standards
 
 - **Cross-verify**: Don't rely on a single source for factual claims, especially numbers, dates, or technical specifications
@@ -104,6 +121,7 @@ Produce a structured output:
 - **Distinguish fact from opinion**: Clearly separate documented facts from blog opinions or speculation
 - **Show work**: Briefly explain the search strategy so the user can replicate or extend it
 - **Handle contradictions**: When sources disagree, present the conflict and explain which is more authoritative and why
+- **Prefer primary sources**: When possible, rely on official or original sources over summaries or reposts
 
 ## Anti-Patterns
 

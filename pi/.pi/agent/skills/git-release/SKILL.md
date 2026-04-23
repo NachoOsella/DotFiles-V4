@@ -1,6 +1,6 @@
 ---
 name: git-release
-description: "Create consistent releases and changelogs following semantic versioning. Use when you need to: (1) prepare a tagged release, (2) draft release notes from PRs, (3) determine version bump (major/minor/patch), (4) identify breaking changes, or (5) create GitHub releases."
+description: Use for releases, changelogs, and version bumps.
 ---
 
 # Git Release Workflow

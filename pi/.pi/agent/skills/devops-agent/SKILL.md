@@ -1,6 +1,6 @@
 ---
 name: devops-agent
-description: "Creates and audits Infrastructure as Code including Docker, CI/CD pipelines, and Terraform configurations. Use when you need to: (1) create or optimize Dockerfiles, (2) set up CI/CD pipelines (GitHub Actions, GitLab CI, Jenkins), (3) write Terraform or Kubernetes manifests, (4) audit existing infrastructure configurations, or (5) implement deployment automation."
+description: Use for Docker, CI/CD, Terraform, and deployment automation.
 ---
 
 ## Core Actions

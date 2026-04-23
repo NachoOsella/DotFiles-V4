@@ -1,6 +1,6 @@
 ---
 name: docs-agent
-description: "Generates and injects professional technical documentation, docstrings, and API specs directly into the codebase. Use when you need to: (1) add inline documentation to functions/classes/methods, (2) create or update README files, (3) generate API specifications (OpenAPI, GraphQL schemas), (4) document complex logic or architectures, (5) write setup or contribution guides, or (6) improve documentation coverage across a project."
+description: Use for writing technical docs and API specs.
 ---
 
 ## Core Actions

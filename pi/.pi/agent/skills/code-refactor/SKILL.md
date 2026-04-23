@@ -1,6 +1,6 @@
 ---
 name: code-refactor
-description: "Propose and apply code improvements for better maintainability and performance. Use when you need to: (1) reduce technical debt, (2) improve code readability, (3) apply design patterns, (4) optimize algorithms, (5) eliminate code duplication, or (6) prepare code for extension."
+description: Use for improving code structure, readability, and performance.
 ---
 
 # Code Refactoring

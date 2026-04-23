@@ -1,6 +1,6 @@
 ---
 name: pdf
-description: "Comprehensive PDF manipulation toolkit for extracting text and tables, creating new PDFs, merging/splitting documents, and handling forms. Use when you need to: (1) extract text or tables from PDFs, (2) create new PDF documents, (3) merge or split PDF files, (4) rotate or modify pages, (5) OCR scanned documents, or (6) fill PDF forms."
+description: Use for extracting, merging, splitting, OCR, and filling PDFs.
 ---
 
 # PDF Processing

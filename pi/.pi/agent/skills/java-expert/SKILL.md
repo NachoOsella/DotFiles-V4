@@ -1,6 +1,6 @@
 ---
 name: java-expert
-description: "Expert Java development (JDK 17-21+) with Spring Boot 3, Hibernate, and modern JVM patterns. Use when you need to: (1) build microservices with Spring Boot, (2) implement modern Java features (Records, Virtual Threads), (3) design data layers with JPA/Hibernate, (4) secure applications with Spring Security, (5) optimize JVM performance, or (6) write integration tests with Testcontainers."
+description: Use for expert Java, Spring Boot, Hibernate, and JVM apps.
 ---
 
 # Java Development

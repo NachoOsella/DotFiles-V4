@@ -1,6 +1,6 @@
 ---
 name: test-engineer
-description: "Unified skill for generating, executing, debugging, and verifying unit tests. Combines unit-test-generator (test creation) and test-agent (test execution). Use when you need to: (1) generate comprehensive unit tests for new or existing code, (2) execute and verify test suites, (3) debug failing tests, (4) add test coverage for edge cases, (5) set up mocks for external dependencies, or (6) identify untestable code patterns."
+description: Use for generating, running, and debugging tests.
 ---
 
 # Test Engineer Skill

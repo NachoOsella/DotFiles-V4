@@ -1,6 +1,6 @@
 ---
 name: security-agent
-description: "Audits code for vulnerabilities and applies active remediation for OWASP Top 10 and CWE Top 25 flaws. Use when you need to: (1) scan for injection vulnerabilities (SQL, XSS, command injection, CSRF), (2) find and remediate hardcoded secrets, (3) audit security configurations (CSP, CORS, HSTS), (4) check for vulnerable dependencies, (5) harden authentication/authorization code, or (6) perform a security review before deployment."
+description: Use for finding and fixing security issues in code and configs.
 ---
 
 ## Action Protocol
