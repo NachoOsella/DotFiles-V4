@@ -44,6 +44,16 @@ function formatNumber(num: number): string {
   return num.toLocaleString("en-US");
 }
 
+function formatPercent(value: number): string {
+  if (!Number.isFinite(value)) return "0%";
+  return value.toFixed(value >= 10 || value === 0 ? 0 : 1) + "%";
+}
+
+function readCacheHitRate(input: number, cacheRead: number): number {
+  const promptTokens = input + cacheRead;
+  return promptTokens > 0 ? (cacheRead / promptTokens) * 100 : 0;
+}
+
 function fmtCost(usd: number): string {
   if (usd === 0) return "$0";
   if (usd < 0.0001) return "$0";
@@ -55,7 +65,7 @@ function fmtCost(usd: number): string {
 // TUI display via custom modal (raw monospace, no notify wrapper)
 // ---------------------------------------------------------------------------
 
-function showStatsModal(buildFn: (width: number) => string, ctx: ExtensionCommandContext) {
+function showStatsModal(buildFn: (width: number, theme?: any) => string, ctx: ExtensionCommandContext) {
   if (!ctx.hasUI) {
     ctx.ui.notify(buildFn(56), "info");
     return;
@@ -67,7 +77,7 @@ function showStatsModal(buildFn: (width: number) => string, ctx: ExtensionComman
     return {
       render: (width: number) => {
         const boxWidth = Math.max(2, Math.min(56, width - 2));
-        const rendered = buildFn(boxWidth)
+        const rendered = buildFn(boxWidth, _theme)
           .split("\n")
           .map((line) => truncateToWidth(line, width, "", false))
           .join("\n");
@@ -100,33 +110,60 @@ function fitToWidth(text: string, width: number): string {
   return truncateToWidth(text, width, "", true);
 }
 
+function color(theme: any, token: string, text: string): string {
+  return theme?.fg ? theme.fg(token, text) : text;
+}
+
+function bold(theme: any, text: string): string {
+  return theme?.bold ? theme.bold(text) : text;
+}
+
+function padRightVisible(text: string, width: number): string {
+  return text + " ".repeat(Math.max(0, width - visibleWidth(text)));
+}
+
+function progressBar(value: number, max: number, width: number, theme?: any): string {
+  const safeMax = Math.max(1, max);
+  const ratio = Math.max(0, Math.min(1, value / safeMax));
+  const filled = Math.round(ratio * width);
+  return color(theme, "accent", "█".repeat(filled)) + color(theme, "dim", "░".repeat(Math.max(0, width - filled)));
+}
+
+function formatCacheHit(input: number, cacheRead: number, theme?: any): string {
+  const hitRate = readCacheHitRate(input, cacheRead);
+  return formatPercent(hitRate).padStart(5) + " " + progressBar(hitRate, 100, 10, theme);
+}
+
 function finalizeTotalTokens(stats: Pick<SessionStats, "totalTokens">, fallbackTotalTokens = 0) {
   const computedTotal =
     stats.totalTokens.input +
     stats.totalTokens.output +
-    stats.totalTokens.cacheRead +
-    stats.totalTokens.cacheWrite;
+    stats.totalTokens.cacheRead;
   stats.totalTokens.totalTokens = Math.max(computedTotal, fallbackTotalTokens);
 }
 
 // ---------------------------------------------------------------------------
-// Box renderer (plain ASCII, no ANSI codes) — width is dynamic
+// Box renderer — rounded, theme-aware, width-adaptive
 // ---------------------------------------------------------------------------
 
-const TL = "┌", TR = "┐", BL = "└", BR = "┘";
+const TL = "╭", TR = "╮", BL = "╰", BR = "╯";
 const HL = "─", VL = "│", LX = "├", RX = "┤";
 
-function mkBox(w: number) {
+function mkBox(w: number, theme?: any) {
+  const border = (s: string) => color(theme, "border", s);
+  const borderAccent = (s: string) => color(theme, "borderAccent", s);
+
   return {
-    hline: () => TL + HL.repeat(w) + TR,
-    hlineEnd: () => BL + HL.repeat(w) + BR,
-    divider: () => LX + HL.repeat(w) + RX,
+    hline: () => borderAccent(TL + HL.repeat(w) + TR),
+    hlineEnd: () => border(BL + HL.repeat(w) + BR),
+    divider: () => border(LX + HL.repeat(w) + RX),
     sectionCentered: (title: string) => {
-      const cleanTitle = truncateToWidth(title, w, "", false);
+      const rawTitle = truncateToWidth(title, w - 2, "", false);
+      const cleanTitle = " " + rawTitle + " ";
       const titleWidth = visibleWidth(cleanTitle);
       const leftPad = Math.floor((w - titleWidth) / 2);
       const rightPad = w - titleWidth - leftPad;
-      return VL + " ".repeat(Math.max(0, leftPad)) + cleanTitle + " ".repeat(Math.max(0, rightPad)) + VL;
+      return border(VL) + color(theme, "dim", " ".repeat(Math.max(0, leftPad))) + color(theme, "accent", bold(theme, cleanTitle)) + color(theme, "dim", " ".repeat(Math.max(0, rightPad))) + border(VL);
     },
     row: (label: string, value: string) => {
       const cleanLabel = truncateToWidth(label, Math.max(1, w - 2), "", false);
@@ -134,10 +171,13 @@ function mkBox(w: number) {
       const cleanValue = truncateToWidth(value, Math.max(0, w - labelWidth - 2), "", false);
       const valueWidth = visibleWidth(cleanValue);
       const gap = Math.max(1, w - labelWidth - valueWidth - 1);
-      return VL + cleanLabel + " ".repeat(gap) + cleanValue + " " + VL;
+      return border(VL) + color(theme, "muted", cleanLabel) + " ".repeat(gap) + color(theme, "text", cleanValue) + " " + border(VL);
     },
     content: (text: string) => {
-      return VL + fitToWidth(text, w) + VL;
+      return border(VL) + padRightVisible(fitToWidth(text, w), w) + border(VL);
+    },
+    note: (text: string) => {
+      return border(VL) + color(theme, "dim", padRightVisible(fitToWidth(text, w), w)) + border(VL);
     },
   };
 }
@@ -146,48 +186,50 @@ function mkBox(w: number) {
 // Display builders
 // ---------------------------------------------------------------------------
 
-function buildToolBox(tools: { name: string; count: number }[], w: number): string {
+function buildToolBox(tools: { name: string; count: number }[], w: number, theme?: any): string {
   if (tools.length === 0) return "";
-  const b = mkBox(w);
+  const b = mkBox(w, theme);
   const total = Math.max(1, tools.reduce((s, t) => s + t.count, 0));
   const maxCount = Math.max(1, tools[0].count);
   const barMax = Math.min(20, Math.max(8, w - 36));
   const maxNameLen = Math.min(18, Math.max(8, w - 38));
 
   const lines: string[] = [];
+  lines.push(b.hline());
   lines.push(b.sectionCentered("TOOL USAGE"));
   lines.push(b.divider());
 
   for (const t of tools) {
     const barLen = Math.max(1, Math.round((t.count / maxCount) * barMax));
-    const bar = "█".repeat(barLen);
+    const bar = color(theme, "accent", "█".repeat(barLen)) + color(theme, "dim", "░".repeat(Math.max(0, barMax - barLen)));
     const pct = ((t.count / total) * 100).toFixed(0) + "%";
     const name = fitToWidth(t.name, maxNameLen);
     const countStr = truncateToWidth(formatNumber(t.count), 7, "", false).padStart(7);
     const pctStr = pct.padStart(4);
-    const rowStr = " " + name + " " + bar + " ".repeat(Math.max(0, barMax - barLen)) + " " + countStr + " (" + pctStr + ")";
+    const rowStr = " " + color(theme, "text", name) + " " + bar + " " + color(theme, "text", countStr) + color(theme, "dim", " (" + pctStr + ")");
     lines.push(b.content(rowStr));
   }
   lines.push(b.hlineEnd());
   return lines.join("\n");
 }
 
-function buildModelBox(models: Array<{ provider: string; modelId: string; messages: number; input: number; output: number; cacheRead: number; cacheWrite: number; cost: number }>, w: number): string {
+function buildModelBox(models: Array<{ provider: string; modelId: string; messages: number; input: number; output: number; cacheRead: number; cacheWrite: number; cost: number }>, w: number, theme?: any): string {
   if (models.length === 0) return "";
-  const b = mkBox(w);
+  const b = mkBox(w, theme);
 
   const lines: string[] = [];
+  lines.push(b.hline());
   lines.push(b.sectionCentered("MODEL USAGE"));
   lines.push(b.divider());
 
   models.forEach((m, idx) => {
     const key = m.provider + "/" + m.modelId;
-    lines.push(b.content(" " + key));
+    lines.push(b.content(" " + color(theme, "toolTitle", bold(theme, key))));
     lines.push(b.row("Messages", formatNumber(m.messages)));
     lines.push(b.row("Input", formatNumber(m.input)));
     lines.push(b.row("Output", formatNumber(m.output)));
     lines.push(b.row("Cache Read", formatNumber(m.cacheRead)));
-    lines.push(b.row("Cache Write", formatNumber(m.cacheWrite)));
+    lines.push(b.row("Read Cache Hit", formatCacheHit(m.input, m.cacheRead, theme)));
     lines.push(b.row("Cost", fmtCost(m.cost)));
     if (idx < models.length - 1) {
       lines.push(b.divider());
@@ -242,8 +284,8 @@ function buildModelStats(sessions: SessionStats[]) {
 // Output builders
 // ---------------------------------------------------------------------------
 
-function buildAllStatsOutput(sessions: SessionStats[], daysFilter: number | undefined, w: number): string {
-  const b = mkBox(w);
+function buildAllStatsOutput(sessions: SessionStats[], daysFilter: number | undefined, w: number, theme?: any): string {
+  const b = mkBox(w, theme);
   const now = Date.now();
   const MS_DAY = 24 * 60 * 60 * 1000;
   const cutoff = daysFilter ? now - daysFilter * MS_DAY : 0;
@@ -256,7 +298,7 @@ function buildAllStatsOutput(sessions: SessionStats[], daysFilter: number | unde
 
   let totalMessages = 0;
   let totalCost = 0;
-  let totalInput = 0, totalOutput = 0, totalCacheRead = 0, totalCacheWrite = 0, totalTokensWithCache = 0;
+  let totalInput = 0, totalOutput = 0, totalCacheRead = 0, totalTokensWithCache = 0;
   let earliest = Date.now(), latest = 0;
   const sessionTokenTotals: number[] = [];
 
@@ -266,7 +308,7 @@ function buildAllStatsOutput(sessions: SessionStats[], daysFilter: number | unde
     if (st > latest) latest = st;
     const sessTokens = Math.max(
       s.totalTokens.totalTokens,
-      s.totalTokens.input + s.totalTokens.output + s.totalTokens.cacheRead + s.totalTokens.cacheWrite
+      s.totalTokens.input + s.totalTokens.output + s.totalTokens.cacheRead
     );
     sessionTokenTotals.push(sessTokens);
     totalMessages += s.userMessages + s.assistantMessages + s.toolResults + s.customMessages;
@@ -274,7 +316,6 @@ function buildAllStatsOutput(sessions: SessionStats[], daysFilter: number | unde
     totalInput += s.totalTokens.input;
     totalOutput += s.totalTokens.output;
     totalCacheRead += s.totalTokens.cacheRead;
-    totalCacheWrite += s.totalTokens.cacheWrite;
     totalTokensWithCache += sessTokens;
   }
 
@@ -291,6 +332,11 @@ function buildAllStatsOutput(sessions: SessionStats[], daysFilter: number | unde
 
   const parts: string[] = [];
 
+  parts.push([b.hline(), b.sectionCentered("PI SESSION STATS"), b.divider(),
+    b.note(" Scope  " + (daysFilter ? "last " + daysFilter + " days" : "all sessions")),
+    b.note(" Close  q / enter / esc"),
+    b.hlineEnd()].join("\n"));
+
   parts.push([b.hline(), b.sectionCentered("OVERVIEW"), b.divider(),
     b.row("Sessions", formatNumber(filtered.length)),
     b.row("Messages", formatNumber(totalMessages)),
@@ -306,23 +352,28 @@ function buildAllStatsOutput(sessions: SessionStats[], daysFilter: number | unde
     b.row("Input", formatNumber(totalInput)),
     b.row("Output", formatNumber(totalOutput)),
     b.row("Cache Read", formatNumber(totalCacheRead)),
-    b.row("Cache Write", formatNumber(totalCacheWrite)),
+    b.row("Read Cache Hit", formatCacheHit(totalInput, totalCacheRead, theme)),
     b.hlineEnd()].join("\n"));
 
   const models = buildModelStats(filtered).slice(0, 3);
-  const modelBox = buildModelBox(models, w);
+  const modelBox = buildModelBox(models, w, theme);
   if (modelBox) parts.push(modelBox);
 
   const tools = buildToolUsage(filtered);
-  const toolBox = buildToolBox(tools, w);
+  const toolBox = buildToolBox(tools, w, theme);
   if (toolBox) parts.push(toolBox);
 
   return parts.join("\n\n");
 }
 
-function buildCurrentSessionOutput(stats: SessionStats, w: number): string {
-  const b = mkBox(w);
+function buildCurrentSessionOutput(stats: SessionStats, w: number, theme?: any): string {
+  const b = mkBox(w, theme);
   const parts: string[] = [];
+
+  parts.push([b.hline(), b.sectionCentered("PI SESSION STATS"), b.divider(),
+    b.note(" Scope  current session"),
+    b.note(" Close  q / enter / esc"),
+    b.hlineEnd()].join("\n"));
 
   parts.push([b.hline(), b.sectionCentered("CURRENT SESSION"), b.divider(),
     b.row("Messages", formatNumber(stats.userMessages + stats.assistantMessages + stats.toolResults + stats.customMessages)),
@@ -337,11 +388,11 @@ function buildCurrentSessionOutput(stats: SessionStats, w: number): string {
     b.row("Input", formatNumber(stats.totalTokens.input)),
     b.row("Output", formatNumber(stats.totalTokens.output)),
     b.row("Cache Read", formatNumber(stats.totalTokens.cacheRead)),
-    b.row("Cache Write", formatNumber(stats.totalTokens.cacheWrite)),
+    b.row("Read Cache Hit", formatCacheHit(stats.totalTokens.input, stats.totalTokens.cacheRead, theme)),
     b.row("Cost", fmtCost(stats.totalTokens.cost.total)),
     b.hlineEnd()].join("\n"));
 
-  const toolBox = buildToolBox(stats.toolCalls, w);
+  const toolBox = buildToolBox(stats.toolCalls, w, theme);
   if (toolBox) parts.push(toolBox);
 
   const modelBox = buildModelBox(stats.models.slice(0, 3).map(m => ({
@@ -349,7 +400,7 @@ function buildCurrentSessionOutput(stats: SessionStats, w: number): string {
     messages: m.count,
     input: m.input, output: m.output,
     cacheRead: m.cacheRead, cacheWrite: m.cacheWrite, cost: m.cost,
-  })), w);
+  })), w, theme);
   if (modelBox) parts.push(modelBox);
 
   return parts.join("\n\n");
@@ -479,7 +530,7 @@ export default function (pi: ExtensionAPI) {
           return;
         }
 
-        showStatsModal((w: number) => buildAllStatsOutput(allStats, daysFilter, w), ctx);
+        showStatsModal((w: number, theme?: any) => buildAllStatsOutput(allStats, daysFilter, w, theme), ctx);
 
       } else {
         // Current session
@@ -553,7 +604,7 @@ export default function (pi: ExtensionAPI) {
         stats.models = Array.from(modelMap.values()).sort((a, b) => b.count - a.count);
         finalizeTotalTokens(stats, reportedTotalTokens);
 
-        showStatsModal((w: number) => buildCurrentSessionOutput(stats, w), ctx);
+        showStatsModal((w: number, theme?: any) => buildCurrentSessionOutput(stats, w, theme), ctx);
       }
     },
   });

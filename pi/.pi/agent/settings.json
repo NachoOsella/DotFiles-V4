@@ -1,20 +1,18 @@
 {
-  "lastChangelogVersion": "0.69.0",
+  "lastChangelogVersion": "0.70.2",
   "theme": "gruvbox-material-dark-hard",
-  "defaultThinkingLevel": "high",
+  "defaultThinkingLevel": "low",
   "hideThinkingBlock": false,
   "quietStartup": true,
   "packages": [
     "git:github.com/tintinweb/pi-subagents",
     "git:github.com/tintinweb/pi-tasks",
-    "git:github.com/vinyroli/pi-tool-codex",
-    "git:github.com/kotarac/pi-fetch"
+    "git:github.com/MasuRii/pi-tool-display",
+    "git:github.com/nicobailon/pi-web-access"
   ],
   "enableSkillCommands": true,
-  "extensions": [
-    "~/.pi/agent/extensions/agent-todo/index.ts",
-    "~/.pi/agent/extensions/codex-tools.ts"
-  ],
-  "defaultProvider": "openai-codex",
-  "defaultModel": "gpt-5.4-mini"
+  "extensions": [],
+  "defaultProvider": "github-copilot",
+  "defaultModel": "gpt-5.4-mini",
+  "steeringMode": "one-at-a-time"
 }

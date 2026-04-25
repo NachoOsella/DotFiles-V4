@@ -1,41 +1,77 @@
 local M = {}
 
+local function get_jdtls_config_dir(jdtls_path)
+    local config_dir = "config_linux"
+
+    if vim.fn.has("mac") == 1 then
+        config_dir = "config_mac"
+    elseif vim.fn.has("win32") == 1 then
+        config_dir = "config_win"
+    end
+
+    return jdtls_path .. "/" .. config_dir
+end
+
+local function get_workspace_dir(root_dir)
+    local project_name = vim.fn.fnamemodify(root_dir, ":p:h:t")
+    local project_hash = vim.fn.sha256(vim.fn.fnamemodify(root_dir, ":p")):sub(1, 8)
+
+    return vim.fn.stdpath("cache") .. "/jdtls-workspace/" .. project_name .. "-" .. project_hash
+end
+
+local function get_capabilities()
+    local ok, blink = pcall(require, "blink.cmp")
+    if ok and blink.get_lsp_capabilities then
+        return blink.get_lsp_capabilities()
+    end
+
+    return vim.lsp.protocol.make_client_capabilities()
+end
+
 M.setup = function()
-    local jdtls = require "jdtls"
+    local jdtls = require("jdtls")
 
-    -- Rutas dinámicas
-    local home = os.getenv "HOME"
-    local mason_path = vim.fn.stdpath "data" .. "/mason/"
-    local lombok_path = mason_path .. "packages/jdtls/lombok.jar"
-    local jdtls_path = mason_path .. "packages/jdtls"
-    local xml_path = vim.fn.stdpath "config" .. "/lua/config/java-style.xml"
+    local mason_path = vim.fn.stdpath("data") .. "/mason"
+    local jdtls_path = mason_path .. "/packages/jdtls"
+    local lombok_path = jdtls_path .. "/lombok.jar"
+    local xml_path = vim.fn.stdpath("config") .. "/lua/config/java-style.xml"
+    local root_dir = jdtls.setup.find_root({ ".git", "mvnw", "gradlew", "pom.xml", "build.gradle", "build.gradle.kts" })
 
-    -- Configuración básica
+    if not root_dir then
+        vim.notify("No se encontró root_dir para jdtls", vim.log.levels.WARN)
+        return
+    end
+
+    local launcher = vim.fn.glob(jdtls_path .. "/plugins/org.eclipse.equinox.launcher_*.jar")
+    if launcher == "" then
+        vim.notify("No se encontró el launcher de jdtls en Mason", vim.log.levels.ERROR)
+        return
+    end
+
     local config = {
         cmd = {
             "java",
             "-Declipse.application=org.eclipse.jdt.ls.core.id1",
             "-Dosgi.bundles.defaultStartLevel=4",
             "-Declipse.product=org.eclipse.jdt.ls.core.product",
-            "-Dlog.protocol=true",
-            "-Dlog.level=ALL",
+            "-Dlog.protocol=false",
+            "-Dlog.level=WARN",
             "-Xms1g",
             "--add-modules=ALL-SYSTEM",
             "--add-opens",
             "java.base/java.util=ALL-UNNAMED",
             "--add-opens",
             "java.base/java.lang=ALL-UNNAMED",
-            "-javaagent:" .. lombok_path, -- IMPRESCINDIBLE PARA LOMBOK
+            "-javaagent:" .. lombok_path,
             "-jar",
-            vim.fn.glob(jdtls_path .. "/plugins/org.eclipse.equinox.launcher_*.jar"),
+            launcher,
             "-configuration",
-            jdtls_path .. "/config_linux",
+            get_jdtls_config_dir(jdtls_path),
             "-data",
-            home .. "/.cache/jdtls-workspace/" .. vim.fn.fnamemodify(vim.fn.getcwd(), ":p:h:t"),
+            get_workspace_dir(root_dir),
         },
-        root_dir = jdtls.setup.find_root { ".git", "mvnw", "gradlew" },
+        root_dir = root_dir,
 
-        -- Opciones de inicialización para asegurar que el formateador se cargue
         init_options = {
             bundles = {},
             extendedClientCapabilities = jdtls.extendedClientCapabilities,
@@ -46,7 +82,6 @@ M.setup = function()
                 format = {
                     enabled = true,
                     settings = {
-                        -- Usar el prefijo file:// y asegurar ruta absoluta
                         url = "file://" .. xml_path,
                         profile = "IntelliJ",
                     },
@@ -67,15 +102,19 @@ M.setup = function()
             },
         },
 
-        on_attach = function(client, bufnr)
-            -- Atajos extra para Java
+        on_attach = function(_, bufnr)
             vim.keymap.set("n", "<leader>jo", jdtls.organize_imports, { buffer = bufnr, desc = "Organize Imports" })
             vim.keymap.set("n", "<leader>jv", jdtls.extract_variable, { buffer = bufnr, desc = "Extract Variable" })
             vim.keymap.set("n", "<leader>jc", jdtls.extract_constant, { buffer = bufnr, desc = "Extract Constant" })
-            vim.keymap.set("v", "<leader>jm", [[<ESC><CMD>lua require('jdtls').extract_method(true)<CR>]], { buffer = bufnr, desc = "Extract Method" })
+            vim.keymap.set(
+                "v",
+                "<leader>jm",
+                [[<ESC><CMD>lua require('jdtls').extract_method(true)<CR>]],
+                { buffer = bufnr, desc = "Extract Method" }
+            )
         end,
 
-        capabilities = vim.lsp.protocol.make_client_capabilities(),
+        capabilities = get_capabilities(),
     }
 
     jdtls.start_or_attach(config)

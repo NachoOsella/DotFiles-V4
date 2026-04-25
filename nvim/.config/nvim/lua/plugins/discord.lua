@@ -1,6 +1,6 @@
 return {
     "vyfor/cord.nvim",
-    lazy = false,
+    event = "VeryLazy",
     build = ":Cord update",
     opts = {
         display = {

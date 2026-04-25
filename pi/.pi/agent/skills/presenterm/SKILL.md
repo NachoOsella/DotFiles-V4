@@ -1,9 +1,9 @@
 ---
 name: presenterm
-description: Use for creating terminal slide decks with presenterm.
-  Create stunning terminal presentations in Markdown using presenterm. Use this skill whenever 
-  the user asks to create a presentation, slideshow, slide deck, or demo for the terminal. 
-  Also trigger when users say "make me slides", "create a talk", "prepare a presentation about X", 
+description: >-
+  Use for creating terminal slide decks with presenterm. Create stunning terminal presentations in Markdown using presenterm. Use this skill whenever
+  the user asks to create a presentation, slideshow, slide deck, or demo for the terminal.
+  Also trigger when users say "make me slides", "create a talk", "prepare a presentation about X",
   "write a deck for Y", or want to present code/technical content in a terminal-native format.
   This skill produces complete, ready-to-run .md files that leverage presenterm's full feature set:
   themes, column layouts, code highlighting, pauses, images, speaker notes, alerts, transitions,
