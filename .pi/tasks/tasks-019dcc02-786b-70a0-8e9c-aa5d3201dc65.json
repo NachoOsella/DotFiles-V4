@@ -1,5 +1,5 @@
 {
-  "nextId": 3,
+  "nextId": 4,
   "tasks": [
     {
       "id": "1",
@@ -24,6 +24,18 @@
       "blockedBy": [],
       "createdAt": 1777244242402,
       "updatedAt": 1777244324552
+    },
+    {
+      "id": "3",
+      "subject": "Simplify README aesthetics",
+      "description": "Reduce README structure and commands, keep a minimal aesthetic presentation with screenshots and simple explanation of bootstrap script usage.",
+      "status": "completed",
+      "activeForm": "Simplifying README",
+      "metadata": {},
+      "blocks": [],
+      "blockedBy": [],
+      "createdAt": 1777244489363,
+      "updatedAt": 1777244532581
     }
   ]
 }

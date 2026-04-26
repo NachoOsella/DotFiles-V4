@@ -1,7 +1,7 @@
 {
   "lastChangelogVersion": "0.70.2",
   "theme": "gruvbox-material-dark-hard",
-  "defaultThinkingLevel": "low",
+  "defaultThinkingLevel": "off",
   "hideThinkingBlock": false,
   "quietStartup": true,
   "packages": [
