@@ -1,27 +1,23 @@
 <div align="center">
 
-<img src="assets/wallpaper.png" width="100%" alt="Hyprland Banner" style="border-radius: 10px; margin-bottom: 20px;">
+<img src="assets/nothing.png" width="100%" alt="Hyprland desktop with Gruvbox Material bar" style="border-radius: 10px; margin-bottom: 20px;">
 
-# ⚡ Hyprland Dotfiles + System Bootstrap
+# Hyprland Dotfiles + Arch Bootstrap
 
 [![Arch Linux](https://img.shields.io/badge/Arch_Linux-1793d1?style=for-the-badge&logo=arch-linux&logoColor=white)](https://archlinux.org/)
 [![Hyprland](https://img.shields.io/badge/Hyprland-00b4d8?style=for-the-badge&logo=hyprland&logoColor=white)](https://wiki.hyprland.org/)
 [![Neovim](https://img.shields.io/badge/Neovim-57a143?style=for-the-badge&logo=neovim&logoColor=white)](https://neovim.io/)
-[![Gruvbox](https://img.shields.io/badge/Gruvbox-a89984?style=for-the-badge&logoColor=white)](https://github.com/morhetz/gruvbox)
+[![Gruvbox](https://img.shields.io/badge/Gruvbox_Material-a89984?style=for-the-badge&logoColor=white)](https://github.com/sainnhe/gruvbox-material)
 
 <br/>
 
-**A reproducible Arch Linux setup with Hyprland, user dotfiles, system config, and bootstrap automation.**
+**A reproducible Arch Linux setup built around Hyprland, Gruvbox Material Dark Hard, Waybar, Kitty, Fish, Neovim, Yazi and Rofi.**
 <br/>
-*Aesthetic • Provisioning • Workflow*
-
-<br/>
-
-[Installation](#-installation) · [Features](#-features) · [Gallery](#-gallery) · [Configuration](#-configuration)
+*Minimal rectangles, warm contrast, keyboard-first workflow and automated provisioning.*
 
 <br/>
 
-<img src="assets/setup.png" width="100%" alt="Desktop Setup" style="border-radius: 10px; box-shadow: 0 10px 30px rgba(0,0,0,0.5);">
+[Installation](#installation) · [Features](#features) · [Gallery](#gallery) · [Configuration](#configuration)
 
 </div>
 
@@ -29,46 +25,51 @@
 
 ---
 
-## ✨ Features
+## Features
 
-A comprehensive environment focused on keyboard-driven productivity and visual consistency.
+A complete personal desktop environment focused on speed, consistency and reproducibility.
 
 | Category | Component | Description |
 |----------|-----------|-------------|
-| **Window Manager** | Hyprland | Dynamic tiling with smooth animations and blur |
-| **Theme** | Gruvbox Dark | Consistent color scheme across all applications |
-| **Terminal** | Kitty | GPU-accelerated terminal with ligature support |
-| **Editor** | Neovim | LazyVim distribution for a full IDE experience |
-| **Shell** | Fish | Modern shell with autosuggestions and starship prompt |
-| **File Manager** | Yazi | Blazing fast TUI file manager with image preview |
-| **Bar** | Waybar | Highly customizable status bar with functional modules |
-| **Launcher** | Rofi | Application launcher and power menu |
-| **Provisioning** | Bash + Stow | Reproducible install flow for packages, `/etc`, services and user config |
-| **Power** | TLP | Battery thresholds and laptop power configuration |
-| **Network** | NetworkManager + iwd | Global wireless backend and service state managed from the repo |
+| Window manager | Hyprland | Dynamic Wayland compositor with keyboard-driven workspace flow |
+| Theme | Gruvbox Material Dark Hard | Dark, warm palette shared across the desktop, terminal and editor |
+| Bar | Waybar | Rectangular segmented bar with workspace, media, network, audio, battery, memory and clock modules |
+| Terminal | Kitty | GPU-accelerated terminal tuned for the same color palette |
+| Shell | Fish | Modern shell with autosuggestions and a Starship prompt |
+| Prompt | Starship | Compact Gruvbox prompt with host, path, time and command context |
+| Editor | Neovim | LazyVim-based IDE setup for development workflows |
+| File manager | Yazi | Fast terminal file manager with multi-column navigation |
+| Launcher | Rofi | Centered app launcher with matching border, selection and accent colors |
+| System info | Fastfetch | Styled terminal system overview matching the desktop |
+| Provisioning | Bash + Stow | Reproducible install flow for packages, system config, services and user dotfiles |
+| Power | TLP | Laptop battery thresholds and power-management configuration |
+| Network | NetworkManager + iwd | Wireless backend and service state managed from the repository |
 
 ---
 
-## 📸 Gallery
+## Gallery
 
 <div align="center">
 
-### Workflow & Launcher
-<img src="assets/rofi.png" width="90%" style="border-radius: 8px; margin-bottom: 20px;">
+### Clean desktop
+<img src="assets/nothing.png" width="90%" alt="Clean Hyprland desktop with dark vending-machine wallpaper and segmented Waybar" style="border-radius: 8px; margin-bottom: 20px;">
 
-### Neovim Development
-<img src="assets/nvim.png" width="90%" style="border-radius: 8px; margin-bottom: 20px;">
+### Application launcher
+<img src="assets/rofi.png" width="90%" alt="Rofi app launcher using the Gruvbox Material theme" style="border-radius: 8px; margin-bottom: 20px;">
 
-### Terminal & Files
-<img src="assets/fish-yazi.png" width="90%" style="border-radius: 8px;">
+### Development workspace
+<img src="assets/nvim-yazi.png" width="90%" alt="Neovim and Yazi side by side in Kitty on Hyprland" style="border-radius: 8px; margin-bottom: 20px;">
+
+### Terminal overview
+<img src="assets/fastfetch.png" width="90%" alt="Kitty terminal running Fastfetch with system information" style="border-radius: 8px;">
 
 </div>
 
 ---
 
-## 📦 Installation
+## Installation
 
-This repository now manages:
+This repository manages:
 
 - user dotfiles with `stow`
 - explicit package manifests for `pacman` and AUR
@@ -76,43 +77,42 @@ This repository now manages:
 - system and user `systemd` services
 - host-specific overrides
 
-### Beginner Step-by-Step (copy/paste friendly)
+### Beginner step-by-step
 
-If this is your first time setting up dotfiles, follow these exact steps.
+If this is your first time setting up these dotfiles, follow these exact steps.
 
-1) **Boot into your fresh Arch install and connect to internet**
-
-2) **Install Git**
+1. Boot into your fresh Arch install and connect to the internet.
+2. Install Git.
 
 ```bash
 sudo pacman -Sy --noconfirm git
 ```
 
-3) **Clone this repo**
+3. Clone this repository.
 
 ```bash
 git clone https://github.com/NachoOsella/DotFiles-V4.git ~/dotfiles
 ```
 
-4) **Enter the directory**
+4. Enter the directory.
 
 ```bash
 cd ~/dotfiles
 ```
 
-5) **Run the full automated setup**
+5. Run the full automated setup.
 
 ```bash
 ./scripts/bootstrap.sh
 ```
 
-6) **Reboot**
+6. Reboot.
 
 ```bash
 reboot
 ```
 
-7) **Log back in and verify**
+7. Log back in and verify the installation.
 
 ```bash
 cd ~/dotfiles
@@ -120,12 +120,13 @@ cd ~/dotfiles
 ```
 
 Notes:
-- The install can take a while (many packages are installed).
+
+- The install can take a while because many packages are installed.
 - The script will ask for your `sudo` password when needed.
-- If you want to preview actions first, run: `./scripts/bootstrap.sh --dry-run`.
+- To preview actions first, run `./scripts/bootstrap.sh --dry-run`.
 
 <details>
-<summary><strong>Quick Start</strong></summary>
+<summary><strong>Quick start</strong></summary>
 
 ```bash
 # 1. Clone the repository
@@ -138,12 +139,13 @@ cd ~/dotfiles
 # 3. Reboot
 reboot
 ```
+
 </details>
 
 <details>
-<summary><strong>Manual Installation</strong></summary>
+<summary><strong>Manual installation</strong></summary>
 
-If you prefer more control, you can install components individually.
+If you prefer more control, install components individually.
 
 ```bash
 # Clone
@@ -162,30 +164,34 @@ cd ~/dotfiles
 # Enable declared services
 ./scripts/enable-services.sh
 ```
+
 </details>
 
 ---
 
-## ⚙️ Configuration
+## Configuration
 
-### Directory Structure
+### Directory structure
 
 ```tree
 ~/dotfiles/
-├── packages/     # Package manifests (pacman/AUR)
+├── packages/     # Package manifests for pacman and AUR
 ├── hosts/        # Host-specific overlays
 ├── system/       # Versioned /etc files
 ├── systemd-user/ # User units managed with stow
-├── hypr/         # Window Manager
-├── nvim/         # Editor (LazyVim)
-├── fish/         # Shell config
-├── kitty/        # Terminal
-├── waybar/       # Status bar
-├── rofi/         # Launcher
-└── scripts/      # Automation
+├── hypr/         # Hyprland window manager configuration
+├── waybar/       # Status bar styling and modules
+├── rofi/         # Application launcher theme
+├── kitty/        # Terminal configuration
+├── fish/         # Shell configuration
+├── starship/     # Prompt configuration
+├── nvim/         # Neovim LazyVim setup
+├── yazi/         # Terminal file manager
+├── fastfetch/    # System information layout
+└── scripts/      # Automation and validation scripts
 ```
 
-### Provisioning Flow
+### Provisioning flow
 
 ```bash
 # Apply everything on the current host
@@ -198,54 +204,54 @@ cd ~/dotfiles
 ./scripts/check.sh
 ```
 
-### Managed System Areas
+### Managed system areas
 
 - `system/etc/NetworkManager/conf.d/`
-  - Global NetworkManager behavior, including `iwd` backend.
+  - Global NetworkManager behavior, including the `iwd` backend.
 - `hosts/<host>/system/etc/tlp.d/`
   - Host-specific TLP battery thresholds.
 - `hosts/<host>/services/*.txt`
   - Services to enable and conflicting units to disable or mask.
 
-### Real Host State Captured
+### Real host state captured
 
 The current `archlinux` host profile includes:
 
 - `NetworkManager.service` and `iwd.service` as the active networking stack
-- `wpa_supplicant.service` and `systemd-networkd*` disabled/masked to avoid conflicts
+- `wpa_supplicant.service` and `systemd-networkd*` disabled or masked to avoid conflicts
 - TLP charge thresholds at `40/60`
 
 ### Keybindings
 
 | Key | Action |
 |-----|--------|
-| `SUPER + Enter` | Open Terminal |
-| `SUPER + D` | Open Launcher |
-| `SUPER + E` | File Manager |
-| `SUPER + Q` | Close Window |
-| `SUPER + 1-9` | Switch Workspace |
+| `SUPER + Enter` | Open terminal |
+| `SUPER + D` | Open launcher |
+| `SUPER + E` | Open file manager |
+| `SUPER + Q` | Close window |
+| `SUPER + 1-9` | Switch workspace |
 
-> Check `hypr/.config/hypr/hyprland.conf` for the full list.
+Check `hypr/.config/hypr/hyprland.conf` for the full list.
 
 ---
 
-## 🛠️ Tech Stack
+## Tech stack
 
 <div align="center">
-  <img src="https://skillicons.dev/icons?i=arch,linux,vim,git,bash,docker,go,python,nodejs,java" />
+  <img src="https://skillicons.dev/icons?i=arch,linux,vim,git,bash,docker,go,python,nodejs,java" alt="Technology icons" />
 </div>
 
 ---
 
-## 🤝 Contributing
+## Contributing
 
-Contributions are welcome! Please feel free to submit a Pull Request.
+Contributions are welcome. Please feel free to submit a pull request.
 
-1. Fork the Project
-2. Create your Feature Branch (`git checkout -b feature/AmazingFeature`)
-3. Commit your Changes (`git commit -m 'Add some AmazingFeature'`)
-4. Push to the Branch (`git push origin feature/AmazingFeature`)
-5. Open a Pull Request
+1. Fork the project.
+2. Create your feature branch: `git checkout -b feature/AmazingFeature`.
+3. Commit your changes: `git commit -m 'Add some AmazingFeature'`.
+4. Push to the branch: `git push origin feature/AmazingFeature`.
+5. Open a pull request.
 
 ---
 
@@ -253,6 +259,6 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 
 [![License](https://img.shields.io/github/license/NachoOsella/DotFiles-V4?style=flat-square)](LICENSE)
 <br/>
-Made with ❤️ by <a href="https://github.com/NachoOsella">Nacho</a>
+Made by <a href="https://github.com/NachoOsella">Nacho</a>
 
 </div>

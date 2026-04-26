@@ -1,0 +1,29 @@
+{
+  "nextId": 3,
+  "tasks": [
+    {
+      "id": "1",
+      "subject": "Inspect assets and README",
+      "description": "Review the images under assets/ and the current README to understand the visual content and existing documentation structure.",
+      "status": "completed",
+      "activeForm": "Inspecting assets and README",
+      "metadata": {},
+      "blocks": [],
+      "blockedBy": [],
+      "createdAt": 1777244236715,
+      "updatedAt": 1777244278618
+    },
+    {
+      "id": "2",
+      "subject": "Update README from screenshots",
+      "description": "Edit README to reflect the screenshots in assets/, adding or correcting descriptions, preview sections, and references to the images.",
+      "status": "completed",
+      "activeForm": "Updating README from screenshots",
+      "metadata": {},
+      "blocks": [],
+      "blockedBy": [],
+      "createdAt": 1777244242402,
+      "updatedAt": 1777244324552
+    }
+  ]
+}

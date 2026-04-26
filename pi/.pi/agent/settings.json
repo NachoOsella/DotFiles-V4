@@ -12,7 +12,7 @@
   ],
   "enableSkillCommands": true,
   "extensions": [],
-  "defaultProvider": "github-copilot",
-  "defaultModel": "gpt-5.4-mini",
+  "defaultProvider": "openai-codex",
+  "defaultModel": "gpt-5.5",
   "steeringMode": "one-at-a-time"
 }

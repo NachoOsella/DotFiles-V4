@@ -1,0 +1,77 @@
+{
+  "nextId": 13,
+  "tasks": [
+    {
+      "id": "7",
+      "subject": "Rediseñar barra sólida compacta",
+      "description": "Rehacer Waybar desde cero con estética Gruvbox Material Dark Hard, barra sólida segmentada, compacta, recta y sin border-radius.",
+      "status": "completed",
+      "activeForm": "Rediseñando barra sólida",
+      "metadata": {},
+      "blocks": [],
+      "blockedBy": [],
+      "createdAt": 1777242981599,
+      "updatedAt": 1777243009922
+    },
+    {
+      "id": "8",
+      "subject": "Reorganizar módulos actuales",
+      "description": "Mantener la información actual pero mejorar organización: launcher/workspaces/ventana a izquierda, Spotify centrado si está activo, estado y acciones a derecha.",
+      "status": "completed",
+      "activeForm": "Reorganizando módulos",
+      "metadata": {},
+      "blocks": [],
+      "blockedBy": [],
+      "createdAt": 1777242981600,
+      "updatedAt": 1777243016882
+    },
+    {
+      "id": "9",
+      "subject": "Reescribir estilo con paleta mínima",
+      "description": "Reescribir style.css con fondo oscuro, separadores finos, texto cálido y acentos mínimos para activo, warning, critical y positivo.",
+      "status": "completed",
+      "activeForm": "Reescribiendo estilo",
+      "metadata": {},
+      "blocks": [],
+      "blockedBy": [],
+      "createdAt": 1777242981601,
+      "updatedAt": 1777243026253
+    },
+    {
+      "id": "10",
+      "subject": "Ajustar navegación de workspaces",
+      "description": "Hacer workspaces segmentados: inactivos discretos, activo marcado sin exceso de color y urgente visible sobrio.",
+      "status": "completed",
+      "activeForm": "Ajustando workspaces",
+      "metadata": {},
+      "blocks": [],
+      "blockedBy": [],
+      "createdAt": 1777242981601,
+      "updatedAt": 1777243030211
+    },
+    {
+      "id": "11",
+      "subject": "Pulir módulos de estado",
+      "description": "Pulir red, audio, batería, memoria, tray, reloj y power con lectura compacta, separadores y estados semánticos.",
+      "status": "completed",
+      "activeForm": "Puliendo módulos de estado",
+      "metadata": {},
+      "blocks": [],
+      "blockedBy": [],
+      "createdAt": 1777242981601,
+      "updatedAt": 1777243036800
+    },
+    {
+      "id": "12",
+      "subject": "Ajustar Spotify, vacío, tooltip y hover",
+      "description": "Mantener Spotify limpio y ocultable cuando no reproduce, ocultar ventana vacía, y pulir tooltips/hover para coherencia visual.",
+      "status": "completed",
+      "activeForm": "Ajustando detalles finales",
+      "metadata": {},
+      "blocks": [],
+      "blockedBy": [],
+      "createdAt": 1777242981601,
+      "updatedAt": 1777243056732
+    }
+  ]
+}
