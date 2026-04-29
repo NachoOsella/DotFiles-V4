@@ -1,14 +1,14 @@
 {
-  "lastChangelogVersion": "0.70.2",
+  "lastChangelogVersion": "0.70.6",
   "theme": "gruvbox-material-dark-hard",
-  "defaultThinkingLevel": "off",
+  "defaultThinkingLevel": "minimal",
   "hideThinkingBlock": false,
   "quietStartup": true,
   "packages": [
     "git:github.com/tintinweb/pi-subagents",
     "git:github.com/tintinweb/pi-tasks",
-    "git:github.com/MasuRii/pi-tool-display",
-    "git:github.com/nicobailon/pi-web-access"
+    "git:github.com/nicobailon/pi-web-access",
+    "git:github.com/buddingnewinsights/pi-diff"
   ],
   "enableSkillCommands": true,
   "extensions": [],
