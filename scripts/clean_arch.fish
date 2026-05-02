@@ -29,6 +29,9 @@ set -g FORCE_YES 0
 set -g NO_SPINNER 0
 set -g NO_NOTIFY 0
 set -g CURRENT_TASK ""
+set -g CURRENT_TASK_PREFIX ""
+set -g TASK_INDEX 0
+set -g TASK_TOTAL 16
 set -g SPINNER_PID 0
 set -g SUDO_KEEPALIVE_PID 0
 set -g LOCK_DIR "/tmp/clean_arch.lock"
@@ -76,20 +79,118 @@ function term_cols
     echo 80
 end
 
-function ui_rule
+function ui_width
     set -l cols (term_cols)
-    set -l len (math "$cols - 4")
-    if test $len -lt 20
-        set len 20
+    # Keep extra right margin. Some terminals/recorders clip the last cell when
+    # ANSI resets sit near the edge, so the UI intentionally avoids full width.
+    set -l w (math "$cols - 8")
+    if test $w -gt 88
+        set w 88
     end
-    printf "  %s%s%s\n" $D (string repeat -n $len "─") $R
+    if test $w -lt 50
+        set w 50
+    end
+    echo $w
+end
+
+function pad_plain
+    set -l text "$argv[1]"
+    set -l width "$argv[2]"
+    set -l len (string length -- "$text")
+    if test $len -gt $width
+        if test $width -gt 1
+            set text (string sub -l (math "$width - 1") -- "$text")"…"
+        else
+            set text ""
+        end
+        set len (string length -- "$text")
+    end
+    set -l pad (math "$width - $len")
+    if test $pad -lt 0
+        set pad 0
+    end
+    printf "%s%s" "$text" (string repeat -n $pad " ")
+end
+
+function center_plain
+    set -l text "$argv[1]"
+    set -l width "$argv[2]"
+    set -l len (string length -- "$text")
+    set -l total (math "$width - $len")
+    if test $total -lt 0
+        set total 0
+    end
+    set -l left (math "floor($total / 2)")
+    set -l right (math "$total - $left")
+    printf "%s%s%s" (string repeat -n $left " ") "$text" (string repeat -n $right " ")
+end
+
+function progress_bar
+    set -l current "$argv[1]"
+    set -l total "$argv[2]"
+    set -l width "$argv[3]"
+    if test -z "$total"; or test $total -le 0
+        set total 1
+    end
+    set -l filled (math "floor(($current * $width) / $total)")
+    if test $filled -gt $width
+        set filled $width
+    end
+    set -l empty (math "$width - $filled")
+    printf "%s%s" (string repeat -n $filled "━") (string repeat -n $empty "·")
+end
+
+function ui_rule
+    set -l w (ui_width)
+    printf "  %s%s%s\n" $D (string repeat -n $w "─") $R
 end
 
 function ui_banner
+    set -l w (ui_width)
+    set -l inner (math "$w - 2")
+    set -l title (center_plain "CLEAN ARCH" $inner)
+    set -l subtitle (center_plain "safe deep cleanup for Arch Linux" $inner)
     echo
-    ui_rule
-    printf "  "$B$CYAN"CLEAN ARCH"$R"  "$D"Deep cleanup for Arch Linux"$R"\n"
-    ui_rule
+    printf "  %s╭%s╮%s\n" $D (string repeat -n $inner "─") $R
+    printf "  %s│%s%s%s│%s\n" $D $B$CYAN "$title" $R$D $R
+    printf "  %s│%s%s%s│%s\n" $D $D "$subtitle" $R$D $R
+    printf "  %s╰%s╯%s\n" $D (string repeat -n $inner "─") $R
+end
+
+function ui_settings_panel
+    set -l w (ui_width)
+    set -l inner (math "$w - 2")
+    set -l mode "LIVE"
+    if test $DRY_RUN -eq 1
+        set mode "DRY RUN"
+    end
+    set -l docker "safe"
+    if test $DOCKER_PRUNE_ALL -eq 1
+        set docker "all unused"
+    end
+    set -l budget "none"
+    if test $MAX_DELETE_BYTES -gt 0
+        set budget (format_bytes $MAX_DELETE_BYTES)
+    end
+    set -l report "disabled"
+    if test -n "$REPORT_JSON_PATH"
+        set report "$REPORT_JSON_PATH"
+    end
+    printf "  %s╭─%s%s╮%s\n" $D " Run plan " (string repeat -n (math "$inner - 10") "─") $R
+    printf "  %s│%s %s%s│%s\n" $D $R (pad_plain "Mode: $mode" (math "$inner - 1")) $D $R
+    printf "  %s│%s %s%s│%s\n" $D $R (pad_plain "Profile: $PROFILE   Journal: $JOURNAL_RETENTION   Temp age: $TEMP_FILE_AGE days" (math "$inner - 1")) $D $R
+    printf "  %s│%s %s%s│%s\n" $D $R (pad_plain "Pacman keep: $PACMAN_VERSIONS_KEEP   Zed node keep: $ZED_NODE_VERSIONS_KEEP   Docker: $docker" (math "$inner - 1")) $D $R
+    printf "  %s│%s %s%s│%s\n" $D $R (pad_plain "Budget: $budget   Report: $report" (math "$inner - 1")) $D $R
+    printf "  %s╰%s╯%s\n" $D (string repeat -n $inner "─") $R
+end
+
+function ui_safety_panel
+    set -l w (ui_width)
+    set -l inner (math "$w - 2")
+    printf "  %s╭─%s%s╮%s\n" $D " Safety boundaries " (string repeat -n (math "$inner - 19") "─") $R
+    printf "  %s│%s %s%s│%s\n" $D $R (pad_plain "Deletes cache, package-manager artifacts, old temp files and logs." (math "$inner - 1")) $D $R
+    printf "  %s│%s %s%s│%s\n" $D $R (pad_plain "Keeps logins, cookies, app profiles, IndexedDB, configs, Steam games and compatdata." (math "$inner - 1")) $D $R
+    printf "  %s╰%s╯%s\n" $D (string repeat -n $inner "─") $R
 end
 
 function fmt_duration_ms
@@ -155,19 +256,22 @@ end
 
 function start_task
     set -g CURRENT_TASK $argv[1]
+    set -l bar (progress_bar $TASK_INDEX $TASK_TOTAL 18)
+    set -g CURRENT_TASK_PREFIX (printf "[%02d/%02d]" $TASK_INDEX $TASK_TOTAL)
+    set -l label "$CURRENT_TASK_PREFIX $bar  $CURRENT_TASK"
     if test $DRY_RUN -eq 1
-        printf "  $MAGENTA◇$R %s $D(dry-run)$R\n" $CURRENT_TASK
+        printf "  $MAGENTA◇$R %s $D(dry-run)$R\n" "$label"
         return
     end
     if test $NO_SPINNER -eq 1
-        printf "  $CYAN…$R %s\n" $CURRENT_TASK
+        printf "  $CYAN▸$R %s\n" "$label"
         return
     end
     if not isatty stdout
-        printf "  $CYAN…$R %s\n" $CURRENT_TASK
+        printf "  $CYAN▸$R %s\n" "$label"
         return
     end
-    set -l escaped_task (string escape -- $CURRENT_TASK)
+    set -l escaped_task (string escape -- "$label")
     fish -c "
         set FRAMES '⠋' '⠙' '⠹' '⠸' '⠼' '⠴' '⠦' '⠧' '⠇' '⠏'
         set msg $escaped_task
@@ -186,9 +290,9 @@ function end_task_ok
     kill_spinner
     clear_line
     if test -n "$meta"
-        printf "  $GREEN✓$R %s  $D%s$R\n" $CURRENT_TASK "$meta"
+        printf "  %sOK%s %s %s  %s%s%s\n" $GREEN $R "$CURRENT_TASK_PREFIX" "$CURRENT_TASK" $D "$meta" $R
     else
-        printf "  $GREEN✓$R %s\n" $CURRENT_TASK
+        printf "  %sOK%s %s %s\n" $GREEN $R "$CURRENT_TASK_PREFIX" "$CURRENT_TASK"
     end
 end
 
@@ -197,9 +301,9 @@ function end_task_skip
     kill_spinner
     clear_line
     if test -n "$meta"
-        printf "  $D○ %s  %s$R\n" $CURRENT_TASK "$meta"
+        printf "  $D-- %s %s  %s$R\n" "$CURRENT_TASK_PREFIX" "$CURRENT_TASK" "$meta"
     else
-        printf "  $D○ %s$R\n" $CURRENT_TASK
+        printf "  $D-- %s %s$R\n" "$CURRENT_TASK_PREFIX" "$CURRENT_TASK"
     end
 end
 
@@ -208,9 +312,9 @@ function end_task_fail
     kill_spinner
     clear_line
     if test -n "$meta"
-        printf "  $RED✗$R %s  $D%s$R\n" $CURRENT_TASK "$meta"
+        printf "  %s!!%s %s %s  %s%s%s\n" $RED $R "$CURRENT_TASK_PREFIX" "$CURRENT_TASK" $D "$meta" $R
     else
-        printf "  $RED✗$R %s\n" $CURRENT_TASK
+        printf "  %s!!%s %s %s\n" $RED $R "$CURRENT_TASK_PREFIX" "$CURRENT_TASK"
     end
 end
 
@@ -281,7 +385,11 @@ function show_help
     echo "      --no-logs                   Skip log cleanup"
     echo "      --no-temps                  Skip temp files"
     echo "      --no-trash                  Skip trash"
-    echo "      --no-extras                 Skip Zed/Vesktop cleanup"
+    echo "      --no-extras                 Skip app-specific extras"
+    echo
+    echo "  $B TASK NAMES$R"
+    echo "      orphans pacman yay package_managers docker user_cache app_caches steam_cache"
+    echo "      flatpak journal coredumps var_log temps trash zed_node vesktop"
     echo
 end
 
@@ -416,10 +524,12 @@ function append_task_result
 end
 
 function run_task
+    set -g TASK_INDEX (math "$TASK_INDEX + 1")
     set -l key "$argv[1]"
     set -l title "$argv[2]"
     set -l fn "$argv[3]"
     set -l enabled "$argv[4]"
+    set -g CURRENT_TASK_PREFIX (printf "[%02d/%02d]" $TASK_INDEX $TASK_TOTAL)
 
     if not should_run_task "$key"
         set -g CURRENT_TASK "$title"
@@ -461,6 +571,7 @@ function run_task
             set -l meta (fmt_duration_ms $duration_ms)
             end_task_ok "$meta"
             append_task_result "$key" "ok" $duration_ms "" $freed_bytes
+            set -g TOTAL_FREED_BYTES (math "$TOTAL_FREED_BYTES + $freed_bytes")
         case 10
             end_task_skip (fmt_duration_ms $duration_ms)
             append_task_result "$key" "skip" $duration_ms "not applicable on this system" 0
@@ -483,6 +594,36 @@ function count_status
         end
     end
     echo $n
+end
+
+function ui_task_table
+    set -l w (ui_width)
+    set -l inner (math "$w - 2")
+    set -l n (count $TASK_NAMES)
+    if test $n -eq 0
+        return
+    end
+    printf "  %s╭─%s%s╮%s\n" $D " Task report " (string repeat -n (math "$inner - 15") "─") $R
+    printf "  %s│%s %s%s│%s\n" $D $R (pad_plain "TASK                 STATUS      FREED       TIME" (math "$inner - 1")) $D $R
+    printf "  %s├%s┤%s\n" $D (string repeat -n $inner "─") $R
+    for i in (seq 1 $n)
+        set -l name "$TASK_NAMES[$i]"
+        set -l task_status "$TASK_STATUSES[$i]"
+        set -l freed (format_bytes "$TASK_FREED_BYTES[$i]")
+        set -l dur (fmt_duration_ms "$TASK_DURATIONS_MS[$i]")
+        set -l row (printf "%-20s %-10s %10s   %s" "$name" "$task_status" "$freed" "$dur")
+        set -l color $R
+        switch $task_status
+            case ok
+                set color $GREEN
+            case fail
+                set color $RED
+            case skip
+                set color $D
+        end
+        printf "  %s│%s %s%s│%s\n" $D $color (pad_plain "$row" (math "$inner - 1")) $D $R
+    end
+    printf "  %s╰%s╯%s\n" $D (string repeat -n $inner "─") $R
 end
 
 function send_desktop_notification
@@ -604,7 +745,7 @@ function clean_package_managers
 
     if type -q npm
         set touched 1
-        run_quiet npm cache verify; or set ok 0
+        run_quiet npm cache clean --force; or set ok 0
     end
     if type -q pnpm
         set touched 1
@@ -612,21 +753,49 @@ function clean_package_managers
     end
     if type -q yarn
         set touched 1
-        run_quiet yarn cache clean; or set ok 0
+        run_quiet yarn cache clean --all; or run_quiet yarn cache clean; or set ok 0
     end
     if type -q pip
         set touched 1
         run_quiet pip cache purge; or set ok 0
     end
+    if type -q poetry
+        set touched 1
+        for cache_name in (poetry cache list 2>/dev/null | awk '{print $1}')
+            run_quiet poetry cache clear --all $cache_name; or true
+        end
+    end
+    if type -q uv
+        set touched 1
+        run_quiet uv cache clean; or set ok 0
+    end
+    if type -q bun
+        set touched 1
+        run_quiet bun pm cache rm; or true
+    end
+    if type -q go
+        set touched 1
+        run_quiet go clean -cache -testcache -fuzzcache; or set ok 0
+        run_quiet go clean -modcache; or true
+    end
     if type -q cargo-cache
         set touched 1
         run_quiet cargo-cache --autoclean; or set ok 0
-    else if test -d "$HOME/.cargo/registry/cache"
-        set touched 1
+    else
         if test $DRY_RUN -eq 0
-            find "$HOME/.cargo/registry/cache" -type f -mtime +30 -delete 2>/dev/null
-            test $status -eq 0; or set ok 0
+            for d in "$HOME/.cargo/registry/cache" "$HOME/.cargo/registry/src" "$HOME/.cargo/git/checkouts" "$HOME/.cargo/git/db"
+                if test -e "$d"
+                    set touched 1
+                    command rm -rf "$d" 2>/dev/null; or set ok 0
+                end
+            end
+        else if test -d "$HOME/.cargo"
+            set touched 1
         end
+    end
+    if type -q composer
+        set touched 1
+        run_quiet composer clear-cache; or true
     end
 
     if test $touched -eq 0
@@ -639,6 +808,9 @@ function clean_docker
     if not type -q docker
         return 10
     end
+    if test $DRY_RUN -eq 1
+        return 0
+    end
     if not sudo docker info &>/dev/null
         return 10
     end
@@ -650,11 +822,26 @@ function clean_docker
     return $status
 end
 
+function delete_path
+    set -l path "$argv[1]"
+    if test -z "$path"
+        return 0
+    end
+    if test -e "$path"
+        if test $DRY_RUN -eq 0
+            command rm -rf -- "$path" 2>/dev/null
+            return $status
+        end
+    end
+    return 0
+end
+
 function clean_user_cache
     if not test -d "$HOME/.cache"
         return 10
     end
 
+    set -l ok 1
     set -l safe_to_delete \
         thumbnails \
         yay \
@@ -663,32 +850,170 @@ function clean_user_cache
         yarn \
         pnpm-store \
         electron \
-        "@aspect_rules_js" \
+        '@aspect_rules_js' \
         node \
+        node-gyp \
+        deno \
         go-build \
         mesa_shader_cache \
+        mesa_shader_cache_db \
+        fontconfig \
         bazel \
-        "Google/Chrome/Default/Cache" \
-        "BraveSoftware/Brave-Browser/Default/Cache" \
-        "mozilla/firefox/*/cache2" \
         typescript \
         pre-commit \
         pypoetry \
         uv \
         vite \
         eslint \
-        prettier
+        prettier \
+        nvim/luac \
+        jdtls \
+        jdtls-workspace
+
+    for dir in $safe_to_delete
+        delete_path "$HOME/.cache/$dir"; or set ok 0
+    end
+
+    # Browser cache directories only. This intentionally avoids Cookies,
+    # Local Storage, IndexedDB, Login Data, Preferences, extensions and profiles.
+    set -l browser_cache_dirs \
+        'Google/Chrome/*/Cache' \
+        'Google/Chrome/*/Code Cache' \
+        'Google/Chrome/*/GPUCache' \
+        'BraveSoftware/Brave-Browser/*/Cache' \
+        'BraveSoftware/Brave-Browser/*/Code Cache' \
+        'BraveSoftware/Brave-Browser/*/GPUCache' \
+        'chromium/*/Cache' \
+        'chromium/*/Code Cache' \
+        'chromium/*/GPUCache' \
+        'mozilla/firefox/*/cache2' \
+        'mozilla/firefox/*/startupCache'
 
     if test $DRY_RUN -eq 0
-        for dir in $safe_to_delete
-            for match in "$HOME/.cache/"$dir
+        for pattern in $browser_cache_dirs
+            for match in $HOME/.cache/$pattern
                 if test -e "$match"
-                    command rm -rf "$match" 2>/dev/null
+                    command rm -rf -- "$match" 2>/dev/null; or set ok 0
                 end
             end
         end
     end
-    return 0
+
+    test $ok -eq 1; and return 0; or return 1
+end
+
+function clean_electron_cache_root
+    set -l root "$argv[1]"
+    if not test -d "$root"
+        return 10
+    end
+    set -l ok 1
+    set -l cache_names \
+        Cache \
+        'Code Cache' \
+        GPUCache \
+        ShaderCache \
+        GrShaderCache \
+        DawnCache \
+        DawnWebGPUCache \
+        DawnGraphiteCache \
+        component_crx_cache \
+        Crashpad \
+        'Crash Reports'
+
+    for name in $cache_names
+        delete_path "$root/$name"; or set ok 0
+        delete_path "$root/Default/$name"; or set ok 0
+        delete_path "$root/sessionData/$name"; or set ok 0
+    end
+    test $ok -eq 1; and return 0; or return 1
+end
+
+function clean_app_caches
+    set -l touched 0
+    set -l ok 1
+
+    # Big user caches observed on this machine. Removing these does not remove
+    # app configs/logins because they live outside ~/.cache or in non-cache DBs.
+    for p in \
+        "$HOME/.cache/spotify" \
+        "$HOME/.cache/net.imput.helium" \
+        "$HOME/.cache/discord" \
+        "$HOME/.cache/vesktop" \
+        "$HOME/.cache/obsidian" \
+        "$HOME/.cache/zed"
+        if test -e "$p"
+            set touched 1
+            delete_path "$p"; or set ok 0
+        end
+    end
+
+    for root in \
+        "$HOME/.config/net.imput.helium" \
+        "$HOME/.config/obsidian" \
+        "$HOME/.config/vesktop" \
+        "$HOME/.config/discord" \
+        "$HOME/.config/discordcanary" \
+        "$HOME/.config/Slack" \
+        "$HOME/.config/Code" \
+        "$HOME/.config/Code - OSS" \
+        "$HOME/.config/VSCodium"
+        if test -d "$root"
+            set touched 1
+            clean_electron_cache_root "$root"; or set ok 0
+        end
+    end
+
+    if test $touched -eq 0
+        return 10
+    end
+    test $ok -eq 1; and return 0; or return 1
+end
+
+function clean_steam_cache
+    set -l steam "$HOME/.local/share/Steam"
+    if not test -d "$steam"
+        return 10
+    end
+    set -l ok 1
+    for p in \
+        "$steam/appcache/httpcache" \
+        "$steam/appcache/librarycache" \
+        "$steam/config/htmlcache" \
+        "$steam/steamui/cache" \
+        "$steam/steamapps/shadercache"
+        delete_path "$p"; or set ok 0
+    end
+    test $ok -eq 1; and return 0; or return 1
+end
+
+function clean_flatpak
+    if not type -q flatpak
+        return 10
+    end
+    run_quiet flatpak uninstall --unused -y
+    return $status
+end
+
+function clean_coredumps
+    set -l touched 0
+    set -l ok 1
+
+    # coredumpctl lists coredumps but does not support vacuum/delete options on
+    # this system. The actual files are cache-like crash dumps under these dirs.
+    for dir in /var/lib/systemd/coredump /var/lib/coredump
+        if test -d "$dir"
+            set touched 1
+            if test $DRY_RUN -eq 0
+                sudo find "$dir" -type f -delete 2>/dev/null; or set ok 0
+            end
+        end
+    end
+
+    if test $touched -eq 0
+        return 10
+    end
+    test $ok -eq 1; and return 0; or return 1
 end
 
 function clean_journal
@@ -725,7 +1050,8 @@ function clean_trash
         return 10
     end
     if test $DRY_RUN -eq 0
-        command rm -rf "$trash_dir"/* 2>/dev/null
+        # Avoid Fish wildcard failures when Trash is empty.
+        find "$trash_dir" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} + 2>/dev/null
         return $status
     end
     return 0
@@ -750,15 +1076,12 @@ function clean_zed_node
 end
 
 function clean_vesktop
-    set -l vesktop_cache "$HOME/.config/vesktop/sessionData/Cache"
-    if not test -d "$vesktop_cache"
+    set -l vesktop_root "$HOME/.config/vesktop"
+    if not test -d "$vesktop_root"
         return 10
     end
-    if test $DRY_RUN -eq 0
-        command rm -rf "$vesktop_cache"/* 2>/dev/null
-        return $status
-    end
-    return 0
+    clean_electron_cache_root "$vesktop_root"
+    return $status
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -809,10 +1132,8 @@ if test "$MAX_DELETE_GB" != 0
 end
 
 ui_banner
-printf "  $B$WHITE Profile:$R %s\n" "$PROFILE"
-if test $MAX_DELETE_BYTES -gt 0
-    printf "  $B$WHITE Budget:$R %s\n" (format_bytes $MAX_DELETE_BYTES)
-end
+ui_settings_panel
+ui_safety_panel
 echo
 
 acquire_lock; or exit 1
@@ -826,12 +1147,12 @@ if test $DRY_RUN -eq 0
     printf "  %s Authenticating..." $D
     if not sudo -v 2>/dev/null
         clear_line
-        printf "  $RED✗$R Failed to acquire sudo privileges.\n\n"
+        printf "  %s!!%s Failed to acquire sudo privileges.\n\n" $RED $R
         cleanup_resources
         exit 1
     end
     clear_line
-    printf "  $GREEN✓$R Authenticated\n"
+    printf "  %sOK%s Authenticated\n" $GREEN $R
     fish -c 'while true; sudo -n true 2>/dev/null; sleep 50; end' &
     set -g SUDO_KEEPALIVE_PID $last_pid
 end
@@ -844,8 +1165,12 @@ run_task pacman "Cleaning pacman cache" clean_pacman $do_caches
 run_task yay "Cleaning AUR cache" clean_yay $do_caches
 run_task package_managers "Cleaning package managers" clean_package_managers $do_caches
 run_task docker "Pruning Docker" clean_docker $do_docker
-run_task user_cache "Cleaning ~/.cache" clean_user_cache $do_caches
+run_task user_cache "Cleaning generic ~/.cache" clean_user_cache $do_caches
+run_task app_caches "Cleaning app/browser caches" clean_app_caches $do_caches
+run_task steam_cache "Cleaning Steam caches" clean_steam_cache $do_caches
+run_task flatpak "Removing unused Flatpak runtimes" clean_flatpak $do_caches
 run_task journal "Vacuuming journal logs" clean_journal $do_logs
+run_task coredumps "Cleaning system coredumps" clean_coredumps $do_logs
 run_task var_log "Truncating /var/log" clean_var_log $do_logs
 run_task temps "Cleaning temp files" clean_temps $do_temps
 run_task trash "Emptying trash" clean_trash $do_trash
@@ -865,16 +1190,21 @@ else
 end
 
 echo
-ui_rule
+ui_task_table
 set -l ok_count (count_status ok)
 set -l skip_count (count_status skip)
 set -l fail_count (count_status fail)
-printf "  $B$WHITE Results:$R $GREEN%s ok$R  $D%s skip$R  $RED%s fail$R\n" $ok_count $skip_count $fail_count
-printf "  $B$WHITE Freed:$R %s   $B$WHITE Duration:$R %ss\n" (format_bytes $TOTAL_FREED_BYTES) $duration
+set -l w (ui_width)
+set -l inner (math "$w - 2")
+set -l final_bar (progress_bar $TASK_INDEX $TASK_TOTAL 24)
+printf "  %s╭─%s%s╮%s\n" $D " Summary " (string repeat -n (math "$inner - 11") "─") $R
+printf "  %s│%s %s%s│%s\n" $D $R (pad_plain "Progress: $final_bar" (math "$inner - 1")) $D $R
+printf "  %s│%s %s%s│%s\n" $D $R (pad_plain "Results: $ok_count ok   $skip_count skip   $fail_count fail" (math "$inner - 1")) $D $R
+printf "  %s│%s %s%s│%s\n" $D $R (pad_plain "Freed: "(format_bytes $TOTAL_FREED_BYTES)"   Duration: "$duration"s" (math "$inner - 1")) $D $R
 if test $STOP_FOR_BUDGET -eq 1
-    printf "  $YELLOW!$R Stopped after reaching max-delete budget.\n"
+    printf "  %s│%s %s%s│%s\n" $D $YELLOW (pad_plain "Stopped after reaching max-delete budget." (math "$inner - 1")) $D $R
 end
-ui_rule
+printf "  %s╰%s╯%s\n" $D (string repeat -n $inner "─") $R
 echo
 
 write_json_report $start_time $end_time $duration
