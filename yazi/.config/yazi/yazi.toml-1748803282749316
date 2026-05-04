@@ -28,10 +28,10 @@ rules = [
     { name = "*.py", use = "edit" },
     { name = "*.rs", use = "edit" },
     { name = "*.toml", use = "edit" },
-    # Añade más extensiones de texto si las necesitas
+    # Add more text extensions if needed
     
 
-    # Reglas para imágenes
+    # Rules for images
     { mime = "image/*", use = "image" },
     
 

@@ -38,13 +38,13 @@ M.setup = function()
     local root_dir = jdtls.setup.find_root({ ".git", "mvnw", "gradlew", "pom.xml", "build.gradle", "build.gradle.kts" })
 
     if not root_dir then
-        vim.notify("No se encontró root_dir para jdtls", vim.log.levels.WARN)
+        vim.notify("root_dir not found for jdtls", vim.log.levels.WARN)
         return
     end
 
     local launcher = vim.fn.glob(jdtls_path .. "/plugins/org.eclipse.equinox.launcher_*.jar")
     if launcher == "" then
-        vim.notify("No se encontró el launcher de jdtls en Mason", vim.log.levels.ERROR)
+        vim.notify("jdtls launcher not found in Mason", vim.log.levels.ERROR)
         return
     end
 

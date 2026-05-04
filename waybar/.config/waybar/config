@@ -83,14 +83,14 @@
   "network": {
     "format-wifi": "󰤢 {bandwidthDownBits}",
     "format-ethernet": "󰈀 {bandwidthDownBits}",
-    "format-disconnected": "󰤠 Sin red",
+    "format-disconnected": "󰤠 No network",
     "interval": 5,
 
     "tooltip": true,
     "tooltip-format": "Red: {ifname}",
-    "tooltip-format-wifi": "Wi-Fi: {essid}\nSeñal: {signalStrength}%\nIP: {ipaddr}",
+    "tooltip-format-wifi": "Wi-Fi: {essid}\nSignal: {signalStrength}%\nIP: {ipaddr}",
     "tooltip-format-ethernet": "Ethernet: {ifname}\nIP: {ipaddr}",
-    "tooltip-format-disconnected": "Sin conexión",
+    "tooltip-format-disconnected": "Disconnected",
     "on-click": "~/.config/rofi/rofi-wifi-menu.sh"
   },
 

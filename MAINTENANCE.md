@@ -8,12 +8,12 @@
 ├── hosts/                     # Overlays por host
 ├── system/                    # Config versionada de /etc
 ├── scripts/
-│   ├── bootstrap.sh          # Orquestación completa
+│   ├── bootstrap.sh          # Full orchestration
 │   ├── install-packages.sh   # Instala paquetes desde manifests
 │   ├── apply-system.sh       # Copia system/etc a /etc
 │   ├── enable-services.sh    # Habilita units declaradas
-│   ├── capture-system.sh     # Regenera manifests desde la máquina
-│   ├── check.sh              # Validaciones rápidas
+│   ├── capture-system.sh     # Regenerate manifests from machine
+│   ├── check.sh              # Quick validations
 │   └── stow.sh               # Gestiona symlinks de usuario
 ├── hypr/                     # Hyprland config
 ├── kitty/                    # Terminal
@@ -37,7 +37,7 @@
 
 ---
 
-## Instalación en Nueva Máquina
+## Installation on New Machine
 
 ### 1. Clonar el repositorio
 
@@ -61,10 +61,10 @@ cd ~/dotfiles
 ./scripts/enable-services.sh    # systemd system/user
 ```
 
-### 4. Reiniciar sesión
+### 4. Restart session
 
 ```bash
-# Cerrar sesión y volver a entrar para que los cambios surtan efecto
+# Log out and log back in so changes take effect
 ```
 
 ---
@@ -83,15 +83,15 @@ cd ~/dotfiles
 ./scripts/check.sh
 ```
 
-### Regenerar manifests desde la máquina actual
+### Regenerate manifests from current machine
 
 ```bash
 ./scripts/capture-system.sh
 ```
 
-### Re-aplicar después de cambios
+### Re-apply after changes
 
-Si agregas archivos nuevos a un paquete:
+If you add new files to a package:
 
 ```bash
 ./scripts/stow.sh restow nvim
@@ -105,54 +105,54 @@ Si agregas archivos nuevos a un paquete:
 
 ---
 
-## Flujo de Trabajo para Cambios
+## Workflow for Changes
 
-### 1. Editar configuración
+### 1. Edit configuration
 
-Los archivos están en `~/dotfiles/`, pero gracias a los symlinks, también puedes
-editar directamente desde `~/.config/`:
+Files are in `~/dotfiles/`, but thanks to symlinks, you can also
+edit directly from `~/.config/`:
 
 ```bash
-# Estos dos comandos editan el mismo archivo:
+# These two commands edit the same file:
 nvim ~/dotfiles/hypr/.config/hypr/hyprland.conf
 nvim ~/.config/hypr/hyprland.conf
 ```
 
-### 2. Probar cambios
+### 2. Test changes
 
-La mayoría de apps detectan cambios automáticamente. Para Hyprland:
+Most apps detect changes automatically. For Hyprland:
 
 ```bash
 hyprctl reload
 ```
 
-### 3. Guardar en git
+### 3. Save in git
 
 ```bash
 cd ~/dotfiles
 git add -A
-git commit -m "feat(hypr): agregar keybind para screenshot"
+git commit -m "feat(hypr): add keybind for screenshot"
 git push
 ```
 
 ---
 
-## Agregar Nueva Aplicación
+## Add New Application
 
-### Ejemplo: Agregar config de alacritty
+### Example: Add alacritty config
 
 ```bash
-# 1. Crear estructura
+# 1. Create structure
 mkdir -p ~/dotfiles/alacritty/.config/alacritty
 
-# 2. Mover config existente
+# 2. Move existing config
 mv ~/.config/alacritty/alacritty.toml ~/dotfiles/alacritty/.config/alacritty/
 
-# 3. Aplicar stow
+# 3. Apply stow
 cd ~/dotfiles
 stow alacritty
 
-# 4. Agregar al array STOW_PACKAGES en scripts/stow.sh
+# 4. Add to STOW_PACKAGES array in scripts/stow.sh
 # 5. Commit
 git add -A
 git commit -m "feat: add alacritty config"
@@ -160,18 +160,18 @@ git commit -m "feat: add alacritty config"
 
 ---
 
-## Sincronización entre Máquinas
+## Sync Between Machines
 
-### En máquina principal (donde hiciste cambios)
+### On main machine (where you made changes)
 
 ```bash
 cd ~/dotfiles
 git add -A
-git commit -m "update: descripción de cambios"
+git commit -m "update: change description"
 git push
 ```
 
-### En otra máquina
+### On another machine
 
 ```bash
 cd ~/dotfiles
@@ -181,49 +181,49 @@ git pull
 
 ---
 
-## Resolución de Conflictos
+## Conflict Resolution
 
 ### Error: "existing target is not a symlink"
 
-Stow no puede crear symlink porque ya existe un archivo/directorio:
+Stow cannot create the symlink because a file/directory already exists:
 
 ```bash
-# Opción 1: Backup y reintentar
+# Option 1: Backup and retry
 mv ~/.config/nvim ~/.config/nvim.bak
 ./scripts/stow.sh install nvim
 
-# Opción 2: Adoptar el archivo existente (lo mueve al repo)
+# Option 2: Adopt existing file (moves it to repo)
 cd ~/dotfiles
 stow --adopt nvim
-git diff  # Ver qué cambió
+git diff  # See what changed
 ```
 
 ### Error: "conflicting symlinks"
 
-Hay symlinks conflictivos:
+There are conflicting symlinks:
 
 ```bash
-# Ver qué está mal
+# See what is wrong
 ./scripts/stow.sh status
 
-# Remover y reinstalar
+# Remove and reinstall
 ./scripts/stow.sh remove nvim
 ./scripts/stow.sh install nvim
 ```
 
 ---
 
-## Buenas Prácticas
+## Best Practices
 
 ### Commits
 
-Usa prefijos descriptivos:
+Use descriptive prefixes:
 
-- `feat(app):` - Nueva funcionalidad
-- `fix(app):` - Corrección de bug
-- `style(app):` - Cambios visuales/colores
-- `refactor(app):` - Reorganización sin cambios funcionales
-- `docs:` - Documentación
+- `feat(app):` - New functionality
+- `fix(app):` - Bug fix
+- `style(app):` - Visual/color changes
+- `refactor(app):` - Reorganization with no functional changes
+- `docs:` - Documentation
 
 Ejemplos:
 
@@ -234,101 +234,101 @@ style(kitty): switch to gruvbox-material
 refactor(fish): split config into modules
 ```
 
-### Archivos a ignorar
+### Files to ignore
 
-El `.gitignore` ya excluye:
+`.gitignore` already excludes:
 
 - `lazy-lock.json` (nvim)
 - `fish_variables` (fish)
-- Plugins de yazi (reinstalar con `ya pack -i`)
-- Archivos sensibles (`*.pem`, `*credentials*`)
+- Yazi plugins (reinstall with `ya pack -i`)
+- Sensitive files (`*.pem`, `*credentials*`)
 
-### Backup antes de cambios grandes
+### Backup before major changes
 
 ```bash
-# Crear tag antes de cambios importantes
-git tag -a "pre-rice-v2" -m "Backup antes de cambiar colorscheme"
+# Create tag before major changes
+git tag -a "pre-rice-v2" -m "Backup before changing colorscheme"
 git push --tags
 
-# Si algo sale mal:
+# If something goes wrong:
 git checkout pre-rice-v2
 ```
 
 ---
 
-## Comandos Útiles
+## Useful Commands
 
 ```bash
-# Ver todos los symlinks en .config
+# See all symlinks in .config
 ls -la ~/.config | grep "^l"
 
-# Ver diferencias no commiteadas
+# See uncommitted differences
 cd ~/dotfiles && git diff
 
-# Ver qué paquetes tienen cambios
+# See which packages have changes
 cd ~/dotfiles && git status
 
-# Buscar en todos los configs
+# Search across all configs
 rg "pattern" ~/dotfiles
 
-# Ver historial de un archivo
+# See file history
 git log --oneline -- hypr/.config/hypr/hyprland.conf
 ```
 
 ---
 
-## Notas Específicas
+## Specific Notes
 
 ### Neovim (LazyVim)
 
-- Plugins se reinstalan automáticamente
-- `lazy-lock.json` está ignorado (versiones de plugins pueden variar)
-- Para exportar plugins: `git add -f nvim/.config/nvim/lazy-lock.json`
+- Plugins reinstall automatically
+- `lazy-lock.json` is ignored (plugin versions may vary)
+- To export plugins: `git add -f nvim/.config/nvim/lazy-lock.json`
 
 ### Fish
 
-- `fish_variables` está ignorado (contiene estado local)
-- Las funciones custom están en `fish/.config/fish/functions/`
+- `fish_variables` is ignored (contains local state)
+- Custom functions are in `fish/.config/fish/functions/`
 
 ### Yazi
 
-- Plugins en `plugins/` están ignorados
-- Reinstalar con: `ya pack -i`
+- Plugins in `plugins/` are ignored
+- Reinstall with: `ya pack -i`
 
 ### Hyprland
 
-- Variables de monitor pueden necesitar ajuste por máquina
-- Considera usar `source` para configs específicos de máquina:
+- Monitor variables may need per-machine adjustments
+- Consider using `source` for machine-specific configs:
 
 ```conf
 # hyprland.conf
-source = ~/.config/hypr/local.conf  # No versionado
+source = ~/.config/hypr/local.conf  # Not versioned
 ```
 
 ---
 
-## Actualizar README
+## Update README
 
-### Agregar Screenshots
+### Add Screenshots
 
-1. **Tomar screenshots** con hyprshot o grim:
+1. **Take screenshots** with hyprshot or grim:
 
 ```bash
-# Screenshot de región a archivo
+# Region screenshot to file
 hyprshot -m region -o ~/Pictures
 
-# O desde clipboard: pega y guarda como .png
+# Or from clipboard: paste and save as .png
 ```
 
-2. **Copiar a repo**:
+2. **Copy to repo**:
 
 ```bash
 mv ~/Pictures/hyprshot_*.png ~/dotfiles/assets/hyprland-workspace.png
 ```
 
-3. **Actualizar README.md**:
+3. **Update README.md**:
 
-Descomenta las líneas en la sección "Gallery":
+Uncomment lines in the "Gallery" section:
 
 ```markdown
 <!-- 
@@ -336,13 +336,13 @@ Descomenta las líneas en la sección "Gallery":
 -->
 ```
 
-Cámbialo a:
+Change it to:
 
 ```markdown
 ![Hyprland Workspace](assets/hyprland-workspace.png)
 ```
 
-4. **Commit cambios**:
+4. **Commit changes**:
 
 ```bash
 cd ~/dotfiles
@@ -351,24 +351,24 @@ git commit -m "docs: add screenshots to README"
 git push
 ```
 
-### Recomendaciones de Screenshots
+### Screenshot Recommendations
 
 **Esenciales:**
-- Desktop completo (2-3 workspaces)
-- Neovim con proyecto
-- Terminal con fish/starship
+- Full desktop (2-3 workspaces)
+- Neovim with project
+- Terminal with fish/starship
 - Rofi launcher
 - Yazi file manager
 
 **Dimensiones:**
 - Desktop: 1920x1080 o 2560x1440
-- Window: Ajustado al contenido, sin redimensionar
+- Window: fit to content, no resizing
 
-Evita redimensionar imágenes - causa pérdida de calidad.
+Avoid resizing images - it reduces quality.
 
 ### Actualizar Badges
 
-Para agregar nuevos badges al README, usa [shields.io](https://shields.io/):
+To add new badges to the README, use [shields.io](https://shields.io/):
 
 ```markdown
 [![Nombre](https://img.shields.io/badge/NOMBRE-COLOR?style=for-the-badge&logo=nombre&logoColor=white)](URL)

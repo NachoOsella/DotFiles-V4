@@ -1,68 +1,68 @@
 # Codex-style Plan Mode for Pi
 
-Extensión para Pi que replica el flujo de **Plan Mode estilo Codex**:
+Pi extension that replicates the **Codex-style Plan Mode** workflow:
 
-- modo de planificación read-only (`/plan`)
-- preguntas de clarificación con UI interactiva tipo tabs (`request_user_input`)
-- respuestas por opción, con texto adicional sobre esa misma opción, o respuesta personalizada
-- decisión final: **implementar** o **seguir refinando**
+- read-only planning mode (`/plan`)
+- clarification questions with interactive tabbed UI (`request_user_input`)
+- per-option answers, with optional additional text for that same option, or a custom answer
+- final decision: **implement** or **keep refining**
 
-## Qué implementa
+## What it implements
 
-### 1) Plan Mode estilo Codex
+### 1) Codex-style Plan Mode
 
-- Comando: `/plan` (toggle)
+- Command: `/plan` (toggle)
 - Shortcut: `Ctrl+Alt+P`
-- En plan mode:
-  - tools permitidas: `read`, `bash`, `grep`, `find`, `ls`, `request_user_input`
-  - bloquea `edit` y `write`
-  - bloquea comandos bash destructivos
+- In plan mode:
+  - allowed tools: `read`, `bash`, `grep`, `find`, `ls`, `request_user_input`
+  - blocks `edit` and `write`
+  - blocks destructive bash commands
 
-### 2) UI tipo request_user_input
+### 2) request_user_input-style UI
 
 Tool: `request_user_input`
 
-- pestañas por pregunta + pestaña final de submit
-- selección con `↑/↓`, `j/k`, `1-9`, `Enter`
-- navegación entre tabs con `Tab / Shift+Tab` (también `←/→`, `Ctrl+n/Ctrl+p`)
-- opción extra `None of the above` para respuesta personalizada
-- si empezás a escribir, ese texto se agrega como detalle de la opción seleccionada (sin obligarte a usar la última opción)
-- confirmación si hay preguntas sin responder
+- one tab per question + final submit tab
+- selection with `↑/↓`, `j/k`, `1-9`, `Enter`
+- tab navigation with `Tab / Shift+Tab` (also `←/→`, `Ctrl+n/Ctrl+p`)
+- extra `None of the above` option for custom responses
+- if you start typing, that text is added as detail for the selected option (without forcing the last option)
+- confirmation if there are unanswered questions
 
-### 3) Flujo final del plan
+### 3) Final plan flow
 
-Cuando detecta un plan numerado (`Plan:` + pasos), muestra:
+When it detects a numbered plan (`Plan:` + steps), it shows:
 
 - `Yes, implement this plan`
 - `No, stay in Plan mode`
 - `Refine with additional feedback`
 
-Si elegís implementar, sale de plan mode y además:
+If you choose to implement, it exits plan mode and also:
 
-1. importa automáticamente los pasos al `todo` de tu otra extensión (vía `pi.events`)
-2. envía un kickoff oculto al modelo para reforzar que use/actualice `todo` por id
-3. incentiva explícitamente la búsqueda/uso de skills relevantes antes de implementar
+1. automatically imports steps into your other extension's `todo` (via `pi.events`)
+2. sends a hidden model kickoff to reinforce using/updating `todo` by id
+3. explicitly encourages searching/using relevant skills before implementation
 
-## Instalación
+## Installation
 
-Ya con estos archivos dentro de:
+With these files already in:
 
 - `~/.pi/agent/extensions/codex-plan-mode/index.ts`
 
-solo corré:
+just run:
 
 ```bash
 /reload
 ```
 
-o reiniciá `pi`.
+or restart `pi`.
 
-## Comandos
+## Commands
 
-- `/plan` → activar/desactivar plan mode
-- `/plan-status` → ver estado actual y último plan parseado
+- `/plan` → enable/disable plan mode
+- `/plan-status` → show current state and last parsed plan
 
-## Notas
+## Notes
 
-- El estado de plan mode y el último plan se persisten en la sesión.
-- La UI está inspirada en el comportamiento real del repo `openai/codex` (request_user_input + prompt de implementación de plan).
+- Plan mode state and the last plan are persisted in session state.
+- The UI is inspired by the real behavior in the `openai/codex` repo (`request_user_input` + plan implementation prompt).

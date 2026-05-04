@@ -4,7 +4,7 @@ return {
         opts = function(_, opts)
             opts = opts or {}
 
-            -- Dashboard (tu config)
+            -- Dashboard (your config)
             opts.dashboard = opts.dashboard or {}
             opts.dashboard.preset = opts.dashboard.preset or {}
             local arch = ""
@@ -23,14 +23,14 @@ return {
             opts.picker = opts.picker or {}
             opts.picker.sources = opts.picker.sources or {}
 
-            -- IMPORTANTE: esto es lo que hace que Explorer muestre dotfiles al abrir
+            -- Important: this makes Explorer show dotfiles on open
             opts.picker.sources.explorer = vim.tbl_deep_extend("force", opts.picker.sources.explorer or {}, {
-                hidden = true, -- muestra .env, .git, etc.
-                ignored = true, -- por si .env está gitignored
+                hidden = true, -- show .env, .git, etc.
+                ignored = true, -- include files even if gitignored
             })
 
             opts.lazygit = opts.lazygit or {}
-            opts.lazygit.configure = false -- Esto desactiva que snacks genere el tema
+            opts.lazygit.configure = false -- Disable Snacks lazygit theme generation
 
             return opts
         end,

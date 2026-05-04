@@ -1,47 +1,47 @@
 
 [opener]
-# Fallback del sistema (Linux): útil para binarios, office, etc.
+# System fallback (Linux): useful for binaries, office files, etc.
 open = [
-  { run = 'xdg-open %s', orphan = true, desc = "Abrir (sistema)", for = "linux" },
+  { run = 'xdg-open %s', orphan = true, desc = "Open (system)", for = "linux" },
 ]
 
-# Editor (bloqueante, interactivo)
+# Editor (blocking, interactive)
 edit = [
-  { run = 'nvim %s', block = true, desc = "Editar con Neovim", for = "unix" },
+  { run = 'nvim %s', block = true, desc = "Edit with Neovim", for = "unix" },
 ]
 
-# Imágenes (tu elección: feh; ojo que es X11, pero lo dejo tal cual)
+# Images (your choice: feh; note this is X11, kept as-is)
 image = [
-  { run = 'feh --geometry 800x600 --scale-down --auto-zoom %s', orphan = true, desc = "Abrir imagen (feh)", for = "unix" },
+  { run = 'feh --geometry 800x600 --scale-down --auto-zoom %s', orphan = true, desc = "Open image (feh)", for = "unix" },
 ]
 
 video = [
-  { run = 'vlc %s', orphan = true, desc = "Reproducir video (VLC)", for = "unix" },
+  { run = 'vlc %s', orphan = true, desc = "Play video (VLC)", for = "unix" },
 ]
 
 audio = [
-  { run = 'vlc %s', orphan = true, desc = "Reproducir audio (VLC)", for = "unix" },
+  { run = 'vlc %s', orphan = true, desc = "Play audio (VLC)", for = "unix" },
 ]
 
 pdf = [
-  { run = 'zathura %s', orphan = true, desc = "Ver PDF (Zathura)", for = "unix" },
+  { run = 'zathura %s', orphan = true, desc = "View PDF (Zathura)", for = "unix" },
 ]
 
 extract = [
-  { run = '7z x %s', desc = "Extraer aquí (7z)", for = "unix" },
+  { run = '7z x %s', desc = "Extract here (7z)", for = "unix" },
 ]
 
 
 [open]
 rules = [
-  # 1) Formatos especiales primero (prioridad)
+  # 1) Special formats first (priority)
   { mime = "application/pdf", use = "pdf" },
 
   { mime = "image/*", use = "image" },
   { mime = "video/*", use = "video" },
   { mime = "audio/*", use = "audio" },
 
-  # Archivos comprimidos (por extensión)
+  # Compressed files (by extension)
   { url = "*.7z",     use = "extract" },
   { url = "*.zip",    use = "extract" },
   { url = "*.rar",    use = "extract" },
@@ -53,15 +53,15 @@ rules = [
   { url = "*.txz",    use = "extract" },
   { url = "*.tar.xz", use = "extract" },
 
-  # 2) TODO texto va a nvim (tu requisito)
+  # 2) ALL text goes to nvim (your requirement)
   { mime = "text/*", use = "edit" },
 
-  # Extra: mimes "texto" que a veces no caen en text/*
+  # Extra: "text-like" MIME types that sometimes do not match text/*
   { mime = "application/json", use = "edit" },
   { mime = "application/xml",  use = "edit" },
   { mime = "application/x-yaml", use = "edit" },
 
-  # Extensiones típicas que suelen ser texto (por si file(1) / mime falla)
+  # Common extensions that are usually text (if file(1)/MIME fails)
   { url = "*.md",   use = "edit" },
   { url = "*.markdown", use = "edit" },
   { url = "*.txt",  use = "edit" },
@@ -119,7 +119,7 @@ rules = [
   { url = "*.xhtml", use = "edit" },
   { url = "*.svg",  use = "edit" },
 
-  # 3) Fallback final: si no es texto ni coincide con nada, sistema
+  # 3) Final fallback: if not text and no match, use system
   { url = "*", use = "open" },
 ]
 

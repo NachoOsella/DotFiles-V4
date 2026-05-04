@@ -3,13 +3,13 @@
 # Base (Hard): bg=#1d2021, fg=#d4be98, gray=#928374, border=#665c54
 # Accents: red=#ea6962, orange=#e78a4e, yellow=#d8a657, green=#a9b665,
 #          blue=#7daea3, purple=#d3869b, cyan=#89b482
-# UI bgs (Material): bg0=#282828 bg1=#32302f bg2=#3a3735 bg3=#45403d bg4=#504945  (útiles para paneles) :contentReference[oaicite:3]{index=3}
+# UI backgrounds (Material): bg0=#282828 bg1=#32302f bg2=#3a3735 bg3=#45403d bg4=#504945 (useful for panels) :contentReference[oaicite:3]{index=3}
 
 # -------------------------------------------------------------------
 # App background (OSC 11)
 # -------------------------------------------------------------------
 [app]
-overall = { bg = "#1d2021" } # requiere soporte OSC 11 :contentReference[oaicite:4]{index=4}
+overall = { bg = "#1d2021" } # requires OSC 11 support :contentReference[oaicite:4]{index=4}
 
 
 # -------------------------------------------------------------------
@@ -41,7 +41,7 @@ parent  = { fg = "#45403d", bg = "#1d2021" }
 current = { fg = "#1d2021", bg = "#a9b665", bold = true }
 preview = { fg = "#1d2021", bg = "#d8a657", bold = true }
 
-# Esto es clave: hace que el indicador sea más notorio (cuadradito)
+# This is key: makes the indicator more visible (small block)
 padding = { open = "█", close = "█" }
 
 # -------------------------------------------------------------------
@@ -113,10 +113,10 @@ btn_labels = ["Yes", "No"]
 border = { fg = "#665c54" }
 title  = { fg = "#d8a657", bold = true }
 
-# No colorees el fondo de toda la columna (así desaparece el “bloque gris”)
-tbl_col  = { fg = "#d4be98", bold = true }   # sin bg
+# Do not color the full column background (removes the "gray block")
+tbl_col  = { fg = "#d4be98", bold = true }   # no bg
 
-# Dejá el highlight fuerte SOLO en la celda activa
+# Keep strong highlight ONLY on the active cell
 tbl_cell = { fg = "#1d2021", bg = "#a9b665", bold = true }
 
 [notify]
@@ -195,8 +195,8 @@ rules = [
 # Icon overrides
 # -------------------------------------------------------------------
 [icon]
-# Workaround para catppuccin/yazi#35 y casos similares:
-# forzamos el color del icono de cualquier directorio por glob (prioridad alta).
+# Workaround for catppuccin/yazi#35 and similar cases:
+# force directory icon color via glob (high priority).
 prepend_globs = [
   { url = "*/", text = "", fg = "#7daea3" },
 ]

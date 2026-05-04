@@ -37,7 +37,7 @@ ICON_INFO="ℹ"
 ICON_PKG="📦"
 
 # --- Packages List ---
-# Agrega aquí tus carpetas a gestionar
+# Add your folders to manage here
 PACKAGES=(
 	"hypr"
 	"kitty"

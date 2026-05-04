@@ -336,7 +336,7 @@ function looksLikeImplementationDecisionPrompt(text: string): boolean {
 		"implement this plan",
 		"stay in plan mode",
 		"refine the plan",
-		"proceda con la implementación",
+		"proceed with implementation",
 		"seguir refinando",
 		"ajustar algo del plan",
 	]

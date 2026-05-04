@@ -2,7 +2,7 @@
     font = "JetBrainsMono Nerd Font 12"
     markup = full
 
-    # --- GEOMETRÍA Y POSICIONAMIENTO ---
+    # --- GEOMETRY AND POSITIONING ---
     # Ancho fijo (min, max)
     width = (320, 320)
 
@@ -13,7 +13,7 @@
     # La sintaxis vieja era 20x40. La nueva es (20, 40)
     offset = (20, 40)
 
-    # --- ESTÉTICA ---
+    # --- AESTHETICS ---
     icon_position = left
     min_icon_size = 48
     max_icon_size = 64

@@ -3,7 +3,7 @@ return {
     lazy = false,
     dependencies = {
         "nvim-treesitter/nvim-treesitter",
-        "L3MON4D3/LuaSnip", -- si usás snippets
+        "L3MON4D3/LuaSnip", -- if you use snippets
     },
     config = function()
         require("tabout").setup {
@@ -12,7 +12,7 @@ return {
             act_as_tab = true,
             act_as_shift_tab = false,
             enable_backwards = true,
-            completion = true, -- o true, si querés que colabore con cmp
+            completion = true, -- keep true to integrate with cmp
             ignore_beginning = true,
             tabouts = {
                 { open = "'", close = "'" },

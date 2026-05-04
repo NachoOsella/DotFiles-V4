@@ -985,7 +985,7 @@ export default function piLocalMemory(pi: ExtensionAPI) {
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
       ctx.ui.setStatus("memory", `${ctx.ui.theme.fg("error", "◆")} ${ctx.ui.theme.fg("muted", "mem unavailable")}`);
-      ctx.ui.notify(`Pi Local Memory no está disponible. Instalá sqlite3 (Arch: sudo pacman -S sqlite). ${msg}`, "warning");
+      ctx.ui.notify(`Pi Local Memory is not available. Install sqlite3 (Arch: sudo pacman -S sqlite). ${msg}`, "warning");
     }
   });
 
@@ -1435,7 +1435,7 @@ export default function piLocalMemory(pi: ExtensionAPI) {
     handler: async (args, ctx) => {
       const [title, ...body] = args.split("::");
       const content = body.join("::").trim();
-      if (!title?.trim() || !content) return ctx.ui.notify("Uso: /memsave título :: contenido", "warning");
+      if (!title?.trim() || !content) return ctx.ui.notify("Usage: /memsave title :: content", "warning");
       try {
         const res = await saveObservation(pi, ctx, { title: title.trim(), content, type: "manual" });
         ctx.ui.notify(JSON.stringify(res.result, null, 2), "info");

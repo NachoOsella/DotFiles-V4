@@ -12,8 +12,8 @@ return {
             "eslint_d",
             "json-lsp",
             "yaml-language-server",
-            "dockerfile-language-server", -- Nombre corregido
-            "docker-compose-language-service", -- Nombre corregido (es service, no server)
+            "dockerfile-language-server",
+            "docker-compose-language-service",
             "ruff",
             "pyright",
         },

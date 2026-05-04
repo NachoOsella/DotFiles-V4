@@ -4,7 +4,7 @@ gui:
       - "#d8a657" # yellow
       - bold
     inactiveBorderColor:
-      - "#504945" # bg4 (más visible que #32302f)
+      - "#504945" # bg4 (more visible than #32302f)
 
     searchingActiveBorderColor:
       - "#89b482" # aqua/green
