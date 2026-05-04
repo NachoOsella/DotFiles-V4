@@ -56,7 +56,6 @@ PACKAGES=(
 	"gtk"
 	"qt"
 	"starship"
-	"opencode"
 	"keepassxc"
 	"systemd-user"
 	"pi"

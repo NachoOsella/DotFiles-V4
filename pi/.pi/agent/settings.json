@@ -8,7 +8,8 @@
     "git:github.com/tintinweb/pi-subagents",
     "git:github.com/tintinweb/pi-tasks",
     "git:github.com/nicobailon/pi-web-access",
-    "git:github.com/buddingnewinsights/pi-diff"
+    "git:github.com/buddingnewinsights/pi-diff",
+    "git:github.com/mattleong/pi-better-openai"
   ],
   "enableSkillCommands": true,
   "extensions": [],

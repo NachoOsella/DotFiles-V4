@@ -39,7 +39,4 @@ set --export PATH $BUN_INSTALL/bin $PATH
 # nvim mason
 fish_add_path ~/.local/share/nvim/mason/bin
 
-# opencode
-fish_add_path "$HOME/.opencode/bin"
-
 fish_add_path /home/nacho/.spicetify

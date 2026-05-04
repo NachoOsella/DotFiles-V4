@@ -1,7 +1,7 @@
 /**
  * Session Stats Extension
  *
- * Styled after opencode's stats output. Plain white text, no ANSI colors.
+ * Plain white text, no ANSI colors.
  *
  * Commands:
  *   /stats         - Statistics for the current session
