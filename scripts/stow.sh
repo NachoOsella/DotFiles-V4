@@ -51,7 +51,6 @@ PACKAGES=(
 	"btop"
 	"fastfetch"
 	"lsd"
-	"wlogout"
 	"zathura"
 	"gtk"
 	"qt"
