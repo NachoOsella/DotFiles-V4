@@ -37,3 +37,6 @@ pi/.pi/agent/pi-crash.log
 *.key
 *credentials*
 *secret*
+
+# KeePassXC local config can contain KeeShare private keys
+keepassxc/.config/keepassxc/keepassxc.ini
