@@ -257,26 +257,31 @@ show_spinner() {
 
 execute_spinner() {
 	local msg="$1"
-	local cmd="$2"
-	local log_file="/tmp/dotfiles_spinner.log"
+	shift
+	local log_file
+	log_file="$(mktemp -t dotfiles-spinner.XXXXXX.log)"
 
 	printf "   ${CYAN}➜${RESET}  %-40s" "$msg"
 
-	# Run command in background and capture output
-	eval "$cmd" >"$log_file" 2>&1 &
+	# Run the command as an argument array to preserve quoting and avoid eval.
+	"$@" >"$log_file" 2>&1 &
 	local pid=$!
 
 	show_spinner "$pid"
+	set +e
 	wait "$pid"
 	local exit_code=$?
+	set -e
 
 	if [ $exit_code -eq 0 ]; then
 		printf "${GREEN}${ICON_OK}${RESET}\n"
+		rm -f "$log_file"
 	else
 		printf "${RED}${ICON_ERR}${RESET}\n"
 		echo -e "\n${RED}Error Output:${RESET}"
 		cat "$log_file"
 		echo ""
+		rm -f "$log_file"
 		return 1
 	fi
 }

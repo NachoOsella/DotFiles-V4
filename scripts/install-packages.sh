@@ -77,9 +77,9 @@ if ((${#PACMAN_PACKAGES[@]} > 0)); then
 	log "Installing ${#PACMAN_PACKAGES[@]} official packages for host '$HOST'"
 	print_package_grid "${PACMAN_PACKAGES[@]}"
 	if ((DRY_RUN)); then
-		execute_spinner "Simulating pacman installation" "sleep 1.5"
+		execute_spinner "Simulating pacman installation" sleep 1.5
 	else
-		execute_spinner "Running pacman" "sudo pacman -Syu --needed --noconfirm ${PACMAN_PACKAGES[*]}"
+		execute_spinner "Running pacman" sudo pacman -Syu --needed --noconfirm "${PACMAN_PACKAGES[@]}"
 	fi
 else
 	warn "No pacman packages declared for host '$HOST'"
@@ -106,7 +106,7 @@ fi
 log "Installing ${#AUR_PACKAGES[@]} AUR packages with $HELPER"
 print_package_grid "${AUR_PACKAGES[@]}"
 if ((DRY_RUN)); then
-	execute_spinner "Simulating $HELPER installation" "sleep 1.5"
+	execute_spinner "Simulating $HELPER installation" sleep 1.5
 else
-	execute_spinner "Running $HELPER" "$HELPER -S --needed --noconfirm ${AUR_PACKAGES[*]}"
+	execute_spinner "Running $HELPER" "$HELPER" -S --needed --noconfirm "${AUR_PACKAGES[@]}"
 fi

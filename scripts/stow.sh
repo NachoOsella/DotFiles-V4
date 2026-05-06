@@ -101,34 +101,42 @@ check_requirements() {
 }
 
 execute() {
-	local cmd="$1"
-	local msg="$2"
-	local log_file="/tmp/stow_debug.log"
+	local msg="$1"
+	shift
+	local log_file
+	log_file="$(mktemp -t stow-debug.XXXXXX.log)"
 
 	log_task "$msg"
-	eval "$cmd" >"$log_file" 2>&1 &
+	# Run the command as an argument array to preserve quoting and avoid eval.
+	"$@" >"$log_file" 2>&1 &
 	local pid=$!
 
 	show_spinner "$pid"
+	set +e
 	wait "$pid"
 	local exit_code=$?
+	set -e
 
 	if [[ $exit_code -eq 0 ]]; then
 		log_success
+		rm -f "$log_file"
 	else
 		log_fail
 		echo -e "\n${RED}Error output:${RESET}"
 		cat "$log_file"
 		echo ""
+		rm -f "$log_file"
 		return 1
 	fi
 }
 
 check_stow_conflicts() {
 	local pkg="$1"
-	local log_file="/tmp/stow_conflicts_${pkg}.log"
+	local log_file
+	log_file="$(mktemp -t "stow-conflicts-${pkg}.XXXXXX.log")"
 
 	if (cd "$DOTFILES_DIR" && stow -n -v "$pkg") >"$log_file" 2>&1; then
+		rm -f "$log_file"
 		return 0
 	fi
 
@@ -138,6 +146,7 @@ check_stow_conflicts() {
 	echo ""
 	cat "$log_file"
 	echo ""
+	rm -f "$log_file"
 	return 1
 }
 
@@ -152,9 +161,10 @@ stow_pkg() {
 
 	if [[ -z "$action" ]]; then
 		check_stow_conflicts "$pkg"
+		execute "$pkg" stow -d "$DOTFILES_DIR" -t "$HOME" "$pkg"
+	else
+		execute "$pkg" stow -d "$DOTFILES_DIR" -t "$HOME" "$action" "$pkg"
 	fi
-
-	execute "cd '$DOTFILES_DIR' && stow $action '$pkg'" "$pkg"
 }
 
 cmd_install() {
@@ -280,7 +290,7 @@ main() {
 		show_help
 		exit 1
 		;;
-esac
+	esac
 }
 
 main "$@"

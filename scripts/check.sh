@@ -57,20 +57,37 @@ if ! grep -q '"systemd-user"' "$DOTFILES_DIR/scripts/stow.sh"; then
 	STATUS=1
 fi
 
-for script in \
-	"$DOTFILES_DIR/scripts/bootstrap.sh" \
-	"$DOTFILES_DIR/scripts/preflight.sh" \
-	"$DOTFILES_DIR/scripts/install-packages.sh" \
-	"$DOTFILES_DIR/scripts/apply-system.sh" \
-	"$DOTFILES_DIR/scripts/enable-services.sh" \
-	"$DOTFILES_DIR/scripts/capture-system.sh" \
-	"$DOTFILES_DIR/scripts/check.sh" \
-	"$DOTFILES_DIR/scripts/install_systemd.sh" \
-	"$DOTFILES_DIR/scripts/lib.sh"; do
+SHELL_SCRIPTS=(
+	"$DOTFILES_DIR/scripts/bootstrap.sh"
+	"$DOTFILES_DIR/scripts/preflight.sh"
+	"$DOTFILES_DIR/scripts/install-packages.sh"
+	"$DOTFILES_DIR/scripts/apply-system.sh"
+	"$DOTFILES_DIR/scripts/enable-services.sh"
+	"$DOTFILES_DIR/scripts/capture-system.sh"
+	"$DOTFILES_DIR/scripts/check.sh"
+	"$DOTFILES_DIR/scripts/install_systemd.sh"
+	"$DOTFILES_DIR/scripts/lib.sh"
+	"$DOTFILES_DIR/scripts/set-wallpaper.sh"
+	"$DOTFILES_DIR/rofi/.config/rofi/rofi-power-menu.sh"
+	"$DOTFILES_DIR/rofi/.config/rofi/rofi-wifi-menu.sh"
+	"$DOTFILES_DIR/hypr/.config/hypr/scripts/lid_handler.sh"
+	"$DOTFILES_DIR/hypr/.config/hypr/scripts/songdetail.sh"
+)
+
+for script in "${SHELL_SCRIPTS[@]}"; do
 	if ! bash -n "$script"; then
 		STATUS=1
 	fi
 done
+
+if command_exists shellcheck; then
+	# Run ShellCheck when available while keeping the check script usable on minimal installs.
+	if ! shellcheck -x "${SHELL_SCRIPTS[@]}"; then
+		STATUS=1
+	fi
+else
+	warn "shellcheck is not installed; skipping static shell analysis"
+fi
 
 if ((STATUS == 0)); then
 	log "Checks passed"
