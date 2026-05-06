@@ -6,130 +6,124 @@ configuration {
 @import "~/.config/rofi/fonts.rasi"
 
 * {
-    border-colour: var(selected);
-    border: var(selected1);
-    background-colour: var(background);
-    foreground-colour: var(foreground);
-    normal-background: var(background);
-    normal-foreground: var(foreground);
-    selected-normal-background: #83a598;
-    selected-normal-foreground: var(background);
+    border-colour:               @aqua;
+    background-colour:           @bg;
+    foreground-colour:           @fg;
+    normal-background:           transparent;
+    normal-foreground:           @fg;
+    selected-normal-background:  @hover;
+    selected-normal-foreground:  @fg;
 }
 
 window {
-    transparency: "real";
-    location: center;
-    anchor: center;
-    fullscreen: false;
-    width: 340px;
-
-    enabled: true;
-    margin: 0px;
-    padding: 0px;
-    border: 0px;
-    border-radius: 0px;
-    border-color: @border-colour;
-    cursor: "default";
-    background-color: @background-colour;
+    transparency:     "real";
+    location:         center;
+    anchor:           center;
+    fullscreen:       false;
+    width:            340px;
+    enabled:          true;
+    margin:           0px;
+    padding:          0px;
+    border:           0px;
+    border-radius:    0px;
+    border-color:     @border-colour;
+    cursor:           "default";
+    background-color: transparent;
 }
 
 mainbox {
-    enabled: true;
-    spacing: 8px;
-    margin: 0px;
-    padding: 16px;
-    border: 3px solid;
-    border-radius: 0px;
-    border-color: @border;
-    background-color: transparent;
-    children: [ "inputbar", "listview" ];
+    enabled:          true;
+    children:         [ "inputbar", "listview" ];
+    spacing:          14px;
+    margin:           0px;
+    padding:          22px;
+    border:           2px solid;
+    border-radius:    0px;
+    border-color:     @border-soft;
+    background-color: @bg;
 }
 
 inputbar {
-    enabled: true;
-    spacing: 8px;
-    margin: 0px;
-    padding: 0px;
-    border: 2px solid;
-    border-radius: 0px;
-    border-color: @urgent;
-    background-color: transparent;
-    text-color: @foreground-colour;
-    children: [ "textbox-prompt-colon", "entry" ];
+    enabled:          true;
+    children:         [ "entry" ];
+    spacing:          0px;
+    margin:           0px;
+    padding:          9px 12px;
+    border:           1px solid;
+    border-radius:    0px;
+    border-color:     @aqua;
+    background-color: @surface;
+    text-color:       @foreground-colour;
 }
 
 textbox-prompt-colon {
-    enabled: true;
-    expand: false;
-    str: "Search:";
-    padding: 5px 9px;
-    margin: 0px;
-    border: 0px;
-    border-radius: 0px;
-    background-color: @urgent;
-    text-color: @background;
+    enabled:          false;
+    expand:           false;
+    str:              "";
+    background-color: transparent;
+    text-color:       @fg-muted;
 }
 
 entry {
-    enabled: true;
-    padding: 5px 8px;
-    margin: 0px;
-    border: 0px;
-    border-radius: 0px;
-    background-color: @background;
-    text-color: @foreground;
-    cursor: text;
-    placeholder: "";
-    placeholder-color: @selected1;
+    enabled:           true;
+    padding:           0px;
+    margin:            0px;
+    border:            0px;
+    border-radius:     0px;
+    background-color:  transparent;
+    text-color:        @foreground-colour;
+    cursor:            text;
+    placeholder:       "power action...";
+    placeholder-color: @fg-muted;
 }
 
 listview {
-    enabled: true;
-    columns: 1;
-    lines: 6;
-    cycle: true;
-    dynamic: true;
-    scrollbar: false;
-    layout: vertical;
-    reverse: false;
-    fixed-height: false;
-    fixed-columns: false;
-
-    spacing: 6px;
-    margin: 0px;
-    padding: 0px;
-    border: 0px;
-    border-radius: 0px;
-    border-color: @border;
+    enabled:          true;
+    columns:          1;
+    lines:            6;
+    cycle:            true;
+    dynamic:          true;
+    scrollbar:        false;
+    layout:           vertical;
+    reverse:          false;
+    fixed-height:     false;
+    fixed-columns:    false;
+    spacing:          6px;
+    margin:           0px;
+    padding:          0px;
+    border:           0px;
+    border-radius:    0px;
+    border-color:     @border-soft;
     background-color: transparent;
-    text-color: @selected1;
-    cursor: "default";
+    text-color:       @foreground-colour;
+    cursor:           "default";
 }
 
 element {
-    enabled: true;
-    spacing: 0px;
-    margin: 0px;
-    padding: 8px 10px;
-    border: 0px;
-    border-radius: 0px;
-    border-color: @border-colour;
+    enabled:          true;
+    spacing:          0px;
+    margin:           0px;
+    padding:          8px 10px;
+    border:           1px solid;
+    border-radius:    0px;
+    border-color:     transparent;
     background-color: transparent;
-    text-color: @foreground-colour;
-    cursor: pointer;
+    text-color:       @foreground-colour;
+    cursor:           pointer;
 }
 
 element selected.normal {
+    border-color:     @hover-border;
     background-color: var(selected-normal-background);
-    text-color: var(selected-normal-foreground);
+    text-color:       var(selected-normal-foreground);
 }
 
 element-text {
-    font: "JetBrainsMono Nerd Font Bold 13";
+    font:             "JetBrainsMono Nerd Font Bold 13";
     background-color: transparent;
-    text-color: inherit;
-    highlight: inherit;
-    cursor: inherit;
-    vertical-align: 0.5;
+    text-color:       inherit;
+    highlight:        inherit;
+    cursor:           inherit;
+    vertical-align:   0.5;
     horizontal-align: 0.0;
 }

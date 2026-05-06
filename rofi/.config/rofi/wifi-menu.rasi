@@ -5,20 +5,22 @@ window {
 }
 
 mainbox {
-    padding: 18px;
+    padding: 22px;
 }
 
 inputbar {
-    border: 3px solid;
-    border-color: #ea6962;
+    border: 1px solid;
+    border-color: @aqua;
 }
 
 textbox-prompt-colon {
-    str: "Wi-Fi:";
+    enabled: false;
+    str: "";
 }
 
 entry {
-    padding: 5px 8px;
+    padding: 0px;
+    placeholder: "select network...";
 }
 
 listview {
@@ -27,7 +29,7 @@ listview {
 }
 
 element {
-    padding: 7px 10px;
+    padding: 8px 10px;
 }
 
 element-text {

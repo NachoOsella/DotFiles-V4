@@ -1,10 +1,22 @@
-
 * {
-    background:     #1d2021FF;
-    background-alt: #3c3836FF;
-    foreground:     #ebdbb2FF;
-    selected:       #ea6962FF;
-    selected1:      #D8A657FF;
-    active:         #98971aFF;
-    urgent:         #ea6962FF;
+    bg:              #1d2021FF;
+    bg-alt:          #282828FF;
+    surface:         #32302FFF;
+    surface-soft:    #282828E6;
+    hover:           #3c3836FF;
+    hover-border:    #504945FF;
+    fg:              #d4be98FF;
+    fg-muted:        #928374FF;
+    aqua:            #89b482FF;
+    aqua-soft:       #89b48226;
+    yellow:          #d8a657FF;
+    border-soft:     #3c3836FF;
+
+    background:      @bg;
+    background-alt:  @surface;
+    foreground:      @fg;
+    selected:        @aqua;
+    selected1:       @yellow;
+    active:          @hover;
+    urgent:          @yellow;
 }

@@ -1,7 +1,7 @@
 {
-  "lastChangelogVersion": "0.72.1",
+  "lastChangelogVersion": "0.73.0",
   "theme": "gruvbox-material-dark-hard",
-  "defaultThinkingLevel": "minimal",
+  "defaultThinkingLevel": "low",
   "hideThinkingBlock": false,
   "quietStartup": true,
   "packages": [
@@ -14,6 +14,6 @@
   "enableSkillCommands": true,
   "extensions": [],
   "defaultProvider": "openai-codex",
-  "defaultModel": "gpt-5.3-codex",
+  "defaultModel": "gpt-5.5",
   "steeringMode": "one-at-a-time"
 }
