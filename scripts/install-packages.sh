@@ -79,7 +79,7 @@ if ((${#PACMAN_PACKAGES[@]} > 0)); then
 	if ((DRY_RUN)); then
 		execute_spinner "Simulating pacman installation" "sleep 1.5"
 	else
-		execute_spinner "Running pacman" "sudo pacman -Sy --needed --noconfirm ${PACMAN_PACKAGES[*]}"
+		execute_spinner "Running pacman" "sudo pacman -Syu --needed --noconfirm ${PACMAN_PACKAGES[*]}"
 	fi
 else
 	warn "No pacman packages declared for host '$HOST'"

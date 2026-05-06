@@ -12,10 +12,14 @@ SKIP_PACKAGES=0
 SKIP_SYSTEM=0
 SKIP_STOW=0
 SKIP_SERVICES=0
+ASSUME_YES=0
 
 usage() {
 	cat <<'EOF'
-Usage: ./scripts/bootstrap.sh [--host HOST] [--dry-run] [--skip-packages] [--skip-system] [--skip-stow] [--skip-services]
+Usage: ./scripts/bootstrap.sh [--host HOST] [--dry-run] [--yes] [--skip-packages] [--skip-system] [--skip-stow] [--skip-services]
+
+The full bootstrap can install packages, write to /etc, and change systemd services.
+Use --dry-run to preview changes or --yes to confirm a non-interactive full run.
 EOF
 }
 
@@ -40,6 +44,9 @@ while [[ $# -gt 0 ]]; do
 		;;
 	--skip-services)
 		SKIP_SERVICES=1
+		;;
+	--yes | -y)
+		ASSUME_YES=1
 		;;
 	-h | --help)
 		usage
@@ -91,6 +98,15 @@ banner() {
 }
 
 banner
+
+if ((!DRY_RUN && !ASSUME_YES)); then
+	warn "Full bootstrap may install packages, write to /etc, and change systemd services."
+	if [[ ! -t 0 ]]; then
+		die "Refusing non-interactive full bootstrap without --yes. Run --dry-run first."
+	fi
+	read -r -p "Type 'bootstrap' to continue: " confirmation
+	[[ "$confirmation" == "bootstrap" ]] || die "Bootstrap cancelled."
+fi
 
 log_task "Starting Preflight Checks"
 bash "$SCRIPT_DIR/preflight.sh" "${PREFLIGHT_ARGS[@]}"

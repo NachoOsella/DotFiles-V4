@@ -1,43 +1,30 @@
 #!/usr/bin/env bash
 
-# ==============================================================================
-#  🛠️  PROFESSIONAL STOW MANAGER
-# ==============================================================================
-#  A minimal, animated, and robust dotfiles manager for Hyprland setups.
-#  Author: Nacho
-# ==============================================================================
-
-# --- Safety First ---
+# Manages user-level dotfile links with GNU Stow.
+# The installer checks for conflicts before linking so existing user files are
+# not overwritten or adopted implicitly.
 set -euo pipefail
 IFS=$'\n\t'
 
-# --- Configuration ---
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DOTFILES_DIR="${DOTFILES_DIR:-$(cd "$SCRIPT_DIR/.." && pwd)}"
-BACKUP_DIR="${HOME}/.dotfiles_backup_$(date +%Y%m%d_%H%M%S)"
 
-# --- Gruvbox Palette & Styling ---
 BOLD='\033[1m'
 DIM='\033[2m'
 RESET='\033[0m'
-
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[0;33m'
 BLUE='\033[0;34m'
 PURPLE='\033[0;35m'
 CYAN='\033[0;36m'
-ORANGE='\033[0;91m' # Approx
 
-# Icons
-ICON_OK="✔"
-ICON_FAIL="✖"
-ICON_WARN="⚠"
-ICON_INFO="ℹ"
-ICON_PKG="📦"
+ICON_OK="OK"
+ICON_FAIL="FAIL"
+ICON_WARN="WARN"
+ICON_INFO="INFO"
+ICON_PKG="PKG"
 
-# --- Packages List ---
-# Add your folders to manage here
 PACKAGES=(
 	"hypr"
 	"kitty"
@@ -61,38 +48,29 @@ PACKAGES=(
 	"pcmanfm-qt"
 )
 
-# --- UI Functions ---
-
 banner() {
-	clear
-	echo -e "${ORANGE}${BOLD}"
-	echo "   _____ __                 __  "
-	echo "  / ___// /_____ _      __ / /  "
-	echo "  \__ \/ __/ __ \ | /| / // /   "
-	echo " ___/ / /_/ /_/ / |/ |/ //_/    "
-	echo "/____/\__/\____/|__/|__(_)      "
-	echo -e "${RESET}"
-	echo -e "${DIM}  Dotfiles Manager v2.0 ${RESET}"
-	echo -e "${DIM}  Directory: ${DOTFILES_DIR} ${RESET}"
+	if [[ -t 1 && -n ${TERM:-} ]]; then
+		clear || true
+	fi
+	echo -e "${BOLD}Stow dotfiles manager${RESET}"
+	echo -e "${DIM}Directory: ${DOTFILES_DIR}${RESET}"
 	echo ""
 }
 
 show_spinner() {
 	local pid=$1
 	local delay=0.1
-	local spinstr='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
+	local spinstr='|/-\\'
 
-	tput civis # Hide cursor
-
-	while ps -p "$pid" >/dev/null; do
+	tput civis 2>/dev/null || true
+	while ps -p "$pid" >/dev/null 2>&1; do
 		local temp=${spinstr#?}
 		printf "  ${CYAN}%c${RESET}  " "$spinstr"
-		local spinstr=$temp${spinstr%"$temp"}
-		sleep $delay
+		spinstr=$temp${spinstr%"$temp"}
+		sleep "$delay"
 		printf "\b\b\b\b\b"
 	done
-
-	tput cnorm # Show cursor
+	tput cnorm 2>/dev/null || true
 	printf "     \b\b\b\b\b"
 }
 
@@ -102,51 +80,15 @@ log_task() {
 }
 
 log_success() {
-	printf "${GREEN}${ICON_OK} Success${RESET}\n"
+	printf "${GREEN}${ICON_OK}${RESET}\n"
 }
 
 log_fail() {
-	printf "${RED}${ICON_FAIL} Failed${RESET}\n"
-}
-
-log_skip() {
-	printf "${YELLOW}${ICON_WARN} Skipped${RESET}\n"
-}
-
-# --- Core Logic ---
-
-# Executes a command with a spinner and error handling
-execute() {
-	local cmd="$1"
-	local msg="$2"
-	local log_file="/tmp/stow_debug.log"
-
-	log_task "$msg"
-
-	# Run command in background and capture output
-	eval "$cmd" >"$log_file" 2>&1 &
-	local pid=$!
-
-	# Show spinner while process is running
-	show_spinner "$pid"
-
-	# Wait for process to finish and get exit code
-	wait "$pid"
-	local exit_code=$?
-
-	if [ $exit_code -eq 0 ]; then
-		log_success
-	else
-		log_fail
-		echo -e "\n${RED}Error Output:${RESET}"
-		cat "$log_file"
-		echo ""
-		return 1
-	fi
+	printf "${RED}${ICON_FAIL}${RESET}\n"
 }
 
 check_requirements() {
-	if ! command -v stow &>/dev/null; then
+	if ! command -v stow >/dev/null 2>&1; then
 		echo -e "${RED}${ICON_FAIL} GNU Stow is not installed.${RESET}"
 		echo "Install it with: sudo pacman -S stow"
 		exit 1
@@ -158,33 +100,70 @@ check_requirements() {
 	fi
 }
 
-stow_pkg() {
-	local pkg=$1
-	local action=${2:-""} # "" = install, -D = delete, -R = restow
+execute() {
+	local cmd="$1"
+	local msg="$2"
+	local log_file="/tmp/stow_debug.log"
 
-	# Check if package directory exists
-	if [[ ! -d "${DOTFILES_DIR}/${pkg}" ]]; then
-		printf "${YELLOW}${ICON_WARN}  %-30s ${DIM}Directory not found${RESET}\n" "$pkg"
+	log_task "$msg"
+	eval "$cmd" >"$log_file" 2>&1 &
+	local pid=$!
+
+	show_spinner "$pid"
+	wait "$pid"
+	local exit_code=$?
+
+	if [[ $exit_code -eq 0 ]]; then
+		log_success
+	else
+		log_fail
+		echo -e "\n${RED}Error output:${RESET}"
+		cat "$log_file"
+		echo ""
+		return 1
+	fi
+}
+
+check_stow_conflicts() {
+	local pkg="$1"
+	local log_file="/tmp/stow_conflicts_${pkg}.log"
+
+	if (cd "$DOTFILES_DIR" && stow -n -v "$pkg") >"$log_file" 2>&1; then
 		return 0
 	fi
 
-	# Handle conflicts strictly by backing up if installing
-	if [[ -z "$action" ]]; then
-		# This is a basic conflict check logic if needed in future
-		# For now, we trust stow's output which we capture
-		:
-	fi
-
-	execute "cd $DOTFILES_DIR && stow $action $pkg" "$pkg"
+	echo -e "${RED}${ICON_FAIL} Conflicts detected for package '${pkg}'.${RESET}"
+	echo -e "${YELLOW}GNU Stow refused to link this package because target files already exist.${RESET}"
+	echo "Review the output below, back up or move your existing files, then retry."
+	echo ""
+	cat "$log_file"
+	echo ""
+	return 1
 }
 
-# --- Commands ---
+stow_pkg() {
+	local pkg=$1
+	local action=${2:-}
+
+	if [[ ! -d "${DOTFILES_DIR}/${pkg}" ]]; then
+		printf "${YELLOW}${ICON_WARN}${RESET}  %-30s ${DIM}Directory not found${RESET}\n" "$pkg"
+		return 0
+	fi
+
+	if [[ -z "$action" ]]; then
+		check_stow_conflicts "$pkg"
+	fi
+
+	execute "cd '$DOTFILES_DIR' && stow $action '$pkg'" "$pkg"
+}
 
 cmd_install() {
-	local targets=("${@}")
-	if [[ ${#targets[@]} -eq 0 ]]; then targets=("${PACKAGES[@]}"); fi
+	local targets=("$@")
+	if [[ ${#targets[@]} -eq 0 ]]; then
+		targets=("${PACKAGES[@]}")
+	fi
 
-	echo -e "${GREEN}${BOLD}Installing configurations...${RESET}\n"
+	echo -e "${GREEN}${BOLD}Installing user configurations...${RESET}\n"
 
 	for pkg in "${targets[@]}"; do
 		stow_pkg "$pkg" ""
@@ -192,13 +171,13 @@ cmd_install() {
 }
 
 cmd_remove() {
-	local targets=("${@}")
+	local targets=("$@")
 	if [[ ${#targets[@]} -eq 0 ]]; then
-		echo -e "${RED}Please specify packages to remove or use 'remove-all'${RESET}"
+		echo -e "${RED}Please specify packages to remove or use 'remove-all'.${RESET}"
 		exit 1
 	fi
 
-	echo -e "${RED}${BOLD}Removing configurations...${RESET}\n"
+	echo -e "${RED}${BOLD}Removing user configurations...${RESET}\n"
 
 	for pkg in "${targets[@]}"; do
 		stow_pkg "$pkg" "-D"
@@ -206,10 +185,12 @@ cmd_remove() {
 }
 
 cmd_restow() {
-	local targets=("${@}")
-	if [[ ${#targets[@]} -eq 0 ]]; then targets=("${PACKAGES[@]}"); fi
+	local targets=("$@")
+	if [[ ${#targets[@]} -eq 0 ]]; then
+		targets=("${PACKAGES[@]}")
+	fi
 
-	echo -e "${PURPLE}${BOLD}Refreshing configurations...${RESET}\n"
+	echo -e "${PURPLE}${BOLD}Refreshing user configurations...${RESET}\n"
 
 	for pkg in "${targets[@]}"; do
 		stow_pkg "$pkg" "-R"
@@ -217,37 +198,23 @@ cmd_restow() {
 }
 
 cmd_status() {
-	echo -e "${CYAN}${BOLD}Link Status Report:${RESET}\n"
+	echo -e "${CYAN}${BOLD}Link status report:${RESET}\n"
 
-	local count=0
 	for pkg in "${PACKAGES[@]}"; do
-		# Check first config file found to guess status
 		local config_dir="${DOTFILES_DIR}/${pkg}/.config"
 
 		if [[ -d "$config_dir" ]]; then
-			# Get the first subfolder/file inside the package's .config
-			local target_name=$(ls -A "$config_dir" | head -n 1)
-
-			if [[ -z "$target_name" ]]; then continue; fi
+			local target_name
+			target_name=$(find "$config_dir" -mindepth 1 -maxdepth 1 -printf '%f\n' | head -n 1)
+			[[ -n "$target_name" ]] || continue
 
 			local target_path="${HOME}/.config/${target_name}"
-
 			if [[ -L "$target_path" ]]; then
 				printf "  ${GREEN}${ICON_OK}${RESET} %-15s ${DIM}-> Linked${RESET}\n" "$pkg"
 			elif [[ -e "$target_path" ]]; then
-				printf "  ${YELLOW}${ICON_WARN}${RESET} %-15s ${DIM}-> Exists (No Link)${RESET}\n" "$pkg"
+				printf "  ${YELLOW}${ICON_WARN}${RESET} %-15s ${DIM}-> Exists without link${RESET}\n" "$pkg"
 			else
 				printf "  ${DIM}${ICON_INFO}${RESET} %-15s ${DIM}-> Not installed${RESET}\n" "$pkg"
-			fi
-		else
-			# Try root level mapping (like .zshrc)
-			local root_file=$(ls -A "${DOTFILES_DIR}/${pkg}" | grep -vE "^\.config$" | head -n 1)
-			if [[ -n "$root_file" ]]; then
-				if [[ -L "${HOME}/${root_file}" ]]; then
-					printf "  ${GREEN}${ICON_OK}${RESET} %-15s ${DIM}-> Linked${RESET}\n" "$pkg"
-				else
-					printf "  ${DIM}${ICON_INFO}${RESET} %-15s ${DIM}-> Not installed${RESET}\n" "$pkg"
-				fi
 			fi
 		fi
 	done
@@ -255,17 +222,15 @@ cmd_status() {
 }
 
 show_help() {
-	echo -e "${BOLD}Usage:${RESET} ./stow.sh [command] [package]"
+	echo -e "${BOLD}Usage:${RESET} ./scripts/stow.sh [command] [package...]"
 	echo ""
-	echo -e "  ${GREEN}install, i${RESET}   [pkg]   Install package(s) (Default: all)"
-	echo -e "  ${RED}remove, r${RESET}    [pkg]   Remove package(s)"
-	echo -e "  ${PURPLE}restow, re${RESET}   [pkg]   Re-apply links (fix broken links)"
-	echo -e "  ${CYAN}status, st${RESET}           Show connection status"
-	echo -e "  ${YELLOW}list, ls${RESET}             List managed packages"
+	echo -e "  ${GREEN}install, i${RESET}   [pkg...]   Install package links. Defaults to all packages."
+	echo -e "  ${RED}remove, r${RESET}    [pkg...]   Remove package links."
+	echo -e "  ${PURPLE}restow, re${RESET}   [pkg...]   Re-apply package links. Defaults to all packages."
+	echo -e "  ${CYAN}status, st${RESET}              Show link status."
+	echo -e "  ${YELLOW}list, ls${RESET}                List managed packages."
 	echo ""
 }
-
-# --- Main Entry Point ---
 
 main() {
 	check_requirements
@@ -302,7 +267,7 @@ main() {
 		;;
 	list | ls)
 		banner
-		echo -e "${CYAN}Managed Packages:${RESET}"
+		echo -e "${CYAN}Managed packages:${RESET}"
 		printf "  %s\n" "${PACKAGES[@]}"
 		echo ""
 		;;
@@ -315,7 +280,7 @@ main() {
 		show_help
 		exit 1
 		;;
-	esac
+esac
 }
 
 main "$@"

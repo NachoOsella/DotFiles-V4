@@ -11,7 +11,7 @@
 
 <br/>
 
-**A minimal Arch + Hyprland setup with warm Gruvbox colors, sharp rectangles and a keyboard-first workflow.**
+**My personal Arch + Hyprland setup with warm Gruvbox colors, sharp rectangles and a keyboard-first workflow.**
 
 <br/>
 
@@ -38,14 +38,69 @@ Kitty · Fish · Starship · Waybar · Rofi · Neovim · Yazi · Fastfetch
 
 ---
 
-## Install
+## Before you install
 
-Clone the repo and run the bootstrap script:
+> Warning
+> These are my personal Arch Linux + Hyprland dotfiles.
+> The full bootstrap can install packages, write system configuration under `/etc`,
+> link user configs with GNU Stow, and enable, disable, or mask systemd services.
+> Read the scripts and run `--dry-run` before applying the full setup.
+
+This repository is best used as inspiration or as a starting point for your own setup.
+It is not intended to be a universal one-command installer for every machine.
+
+---
+
+## Install modes
+
+### Safe user config only
+
+Use this mode if you only want to link user-level dotfiles such as Hyprland, Kitty,
+Fish, Neovim, Waybar, Rofi, Yazi, and related configs.
 
 ```bash
 git clone https://github.com/NachoOsella/DotFiles-V4.git ~/dotfiles
 cd ~/dotfiles
-./scripts/bootstrap.sh
+./scripts/install-user.sh
+```
+
+This mode does not install packages, does not write to `/etc`, and does not change
+systemd services.
+
+If you only want specific configs, install individual Stow packages instead of
+running the full user install:
+
+```bash
+./scripts/stow.sh install kitty nvim waybar
+```
+
+You can list the available Stow packages with:
+
+```bash
+./scripts/stow.sh list
+```
+
+To preview what Stow would link before applying changes, run:
+
+```bash
+stow -n -v kitty nvim waybar
+```
+
+### Preview full Arch bootstrap
+
+Use dry-run mode before running the full bootstrap:
+
+```bash
+./scripts/bootstrap.sh --dry-run
+```
+
+### Full Arch bootstrap
+
+Use this only on an Arch Linux machine where you want to reproduce my full system
+setup:
+
+```bash
+./scripts/bootstrap.sh --yes
 ```
 
 Then reboot:
@@ -54,13 +109,20 @@ Then reboot:
 reboot
 ```
 
-That is the intended flow. The script installs the needed packages, applies the system configuration, links the dotfiles and enables the required services.
+The full bootstrap installs packages, applies system configuration, links dotfiles,
+and enables the configured services. If you omit `--yes`, the script asks for an
+explicit confirmation before changing the system.
 
-If you only want to see what it would do:
+---
 
-```bash
-./scripts/bootstrap.sh --dry-run
-```
+## What the full bootstrap can change
+
+- Installs official packages from `packages/pacman.txt` and host overlays.
+- Installs AUR packages from `packages/aur.txt` and host overlays.
+- Copies versioned system files from `system/etc` and `hosts/<host>/system/etc` to `/etc`.
+- Links user configuration with GNU Stow.
+- Enables system and user services declared under `hosts/<host>/services`.
+- Can disable and mask conflicting system units declared in host service manifests.
 
 ---
 
