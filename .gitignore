@@ -13,6 +13,7 @@ nvim/.config/nvim/.luarc.json
 
 # Fish
 fish/.config/fish/fish_variables
+fish/.config/fish/functions/facu.fish
 
 # Yazi plugins (reinstall with ya pack)
 yazi/.config/yazi/plugins/

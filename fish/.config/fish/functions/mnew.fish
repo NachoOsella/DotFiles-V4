@@ -1,6 +1,6 @@
 function mnew
-    read -p "GroupId (ej: com.nacho): " GROUPID
-    read -p "ArtifactId (ej: miapp): " ARTIFACTID
+    read -p "GroupId (e.g. com.example): " GROUPID
+    read -p "ArtifactId (e.g. my-app): " ARTIFACTID
     read -p "Archetype (default maven-archetype-quickstart): " ARCHETYPE
     if test -z "$ARCHETYPE"
         set ARCHETYPE maven-archetype-quickstart

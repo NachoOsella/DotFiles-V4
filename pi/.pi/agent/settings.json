@@ -1,7 +1,7 @@
 {
   "lastChangelogVersion": "0.73.0",
   "theme": "gruvbox-material-dark-hard",
-  "defaultThinkingLevel": "low",
+  "defaultThinkingLevel": "high",
   "hideThinkingBlock": false,
   "quietStartup": true,
   "packages": [
@@ -13,7 +13,7 @@
   ],
   "enableSkillCommands": true,
   "extensions": [],
-  "defaultProvider": "openai-codex",
-  "defaultModel": "gpt-5.5",
+  "defaultProvider": "github-copilot",
+  "defaultModel": "gpt-5.4-mini",
   "steeringMode": "one-at-a-time"
 }
