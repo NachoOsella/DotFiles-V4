@@ -53,14 +53,34 @@ It is not intended to be a universal one-command installer for every machine.
 
 ## Install modes
 
+### Recommended for other users
+
+If you are not me, avoid running the full bootstrap first. Start with the smaller
+scripts so you can choose exactly what you want to apply:
+
+```bash
+git clone https://github.com/NachoOsella/DotFiles-V4.git ~/dotfiles
+cd ~/dotfiles
+
+# Link all user configs only.
+./scripts/install-user.sh
+
+# Or link only selected configs.
+./scripts/stow.sh install kitty nvim waybar
+
+# Preview the full system bootstrap without applying changes.
+./scripts/bootstrap.sh --dry-run
+```
+
+The full `bootstrap.sh` is mainly for reproducing my own Arch + Hyprland system.
+For most users, installing selected Stow packages is the safer option.
+
 ### Safe user config only
 
 Use this mode if you only want to link user-level dotfiles such as Hyprland, Kitty,
 Fish, Neovim, Waybar, Rofi, Yazi, and related configs.
 
 ```bash
-git clone https://github.com/NachoOsella/DotFiles-V4.git ~/dotfiles
-cd ~/dotfiles
 ./scripts/install-user.sh
 ```
 
