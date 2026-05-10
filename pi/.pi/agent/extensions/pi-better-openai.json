@@ -23,5 +23,8 @@
     "defaultSave": "project",
     "outputFormat": "png",
     "timeoutMs": 180000
+  },
+  "pets": {
+    "enabled": false
   }
 }

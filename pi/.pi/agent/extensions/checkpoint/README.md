@@ -1,6 +1,6 @@
 # checkpoint extension
 
-Git-based checkpoint extension for [`pi-coding-agent`](https://www.npmjs.com/package/@mariozechner/pi-coding-agent).
+Git-based checkpoint extension for [`pi-coding-agent`](https://www.npmjs.com/package/@earendil-works/pi-coding-agent).
 
 ## What it does
 

@@ -10,9 +10,9 @@
  *   /stats all 30  - Last 30 days
  */
 
-import type { ExtensionAPI, ExtensionCommandContext } from "@mariozechner/pi-coding-agent";
-import { SessionManager } from "@mariozechner/pi-coding-agent";
-import { Text, matchesKey, truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
+import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import { SessionManager } from "@earendil-works/pi-coding-agent";
+import { Text, matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { readFile } from "node:fs/promises";
 
 // ---------------------------------------------------------------------------
