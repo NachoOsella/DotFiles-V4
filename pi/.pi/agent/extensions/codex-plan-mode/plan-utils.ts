@@ -85,54 +85,111 @@ const SAFE_PATTERNS: RegExp[] = [
 	/^\s*exa\b/i,
 ];
 
+const EXECUTION_SECTION_PATTERN = /^(implementation|implementation changes|key changes|changes|test plan|validation|verification|tests?)$/i;
+const IGNORED_STEP_PREFIX_PATTERN = /^(summary|assumptions?|defaults?|risks?|edge cases?|scope)\b/i;
+
+export interface ParsedPlan {
+	markdown: string;
+	steps: string[];
+}
+
+// Ensures plan mode exploration cannot execute commands that mutate the workspace or system.
 export function isSafePlanModeCommand(command: string): boolean {
 	const isDestructive = DESTRUCTIVE_PATTERNS.some((pattern) => pattern.test(command));
 	const isSafe = SAFE_PATTERNS.some((pattern) => pattern.test(command));
 	return !isDestructive && isSafe;
 }
 
+// Parses the full Markdown plan and derives concise execution steps for todo import.
+export function parsePlan(text: string): ParsedPlan {
+	const markdown = extractPlanMarkdown(text);
+	const steps = extractPlanStepsFromMarkdown(markdown || text);
+	return { markdown, steps };
+}
+
+// Backward-compatible step extraction for callers that only need executable items.
 export function extractPlanSteps(text: string): string[] {
+	return parsePlan(text).steps;
+}
+
+// Extracts plain Markdown plans while keeping legacy proposed_plan and Plan: output supported.
+function extractPlanMarkdown(text: string): string {
 	const normalized = text.replace(/\r\n/g, "\n");
+	const tagStart = String.fromCharCode(60);
+	const tagEnd = String.fromCharCode(62);
+	const proposedPlanPattern = `${tagStart}proposed_plan${tagEnd}\\s*\\n?([\\s\\S]*?)\\n?\\s*${tagStart}\\/proposed_plan${tagEnd}`;
+	const proposedPlan = normalized.match(new RegExp(proposedPlanPattern, "i"));
+	if (proposedPlan?.[1]?.trim()) return proposedPlan[1].trim();
+
+	const markdownPlan = normalized.match(/(?:^|\n)\s{0,3}#{1,6}\s+(?:plan|implementation plan|plan de implementaci[oó]n)\s*\n[\s\S]*/i);
+	if (markdownPlan) return normalized.slice(markdownPlan.index ?? 0).trim();
+
 	const headerMatch = normalized.match(/(?:^|\n)\s{0,3}(?:#{1,6}\s*)?(?:plan|implementation plan|plan de implementaci[oó]n)\s*:?\s*\n/i);
-	const section = headerMatch
-		? normalized.slice((headerMatch.index ?? 0) + headerMatch[0].length)
-		: normalized;
+	if (!headerMatch) return "";
 
+	return normalized.slice((headerMatch.index ?? 0) + headerMatch[0].length).trim();
+}
+
+// Derives todo-worthy steps from implementation and validation sections before using a broad fallback.
+function extractPlanStepsFromMarkdown(markdown: string): string[] {
+	const sectionSteps = extractSectionSteps(markdown);
+	if (sectionSteps.length > 0) return sectionSteps;
+
+	return extractListItems(markdown).filter((step) => !IGNORED_STEP_PREFIX_PATTERN.test(step));
+}
+
+function extractSectionSteps(markdown: string): string[] {
+	const lines = markdown.replace(/\r\n/g, "\n").split("\n");
 	const steps: string[] = [];
-	let blankStreak = 0;
+	let inExecutionSection = false;
 
-	for (const rawLine of section.split("\n")) {
+	for (const rawLine of lines) {
 		const line = rawLine.trimEnd();
-		if (line.trim().length === 0) {
-			blankStreak += 1;
-			if (steps.length > 0 && blankStreak >= 2) break;
-			continue;
-		}
-		blankStreak = 0;
-
-		const numbered = line.match(/^\s*(\d+)[\).:-]\s+(.+)$/);
-		if (numbered) {
-			steps.push(cleanStep(numbered[2]));
+		const heading = line.match(/^\s{0,3}#{1,6}\s+(.+?)\s*#*\s*$/);
+		if (heading) {
+			inExecutionSection = EXECUTION_SECTION_PATTERN.test(cleanHeading(heading[1]));
 			continue;
 		}
 
-		if (steps.length > 0 && /^\s*[-*]\s+/.test(line)) {
-			steps.push(cleanStep(line.replace(/^\s*[-*]\s+/, "")));
-			continue;
-		}
-
-		if (steps.length > 0 && /^\s+/.test(rawLine)) {
-			const last = steps.length - 1;
-			steps[last] = cleanStep(`${steps[last]} ${line.trim()}`);
-			continue;
-		}
-
-		if (steps.length > 0 && /^\s{0,3}(#{1,6}\s+|\*\*.+\*\*:?\s*)/.test(line)) {
-			break;
-		}
+		if (!inExecutionSection) continue;
+		const listItem = parseListItem(line);
+		if (listItem) steps.push(listItem);
 	}
 
+	return uniqueSteps(steps);
+}
+
+function extractListItems(markdown: string): string[] {
+	const steps: string[] = [];
+
+	for (const rawLine of markdown.replace(/\r\n/g, "\n").split("\n")) {
+		const listItem = parseListItem(rawLine.trimEnd());
+		if (listItem) steps.push(listItem);
+	}
+
+	return uniqueSteps(steps);
+}
+
+function parseListItem(line: string): string | undefined {
+	const numbered = line.match(/^\s*(\d+)[\).:-]\s+(.+)$/);
+	if (numbered) return cleanStep(numbered[2]);
+
+	const bullet = line.match(/^\s*[-*]\s+(.+)$/);
+	if (bullet) return cleanStep(bullet[1]);
+
+	return undefined;
+}
+
+function uniqueSteps(steps: string[]): string[] {
 	return steps.filter((step, index, arr) => step.length > 0 && arr.indexOf(step) === index);
+}
+
+function cleanHeading(heading: string): string {
+	return heading
+		.replace(/\*\*(.*?)\*\*/g, "$1")
+		.replace(/`([^`]+)`/g, "$1")
+		.replace(/[:：]\s*$/g, "")
+		.trim();
 }
 
 function cleanStep(step: string): string {

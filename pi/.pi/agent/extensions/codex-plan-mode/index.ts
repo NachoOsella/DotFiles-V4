@@ -1,29 +1,31 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Key } from "@earendil-works/pi-tui";
-import { extractPlanSteps, isSafePlanModeCommand } from "./plan-utils.js";
+import { parsePlan, isSafePlanModeCommand } from "./plan-utils.js";
 import { registerRequestUserInputTool } from "./request-user-input.js";
 
 const PLAN_MODE_TOOLS = ["read", "bash", "grep", "find", "ls", "request_user_input"];
 const FALLBACK_EXECUTE_TOOLS = ["read", "bash", "edit", "write", "grep", "find", "ls", "request_user_input"];
 const STATE_ENTRY = "codex-plan-mode";
 const STATUS_ID = "codex-plan-mode";
-const WIDGET_ID = "codex-plan-mode-steps";
-const MAX_WIDGET_STEPS = 6;
 
 interface PersistedState {
 	enabled?: boolean;
+	lastPlanMarkdown?: string;
 	lastPlanSteps?: string[];
 	previousTools?: string[];
 	kickoffPending?: boolean;
+	approvedPlanMarkdown?: string;
 	approvedPlanForExecution?: string[];
 }
 
 export default function codexPlanModeExtension(pi: ExtensionAPI): void {
 	let planModeEnabled = false;
+	let lastPlanMarkdown = "";
 	let lastPlanSteps: string[] = [];
 	let toolsBeforePlan: string[] | null = null;
 	let promptingPlanDecision = false;
 	let implementationKickoffPending = false;
+	let approvedPlanMarkdown = "";
 	let approvedPlanForExecution: string[] = [];
 
 	registerRequestUserInputTool(pi);
@@ -41,31 +43,20 @@ export default function codexPlanModeExtension(pi: ExtensionAPI): void {
 	function persistState(): void {
 		pi.appendEntry(STATE_ENTRY, {
 			enabled: planModeEnabled,
+			lastPlanMarkdown,
 			lastPlanSteps,
 			previousTools: toolsBeforePlan ?? undefined,
 			kickoffPending: implementationKickoffPending,
+			approvedPlanMarkdown,
 			approvedPlanForExecution,
 		} as PersistedState);
 	}
 
 	function updateUi(ctx: ExtensionContext): void {
 		if (planModeEnabled) {
-			ctx.ui.setStatus(STATUS_ID, ctx.ui.theme.fg("warning", "⏸ PLAN"));
+			ctx.ui.setStatus(STATUS_ID, ctx.ui.theme.fg("warning", "PLAN"));
 		} else {
 			ctx.ui.setStatus(STATUS_ID, undefined);
-		}
-
-		if (planModeEnabled && lastPlanSteps.length > 0) {
-			const lines = [ctx.ui.theme.fg("accent", "Plan draft")];
-			for (let i = 0; i < Math.min(lastPlanSteps.length, MAX_WIDGET_STEPS); i += 1) {
-				lines.push(`${ctx.ui.theme.fg("muted", `${i + 1}.`)} ${lastPlanSteps[i]}`);
-			}
-			if (lastPlanSteps.length > MAX_WIDGET_STEPS) {
-				lines.push(ctx.ui.theme.fg("dim", `+${lastPlanSteps.length - MAX_WIDGET_STEPS} steps more`));
-			}
-			ctx.ui.setWidget(WIDGET_ID, lines);
-		} else {
-			ctx.ui.setWidget(WIDGET_ID, undefined);
 		}
 	}
 
@@ -100,6 +91,7 @@ export default function codexPlanModeExtension(pi: ExtensionAPI): void {
 		if (planModeEnabled) {
 			disablePlanMode(ctx);
 			implementationKickoffPending = false;
+			approvedPlanMarkdown = "";
 			approvedPlanForExecution = [];
 			persistState();
 		} else {
@@ -116,10 +108,7 @@ export default function codexPlanModeExtension(pi: ExtensionAPI): void {
 		description: "Show current plan mode status",
 		handler: async (_args, ctx) => {
 			const state = planModeEnabled ? "enabled" : "disabled";
-			const planSummary =
-				lastPlanSteps.length === 0
-					? "No plan parsed yet."
-					: lastPlanSteps.map((step, index) => `${index + 1}. ${step}`).join("\n");
+			const planSummary = formatPlanForDisplay(lastPlanMarkdown, lastPlanSteps);
 			ctx.ui.notify(`Plan mode: ${state}\n\n${planSummary}`, "info");
 		},
 	});
@@ -153,16 +142,13 @@ export default function codexPlanModeExtension(pi: ExtensionAPI): void {
 
 	pi.on("before_agent_start", async () => {
 		if (planModeEnabled) {
-			const currentPlan =
-				lastPlanSteps.length > 0
-					? `\nCurrent draft plan:\n${lastPlanSteps.map((step, i) => `${i + 1}. ${step}`).join("\n")}\n`
-					: "";
+			const currentPlan = buildCurrentPlanContext(lastPlanMarkdown, lastPlanSteps);
 
 			return {
 				message: {
 					customType: "codex-plan-mode-context",
 					display: false,
-					content: `[CODEX-STYLE PLAN MODE]\nYou are in planning mode (read-only).\n\nRules:\n- Allowed tools: read, bash, grep, find, ls, request_user_input.\n- Forbidden tools: edit, write.\n- Use request_user_input for structured clarifications when requirements are ambiguous (1-3 focused questions, 2-4 options each).\n- You may ask multiple rounds of questions if needed.\n- When ready, output a final plan under a \"Plan:\" header with numbered steps.\n- KEEP STEPS HIGH-LEVEL (4-7 items max). Group related subtasks under a single broad step. Do NOT list granular implementation details.\n- Do not output sub-steps or nested lists inside the Plan header.${currentPlan}\nDo not implement yet; planning only.`,
+					content: buildPlanModePrompt(currentPlan),
 				},
 			};
 		}
@@ -177,7 +163,7 @@ export default function codexPlanModeExtension(pi: ExtensionAPI): void {
 			message: {
 				customType: "codex-plan-implementation-kickoff",
 				display: false,
-				content: buildImplementationKickoffMessage(approvedPlanForExecution, skillHints),
+				content: buildImplementationKickoffMessage(approvedPlanForExecution, approvedPlanMarkdown, skillHints),
 			},
 		};
 	});
@@ -188,17 +174,22 @@ export default function codexPlanModeExtension(pi: ExtensionAPI): void {
 		const assistantText = extractLastAssistantText(event.messages as unknown[]);
 		if (!assistantText) return;
 
-		const extracted = extractPlanSteps(assistantText);
+		const parsedPlan = parsePlan(assistantText);
 		const decisionLikeText = looksLikeImplementationDecisionPrompt(assistantText);
 		const shouldPrompt = planModeEnabled
-			? extracted.length > 0
-			: decisionLikeText && (extracted.length > 0 || lastPlanSteps.length > 0);
+			? parsedPlan.steps.length > 0
+			: decisionLikeText && (parsedPlan.steps.length > 0 || lastPlanSteps.length > 0);
 		if (!shouldPrompt) return;
 
-		const steps = extracted.length > 0 ? extracted : lastPlanSteps;
+		const steps = parsedPlan.steps.length > 0 ? parsedPlan.steps : lastPlanSteps;
 		if (steps.length === 0) return;
 
 		lastPlanSteps = steps;
+		if (parsedPlan.markdown) {
+			lastPlanMarkdown = parsedPlan.markdown;
+		} else if (!lastPlanMarkdown) {
+			lastPlanMarkdown = buildMarkdownFromSteps(steps);
+		}
 		if (planModeEnabled) {
 			updateUi(ctx);
 		}
@@ -215,19 +206,28 @@ export default function codexPlanModeExtension(pi: ExtensionAPI): void {
 			if (!choice) return;
 
 			if (choice === "Yes, implement this plan") {
-				const approved = [...lastPlanSteps];
+				const approvedSteps = [...lastPlanSteps];
+				const approvedMarkdown = lastPlanMarkdown || buildMarkdownFromSteps(approvedSteps);
 				if (planModeEnabled) {
 					disablePlanMode(ctx, false);
 				}
-				approvedPlanForExecution = approved;
+				approvedPlanMarkdown = approvedMarkdown;
+				approvedPlanForExecution = approvedSteps;
 				implementationKickoffPending = true;
 				persistState();
 				pi.events.emit("codex-plan-mode:approved-plan", {
-					steps: approved,
+					markdown: approvedMarkdown,
+					steps: approvedSteps,
 					replace: true,
 					source: "codex-plan-mode",
 				});
-				ctx.ui.notify("Switching to execute mode. Plan will be split into todos before implementation.", "info");
+				pi.events.emit("codex-plan-mode:approved-tasks", {
+					markdown: approvedMarkdown,
+					tasks: buildApprovedTasks(approvedSteps),
+					replace: true,
+					source: "codex-plan-mode",
+				});
+				ctx.ui.notify("Switching to execute mode. Derived plan steps were published as tasks.", "info");
 				pi.sendUserMessage("Implement the approved plan.");
 				return;
 			}
@@ -256,9 +256,11 @@ export default function codexPlanModeExtension(pi: ExtensionAPI): void {
 
 		if (latest?.data) {
 			planModeEnabled = latest.data.enabled === true;
+			lastPlanMarkdown = typeof latest.data.lastPlanMarkdown === "string" ? latest.data.lastPlanMarkdown : "";
 			lastPlanSteps = Array.isArray(latest.data.lastPlanSteps) ? latest.data.lastPlanSteps : [];
 			toolsBeforePlan = Array.isArray(latest.data.previousTools) ? latest.data.previousTools : toolsBeforePlan;
 			implementationKickoffPending = latest.data.kickoffPending === true;
+			approvedPlanMarkdown = typeof latest.data.approvedPlanMarkdown === "string" ? latest.data.approvedPlanMarkdown : "";
 			approvedPlanForExecution = Array.isArray(latest.data.approvedPlanForExecution)
 				? latest.data.approvedPlanForExecution
 				: [];
@@ -281,6 +283,56 @@ export default function codexPlanModeExtension(pi: ExtensionAPI): void {
 	pi.on("session_shutdown", async () => {
 		persistState();
 	});
+}
+
+// Builds the hidden mode instruction that makes plan mode produce decision-complete Markdown plans.
+function buildPlanModePrompt(currentPlan: string): string {
+	return `[CODEX-STYLE PLAN MODE]
+You are in planning mode. Explore and design, but do not implement.
+
+Mode rules:
+- Allowed tools: read, bash, grep, find, ls, request_user_input.
+- Forbidden tools: edit, write.
+- Use non-mutating exploration first to ground the plan in real files, configs, docs, and constraints.
+- Ask the user only for high-impact preferences or decisions that cannot be discovered from the environment.
+- Keep refining until the plan is decision-complete enough for another engineer or agent to implement without guessing.
+
+Clarification rules:
+- Never guess or silently choose defaults for unclear product, UX, API, safety, scope, or tradeoff decisions.
+- If any relevant doubt remains after exploration, stop and call request_user_input before writing the final plan.
+- Use request_user_input even for a single important doubt; provide 2-4 realistic options and mark the recommended option in its description when helpful.
+- Do not include an Assumptions section to hide unresolved decisions; resolve them through questions first.
+
+Final plan format:
+- When ready, output a normal Markdown plan without XML or custom tags.
+- Start with a Markdown heading such as # Plan or # Implementation Plan.
+- Include 3-5 useful sections, usually Summary, Implementation Changes, Test Plan, and Decisions Confirmed.
+- Include enough intent and implementation detail to explain what will change and why.
+- Keep execution bullets concise, but do not collapse the plan into a bare checklist.
+- Do not ask whether to proceed inside the final plan.${currentPlan}
+Do not implement yet; planning only.`;
+}
+
+// Carries the previous draft into refinement turns without losing the rich Markdown plan.
+function buildCurrentPlanContext(lastPlanMarkdown: string, lastPlanSteps: string[]): string {
+	if (lastPlanMarkdown.trim()) {
+		return `\n\nCurrent draft plan:\n${lastPlanMarkdown.trim()}`;
+	}
+	if (lastPlanSteps.length === 0) return "";
+	return `\n\nCurrent draft execution steps:\n${lastPlanSteps.map((step, i) => `${i + 1}. ${step}`).join("\n")}`;
+}
+
+// Shows the complete plan when available and falls back to legacy numbered steps.
+function formatPlanForDisplay(planMarkdown: string, planSteps: string[]): string {
+	if (planMarkdown.trim()) return planMarkdown.trim();
+	if (planSteps.length === 0) return "No plan parsed yet.";
+	return planSteps.map((step, index) => `${index + 1}. ${step}`).join("\n");
+}
+
+// Wraps legacy step-only plans in a minimal Markdown structure for consistent downstream handling.
+function buildMarkdownFromSteps(steps: string[]): string {
+	const planList = steps.map((step) => `- ${step}`).join("\n");
+	return `# Plan\n\n## Implementation Changes\n${planList}`;
 }
 
 function extractLastAssistantText(messages: unknown[]): string | undefined {
@@ -320,14 +372,38 @@ function getSkillCommandHints(pi: ExtensionAPI): string[] {
 	}
 }
 
-function buildImplementationKickoffMessage(planSteps: string[], skillHints: string[]): string {
+interface ApprovedTask {
+	subject: string;
+	description: string;
+}
+
+// Converts approved execution steps into task payloads for task-oriented extensions.
+function buildApprovedTasks(planSteps: string[]): ApprovedTask[] {
+	return planSteps.map((step, index) => ({
+		subject: step,
+		description: `Approved plan task ${index + 1}: ${step}`,
+	}));
+}
+
+// Provides execute mode with both the full approved plan and concise task-derived steps.
+function buildImplementationKickoffMessage(planSteps: string[], planMarkdown: string, skillHints: string[]): string {
 	const planList = planSteps.map((step, index) => `${index + 1}. ${step}`).join("\n");
+	const markdownSection = planMarkdown.trim() ? `Approved Markdown plan:\n${planMarkdown.trim()}\n\n` : "";
 	const skillLine =
 		skillHints.length > 0
 			? `Available skill commands: ${skillHints.join(", ")}.`
 			: "Identify required skills and actively look for matching /skill:* commands before coding.";
 
-	return `[IMPLEMENTATION KICKOFF]\nApproved plan:\n${planList}\n\nExecution protocol (must follow):\n1) The plan steps were already imported into todo by the extension. First call todo with action:list to verify current ids. Do NOT re-add the entire plan unless todos are missing.\n2) If you need more granular tracking during implementation, create new specific todos as needed instead of breaking the high-level plan upfront.\n3) Before coding, determine which skills are needed for the plan and apply them explicitly. ${skillLine}\n4) Then implement step-by-step, updating todo progress by id as each step is completed.\n5) If implementation reveals missing info, ask follow-up clarifications and refine affected todo items.`;
+	return `[IMPLEMENTATION KICKOFF]
+${markdownSection}Derived execution steps:
+${planList}
+
+Execution protocol (must follow):
+1) The derived plan steps were published as task payloads by the extension. If a tasks integration is active, inspect the current task list before adding duplicates.
+2) If you need more granular tracking during implementation, create new specific tasks as needed instead of breaking the high-level plan upfront.
+3) Before coding, determine which skills are needed for the plan and apply them explicitly. ${skillLine}
+4) Then implement step-by-step, updating task progress by id as each step is completed.
+5) If implementation reveals missing info, ask follow-up clarifications and refine affected tasks.`;
 }
 
 function looksLikeImplementationDecisionPrompt(text: string): boolean {
