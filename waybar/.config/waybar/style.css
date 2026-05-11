@@ -61,6 +61,9 @@ window#waybar {
 }
 
 #custom-spotify {
+  background: @green;
+  color: @base;
+  border-color: @green;
   margin-left: 7px;
   margin-right: 7px;
 }
@@ -87,7 +90,9 @@ window#waybar.empty #window {
 
 #custom-spotify.empty,
 #custom-spotify.paused {
+  background: @surface0;
   color: @muted;
+  border-color: @border;
 }
 
 #workspaces {
@@ -122,7 +127,6 @@ window#waybar.empty #window {
 
 #custom-arch:hover,
 #window:hover,
-#custom-spotify:hover,
 #network:hover,
 #pulseaudio:hover,
 #battery:hover,
@@ -131,6 +135,19 @@ window#waybar.empty #window {
 #clock:hover,
 #custom-power:hover {
   background: @surface1;
+}
+
+#custom-spotify:hover {
+  background: @aqua;
+  border-color: @aqua;
+  color: @base;
+}
+
+#custom-spotify.empty:hover,
+#custom-spotify.paused:hover {
+  background: @surface1;
+  border-color: @border;
+  color: @muted;
 }
 
 #pulseaudio.muted {

@@ -13,6 +13,8 @@ import os
 from typing import List
 
 logger = logging.getLogger(__name__)
+MAX_DISPLAY_LENGTH = 55
+
 
 def signal_handler(sig, frame):
     logger.info("Received signal to stop, exiting")
@@ -23,7 +25,11 @@ def signal_handler(sig, frame):
 
 
 class PlayerManager:
-    def __init__(self, selected_player=None, excluded_player=[]):
+    def __init__(
+        self,
+        selected_player=None,
+        excluded_player=None,
+    ):
         self.manager = Playerctl.PlayerManager()
         self.loop = GLib.MainLoop()
         self.manager.connect(
@@ -64,12 +70,20 @@ class PlayerManager:
     def get_players(self) -> List[Player]:
         return self.manager.props.players
 
-    def write_output(self, text, player):
-        logger.debug(f"Writing output: {text}")
+    def write_output(self, icon, text, player):
+        """Write a fixed, pre-truncated player state as Waybar JSON output."""
+        track_text = " ".join((text or "").split())
+        status_icon = icon or ""
+        full_text = f"{status_icon} {track_text}".strip()
+        display_text = full_text[:MAX_DISPLAY_LENGTH]
+        logger.debug(f"Writing output: {display_text}")
 
-        output = {"text": text,
-                  "class": "custom-" + player.props.player_name,
-                  "alt": player.props.player_name}
+        output = {
+            "text": display_text,
+            "class": "custom-" + player.props.player_name,
+            "alt": player.props.player_name,
+            "tooltip": track_text,
+        }
 
         sys.stdout.write(json.dumps(output) + "\n")
         sys.stdout.flush()
@@ -124,13 +138,16 @@ class PlayerManager:
 
         if track_info:
             if player.props.status == "Playing":
-                track_info = "󰏤 " + track_info
+                status_icon = "󰏤"
             else:
-                track_info = "󰐊 " + track_info
+                status_icon = "󰐊"
+        else:
+            status_icon = ""
+
         # only print output if no other player is playing
         current_playing = self.get_first_playing_player()
         if current_playing is None or current_playing.props.player_name == player.props.player_name:
-            self.write_output(track_info, player)
+            self.write_output(status_icon, track_info, player)
         else:
             logger.debug(f"Other player {current_playing.props.player_name} is playing, skipping")
 
