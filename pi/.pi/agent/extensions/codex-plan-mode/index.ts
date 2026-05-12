@@ -3,7 +3,7 @@ import { Key } from "@earendil-works/pi-tui";
 import { parsePlan, isSafePlanModeCommand } from "./plan-utils.js";
 import { registerRequestUserInputTool } from "./request-user-input.js";
 
-const PLAN_MODE_TOOLS = ["read", "bash", "grep", "find", "ls", "request_user_input"];
+const PLAN_MODE_TOOLS = ["read", "bash", "grep", "find", "ls", "request_user_input", "web_search", "code_search", "fetch_content", "get_search_content"];
 const FALLBACK_EXECUTE_TOOLS = ["read", "bash", "edit", "write", "grep", "find", "ls", "request_user_input"];
 const STATE_ENTRY = "codex-plan-mode";
 const STATUS_ID = "codex-plan-mode";
@@ -221,13 +221,7 @@ export default function codexPlanModeExtension(pi: ExtensionAPI): void {
 					replace: true,
 					source: "codex-plan-mode",
 				});
-				pi.events.emit("codex-plan-mode:approved-tasks", {
-					markdown: approvedMarkdown,
-					tasks: buildApprovedTasks(approvedSteps),
-					replace: true,
-					source: "codex-plan-mode",
-				});
-				ctx.ui.notify("Switching to execute mode. Derived plan steps were published as tasks.", "info");
+				ctx.ui.notify("Switching to execute mode.", "info");
 				pi.sendUserMessage("Implement the approved plan.");
 				return;
 			}
@@ -291,9 +285,9 @@ function buildPlanModePrompt(currentPlan: string): string {
 You are in planning mode. Explore and design, but do not implement.
 
 Mode rules:
-- Allowed tools: read, bash, grep, find, ls, request_user_input.
+- Allowed tools: read, bash, grep, find, ls, request_user_input, web_search, code_search, fetch_content, get_search_content.
 - Forbidden tools: edit, write.
-- Use non-mutating exploration first to ground the plan in real files, configs, docs, and constraints.
+- Use non-mutating exploration first to ground the plan in real files, configs, docs, and constraints. Use web_search and code_search to research APIs, libraries, docs, and real-world usage before deciding.
 - Ask the user only for high-impact preferences or decisions that cannot be discovered from the environment.
 - Keep refining until the plan is decision-complete enough for another engineer or agent to implement without guessing.
 
@@ -372,19 +366,6 @@ function getSkillCommandHints(pi: ExtensionAPI): string[] {
 	}
 }
 
-interface ApprovedTask {
-	subject: string;
-	description: string;
-}
-
-// Converts approved execution steps into task payloads for task-oriented extensions.
-function buildApprovedTasks(planSteps: string[]): ApprovedTask[] {
-	return planSteps.map((step, index) => ({
-		subject: step,
-		description: `Approved plan task ${index + 1}: ${step}`,
-	}));
-}
-
 // Provides execute mode with both the full approved plan and concise task-derived steps.
 function buildImplementationKickoffMessage(planSteps: string[], planMarkdown: string, skillHints: string[]): string {
 	const planList = planSteps.map((step, index) => `${index + 1}. ${step}`).join("\n");
@@ -399,11 +380,9 @@ ${markdownSection}Derived execution steps:
 ${planList}
 
 Execution protocol (must follow):
-1) The derived plan steps were published as task payloads by the extension. If a tasks integration is active, inspect the current task list before adding duplicates.
-2) If you need more granular tracking during implementation, create new specific tasks as needed instead of breaking the high-level plan upfront.
-3) Before coding, determine which skills are needed for the plan and apply them explicitly. ${skillLine}
-4) Then implement step-by-step, updating task progress by id as each step is completed.
-5) If implementation reveals missing info, ask follow-up clarifications and refine affected tasks.`;
+1) Before coding, determine which skills are needed for the plan and apply them explicitly. ${skillLine}
+2) Then implement step-by-step, following the execution steps above.
+3) If implementation reveals missing info, ask follow-up clarifications and refine the plan.`;
 }
 
 function looksLikeImplementationDecisionPrompt(text: string): boolean {

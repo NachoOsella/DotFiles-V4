@@ -1,0 +1,62 @@
+{
+	"name": "@nacho/pi-diff-minimal",
+	"version": "0.1.0",
+	"description": "Shiki-powered terminal diff renderer for pi — syntax-highlighted, word-level diffs in split and unified views. Stripped-down: just the diff rendering, no review slop. Theme-aware colors.",
+	"author": "nacho",
+	"license": "MIT",
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/buddingnewinsights/pi-diff"
+	},
+	"keywords": [
+		"pi-package",
+		"pi",
+		"pi-extension",
+		"diff",
+		"syntax-highlighting",
+		"shiki",
+		"terminal"
+	],
+	"files": [
+		"dist/core/diff.d.ts",
+		"dist/core/diff.d.ts.map",
+		"dist/core/diff.js",
+		"dist/core/diff.js.map",
+		"dist/renderer.d.ts",
+		"dist/renderer.d.ts.map",
+		"dist/renderer.js",
+		"dist/renderer.js.map",
+		"dist/index.d.ts",
+		"dist/index.d.ts.map",
+		"dist/index.js",
+		"dist/index.js.map"
+	],
+	"dependencies": {
+		"diff": "^7.0.0",
+		"@shikijs/cli": "^4.0.2"
+	},
+	"peerDependencies": {
+		"@mariozechner/pi-coding-agent": "*",
+		"@mariozechner/pi-tui": "*"
+	},
+	"devDependencies": {
+		"@types/diff": "^7.0.2",
+		"@types/node": "^20.0.0",
+		"typescript": "^5.0.0",
+		"@biomejs/biome": "^2.3.5",
+		"vitest": "^4.0.18"
+	},
+	"scripts": {
+		"build": "tsc",
+		"typecheck": "tsc --noEmit",
+		"lint": "biome check src/",
+		"lint:fix": "biome check --fix src/",
+		"test": "vitest run src --passWithNoTests",
+		"test:watch": "vitest src --passWithNoTests"
+	},
+	"pi": {
+		"extensions": [
+			"./dist/index.js"
+		]
+	}
+}

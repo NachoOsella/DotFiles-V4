@@ -1,18 +1,16 @@
 {
   "lastChangelogVersion": "0.74.0",
   "theme": "gruvbox-material-dark-hard",
-  "defaultThinkingLevel": "high",
+  "defaultThinkingLevel": "low",
   "hideThinkingBlock": false,
   "quietStartup": true,
   "packages": [
-    "git:github.com/tintinweb/pi-tasks",
     "git:github.com/nicobailon/pi-web-access",
-    "git:github.com/buddingnewinsights/pi-diff",
     "git:github.com/mattleong/pi-better-openai"
   ],
   "enableSkillCommands": true,
   "extensions": [],
-  "defaultProvider": "github-copilot",
-  "defaultModel": "gemini-3.1-pro-preview",
+  "defaultProvider": "zen-free",
+  "defaultModel": "deepseek-v4-flash-free",
   "steeringMode": "one-at-a-time"
 }

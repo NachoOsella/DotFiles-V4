@@ -1,6 +1,6 @@
 ---
 name: pi-tui-design
-description: "Create distinctive, crafted TUI components for pi using @mariozechner/pi-tui and @mariozechner/pi-coding-agent. Use when building interactive terminal UIs — custom components, overlays, dialogs, dashboards, widgets, data visualizations, animated elements, game-like interfaces, or any visual TUI work inside pi extensions or custom tools. Triggers on: 'build a TUI component', 'make a dashboard', 'create an overlay', 'interactive widget', 'terminal UI', 'custom component', 'pi-tui', or any request to create visual, interactive terminal interfaces. Also use when beautifying or redesigning existing TUI components."
+description: "Build polished terminal UIs with pi-tui: overlays, dashboards, widgets, dialogs, animated components, or data visualizations. Use for any interactive terminal UI work in pi extensions or custom tools."
 ---
 
 # TUI Design for Pi
