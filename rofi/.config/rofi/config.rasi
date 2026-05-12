@@ -9,8 +9,8 @@ configuration {
     window-format:        "{w} · {c} · {t}";
 }
 
-@import ".config/rofi/gruvbox.rasi"
-@import ".config/rofi/fonts.rasi"
+@import "~/.config/rofi/gruvbox.rasi"
+@import "~/.config/rofi/fonts.rasi"
 
 * {
     border-colour:               @aqua;
