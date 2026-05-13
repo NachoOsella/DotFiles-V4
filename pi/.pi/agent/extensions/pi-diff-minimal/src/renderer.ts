@@ -1167,16 +1167,18 @@ export async function renderSplit(
 		rI = 0;
 
 	type HalfResult = { gutter: string; contGutter: string; bodyRows: string[] };
+	const emptyBody = `${BG_EMPTY}${" ".repeat(cw)}${RST}`;
 
 	function half_build(
 		line: (typeof diff.lines)[number] | null,
 		hl: string,
 		ranges: Array<[number, number]> | null,
+		side: "left" | "right",
 	): HalfResult {
 		if (!line) {
 			const gw2 = nw + 2;
-			const g = ` ${" ".repeat(gw2)}${FG_RULE}\u2502${RST} `;
-			return { gutter: g, contGutter: g, bodyRows: [""] };
+			const g = `${BG_BASE} ${" ".repeat(gw2)}${FG_RULE}\u2502${RST} `;
+			return { gutter: g, contGutter: g, bodyRows: [emptyBody] };
 		}
 		if (line.type === "sep") {
 			const label = line.newNum && line.newNum > 0 ? `\u00B7\u00B7\u00B7 ${line.newNum} lines \u00B7\u00B7\u00B7` : "\u00B7\u00B7\u00B7";
@@ -1190,7 +1192,7 @@ export async function renderSplit(
 		const cBg = isDel ? BG_DEL : isAdd ? BG_ADD : BG_BASE;
 		const sFg = isDel ? colors.fgDel : isAdd ? colors.fgAdd : colors.fgCtx;
 		const sign = isDel ? "-" : isAdd ? "+" : " ";
-		const num = isDel ? line.oldNum : isAdd ? line.newNum : line.oldNum;
+		const num = isDel ? line.oldNum : isAdd ? line.newNum : side === "left" ? line.oldNum : line.newNum;
 
 		const borderFg = isDel ? colors.fgDel : isAdd ? colors.fgAdd : "";
 		const border = borderFg ? `${borderFg}${BORDER_BAR}${RST}` : ` ${BG_BASE}`;
@@ -1225,27 +1227,27 @@ export async function renderSplit(
 		if (paired && wd && wd.similarity >= WORD_DIFF_MIN_SIM && canHL) {
 			const lhl = leftHL[lI++] ?? leftLine.content;
 			const rhl = rightHL[rI++] ?? rightLine.content;
-			lResult = half_build(leftLine, lhl, wd.oldRanges);
-			rResult = half_build(rightLine, rhl, wd.newRanges);
+			lResult = half_build(leftLine, lhl, wd.oldRanges, "left");
+			rResult = half_build(rightLine, rhl, wd.newRanges, "right");
 		} else if (paired && wd && wd.similarity >= WORD_DIFF_MIN_SIM && !canHL) {
 			const pwd = plainWordDiff(leftLine.content, rightLine.content);
 			lI++;
 			rI++;
-			lResult = half_build(leftLine, pwd.old, null);
-			rResult = half_build(rightLine, pwd.new, null);
+			lResult = half_build(leftLine, pwd.old, null, "left");
+			rResult = half_build(rightLine, pwd.new, null, "right");
 		} else {
 			const lhl = leftLine && leftLine.type !== "sep" ? (leftHL[lI++] ?? leftLine?.content ?? "") : "";
 			const rhl = rightLine && rightLine.type !== "sep" ? (rightHL[rI++] ?? rightLine?.content ?? "") : "";
-			lResult = half_build(leftLine, lhl, null);
-			rResult = half_build(rightLine, rhl, null);
+			lResult = half_build(leftLine, lhl, null, "left");
+			rResult = half_build(rightLine, rhl, null, "right");
 		}
 
 		const maxRows = Math.max(lResult.bodyRows.length, rResult.bodyRows.length);
 		for (let row = 0; row < maxRows; row++) {
 			const lg = row === 0 ? lResult.gutter : lResult.contGutter;
 			const rg = row === 0 ? rResult.gutter : rResult.contGutter;
-			const lb = lResult.bodyRows[row] ?? "";
-			const rb = rResult.bodyRows[row] ?? "";
+			const lb = lResult.bodyRows[row] ?? emptyBody;
+			const rb = rResult.bodyRows[row] ?? emptyBody;
 			out.push(`${lg}${lb}${DIVIDER}${rg}${rb}`);
 		}
 	}
