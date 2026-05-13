@@ -27,8 +27,8 @@ sudo pacman -S sqlite
 
 | Tool | Description |
 |------|-------------|
-| `mem_save` | Save or update (via `topic_key`) a structured observation. Auto-dedup by content hash. Priority 1-5 assigned by type unless overridden. |
-| `mem_search` | Search observations by query, type, priority. Omit query for recent results. Pass `id` for exact lookup. |
+| `mem_save` | Save or update (via `topic_key`) a structured observation. Auto-dedup by content hash. Priority 1-5 assigned by type unless overridden. Saved observations are searchable via `mem_search` and auto-recalled when relevant. |
+| `mem_search` | Search past observations for relevant context. Use this when you need to recall user preferences, past decisions, architectural choices, bugs, or any previously discussed topic. Omit query for recent results. Pass `id` for exact lookup. |
 | `mem_admin` | Stats, delete (soft/hard), export JSON, import JSON. |
 
 ### mem_save
@@ -50,9 +50,14 @@ sudo pacman -S sqlite
 
 ### mem_search
 
+Search past observations for relevant context. The LLM is encouraged to use this
+**before answering** when it needs to recall user preferences, past decisions,
+architectural choices, or any previously discussed topic.
+
 - Omit `query` for most recent observations.
 - Pass `id` for exact lookup (ignores all other params).
 - `include_content: true` for full text, otherwise compact snippets.
+- Filter by `type` (architecture, bugfix, config, decision, etc.) or `priority_min`.
 
 ### mem_admin
 
@@ -86,6 +91,11 @@ chars total.
 
 Auto-save stores user prompts as low-priority (1) observations
 (type=prompt) for future search, without bloating auto-recall.
+
+The injected block also reminds the LLM that it can use `mem_search` to find
+additional context beyond what was auto-recalled. If no relevant memories are
+found, a short reminder about `mem_search` is still injected so the LLM knows
+it can proactively search.
 
 ## Slash commands
 

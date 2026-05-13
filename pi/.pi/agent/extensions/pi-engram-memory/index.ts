@@ -27,12 +27,17 @@ import type { Component } from "@earendil-works/pi-tui";
 const SQLITE_BIN = process.env.PI_MEMORY_SQLITE_BIN ?? "sqlite3";
 const DB_PATH = process.env.PI_MEMORY_DB ?? join(homedir(), ".pi", "agent", "memory", "pi-memory.db");
 const AUTO_RECALL = process.env.PI_MEMORY_AUTO_RECALL !== "0";
-const AUTO_SAVE_PROMPTS = process.env.PI_MEMORY_AUTO_SAVE_PROMPTS !== "0";
 const MAX_RECALL_CHARS = Number(process.env.PI_MEMORY_MAX_RECALL_CHARS ?? "1000");
-const MIN_PROMPT_CHARS = Math.max(0, Number(process.env.PI_MEMORY_MIN_PROMPT_CHARS ?? "20"));
 const SQLITE_TIMEOUT_MS = Number(process.env.PI_MEMORY_SQLITE_TIMEOUT_MS ?? "8000");
 
-const VALID_TYPES = ["architecture", "bugfix", "config", "decision", "discovery", "learning", "preference", "prompt"] as const;
+const VALID_TYPES = ["architecture", "bugfix", "config", "decision", "discovery", "learning", "preference"] as const;
+
+// Common low-signal terms ignored by memory search/recall.
+const SEARCH_STOP_WORDS = new Set([
+  "the", "and", "for", "with", "from", "this", "that", "what", "when", "where", "como", "para", "por",
+  "con", "que", "del", "las", "los", "una", "uno", "este", "esta", "eso", "ahi", "hacer", "hace", "podes",
+  "puedes", "quiero", "necesito", "sobre", "solo", "cosas", "algo", "mucho", "poco", "bien", "mal",
+]);
 
 // Default priority by type: higher = more important, more likely to auto-recall
 const DEFAULT_PRIORITY: Record<string, number> = {
@@ -43,7 +48,6 @@ const DEFAULT_PRIORITY: Record<string, number> = {
   discovery: 2,
   learning: 2,
   preference: 1,
-  prompt: 1,
 };
 
 // ---------------------------------------------------------------------------
@@ -159,20 +163,66 @@ function defaultPriority(type: string): number {
 
 /** Extract search-safe terms from a user query. */
 function extractTerms(query: string): string[] {
+  const seen = new Set<string>();
   return query
     .normalize("NFKC")
+    .toLowerCase()
     .replace(/[^\p{L}\p{N}\s-]+/gu, " ")
     .split(/\s+/)
-    .filter((t) => t.length >= 2)
-    .slice(0, 12);
+    .filter((term) => {
+      if (term.length < 3 && !/^(ui|db|id|js|ts|go)$/i.test(term)) return false;
+      if (SEARCH_STOP_WORDS.has(term) || seen.has(term)) return false;
+      seen.add(term);
+      return true;
+    })
+    .slice(0, 8);
+}
+
+/** Build a relevance score for keyword search using title/topic/content weights. */
+function keywordScoreSql(terms: string[]): string {
+  if (terms.length === 0) return "0";
+  return terms
+    .map((term) => {
+      const q = sql(term);
+      return [
+        `(CASE WHEN lower(o.title)=${q} THEN 10 ELSE 0 END)`,
+        `(CASE WHEN lower(o.title) LIKE '%' || ${q} || '%' THEN 5 ELSE 0 END)`,
+        `(CASE WHEN lower(COALESCE(o.topic_key, '')) LIKE '%' || ${q} || '%' THEN 4 ELSE 0 END)`,
+        `(CASE WHEN lower(o.content) LIKE '%' || ${q} || '%' THEN 1 ELSE 0 END)`,
+      ].join(" + ");
+    })
+    .join(" + ");
+}
+
+/** Count how many distinct query terms matched anywhere in an observation. */
+function keywordCoverageSql(terms: string[]): string {
+  if (terms.length === 0) return "0";
+  return terms
+    .map((term) => {
+      const q = sql(term);
+      return `(CASE WHEN lower(o.title) LIKE '%' || ${q} || '%' OR lower(COALESCE(o.topic_key, '')) LIKE '%' || ${q} || '%' OR lower(o.content) LIKE '%' || ${q} || '%' THEN 1 ELSE 0 END)`;
+    })
+    .join(" + ");
 }
 
 /** First ~N chars of content as a compact snippet. */
 function snip(content: string, maxLen = 120): string {
   if (!content) return "";
-  const flat = content.replace(/\s+/g, " ").trim();
+  const flat = cleanInline(content);
   if (flat.length <= maxLen) return flat;
   return flat.slice(0, maxLen) + "...";
+}
+
+/** Collapse arbitrary text into a terminal-safe single line. */
+function cleanInline(text: string): string {
+  return String(text ?? "").replace(/\s+/g, " ").trim();
+}
+
+/** Truncate a plain string for compact terminal output. */
+function cropPlain(text: string, maxLen: number): string {
+  const value = cleanInline(text);
+  if (value.length <= maxLen) return value;
+  return `${value.slice(0, Math.max(0, maxLen - 3))}...`;
 }
 
 // ---------------------------------------------------------------------------
@@ -381,7 +431,7 @@ async function ensureSession(pi: ExtensionAPI, info: ProjectInfo, signal?: Abort
  *
  * - Deduplicates by normalized hash of (project, scope, type, title, content).
  * - Upserts by topic_key if one is provided and a match exists.
- * - Priority defaults by type: arch/bugfix/decision=4, config=3, discovery/learning=2, preference/prompt=1.
+ * - Priority defaults by type: arch/bugfix/decision=4, config=3, discovery/learning=2, preference=1.
  */
 async function handleSave(
   pi: ExtensionAPI,
@@ -470,7 +520,7 @@ async function handleSearch(
   await ensureDb(pi, signal);
   const info = await detectProject(pi, ctx, signal);
   const includeContent = Boolean(params.include_content);
-  const limit = Math.max(1, Math.min(Number(params.limit ?? 8), 15));
+  const limit = Math.max(1, Math.min(Number(params.limit ?? 5), 10));
 
   // Exact lookup by ID
   if (typeof params.id === "number") {
@@ -480,43 +530,49 @@ async function handleSearch(
       signal,
     );
     if (!rows[0]) return { ok: false, error: `Observation #${params.id} not found.`, project: info.project };
+    const row = rows[0];
+    const idHead = `#${row.id} [${typeAbbr(row.type)}] ${row.title} (p${row.priority})`;
+    const idBody = (row.content ?? "").trim();
     return {
       ok: true,
-      project: rows[0].project,
-      result: [formatRow(rows[0], true)].join("\n"),
+      project: row.project,
+      result: idBody ? `${idHead}\n${idBody}` : idHead,
     };
   }
 
   // Build WHERE clause
   const query = String(params.query ?? "").trim();
   const typeFilter = params.type?.trim();
-  const priorityMin = Math.max(0, Math.min(5, Number(params.priority_min ?? 0)));
+  const priorityMin = Math.max(0, Math.min(5, Number(params.priority_min ?? 2)));
+  const terms = query ? extractTerms(query) : [];
 
   const clauses: string[] = ["o.deleted_at IS NULL", `o.project=${sql(info.project)}`];
 
-  if (query) {
-    const terms = extractTerms(query);
-    if (terms.length > 0) {
-      const likeClauses = terms.map(
-        (t) => `(o.title LIKE '%' || ${sql(t)} || '%' OR o.content LIKE '%' || ${sql(t)} || '%')`,
-      );
-      clauses.push(`(${likeClauses.join(" OR ")})`);
-    }
+  if (terms.length > 0) {
+    const likeClauses = terms.map((term) => {
+      const q = sql(term);
+      return `(lower(o.title) LIKE '%' || ${q} || '%' OR lower(COALESCE(o.topic_key, '')) LIKE '%' || ${q} || '%' OR lower(o.content) LIKE '%' || ${q} || '%')`;
+    });
+    const minCoverage = terms.length >= 4 ? 2 : 1;
+    clauses.push(`(${likeClauses.join(" OR ")})`);
+    clauses.push(`(${keywordCoverageSql(terms)})>=${sql(minCoverage)}`);
   }
 
   if (typeFilter) clauses.push(`o.type=${sql(typeFilter)}`);
   if (priorityMin > 0) clauses.push(`o.priority>=${sql(priorityMin)}`);
 
   const where = clauses.join(" AND ");
+  const relevance = keywordScoreSql(terms);
+  const coverage = keywordCoverageSql(terms);
   const rows = await sqliteJson<ObservationRow>(
     pi,
-    `SELECT o.* FROM observations o WHERE ${where} ORDER BY o.priority DESC, o.updated_at DESC LIMIT ${sql(limit)};`,
+    `SELECT o.*, (${relevance}) AS relevance, (${coverage}) AS coverage FROM observations o WHERE ${where} ORDER BY relevance DESC, coverage DESC, o.priority DESC, o.updated_at DESC LIMIT ${sql(limit)};`,
     signal,
   );
 
-  if (rows.length === 0) return { ok: true, project: info.project, result: "No memories found." };
+  if (rows.length === 0) return { ok: true, project: info.project, result: "(no memories found)" };
 
-  const formatted = rows.map((r) => formatRow(r, includeContent)).join("\n\n---\n\n");
+  const formatted = rows.map((r) => formatRowMinimal(r, includeContent)).join("\n");
   return { ok: true, project: info.project, result: formatted };
 }
 
@@ -531,6 +587,58 @@ function formatRow(row: ObservationRow, includeContent: boolean): string {
       ? `\n  rev:${row.revision_count} dup:${row.duplicate_count}`
       : "";
   return `${head}${topic}${body}${counts}`;
+}
+
+// ---------------------------------------------------------------------------
+// Ultra-minimal formatting for tool output
+// ---------------------------------------------------------------------------
+
+/** Type abbreviation map for ultra-minimal display (4 chars each). */
+const TYPE_ABBR: Record<string, string> = {
+  architecture: "arch",
+  bugfix:       "bugf",
+  config:       "conf",
+  decision:     "deci",
+  discovery:    "disc",
+  learning:     "lear",
+  preference:   "pref",
+};
+
+function typeAbbr(type: string): string {
+  return TYPE_ABBR[type] ?? type.slice(0, 4);
+}
+
+/**
+ * Format a single observation as ONE ultra-minimal line.
+ * Default searches intentionally omit snippets to prevent wall-of-text output.
+ *
+ *   #42 arch p4 Fixed N+1 query
+ *   #42 arch p4 Fixed N+1 query -- short snippet...   // include_content=true
+ */
+function formatRowMinimal(row: ObservationRow, includeContent: boolean): string {
+  const id = `#${row.id}`;
+  const meta = `${typeAbbr(row.type)} p${row.priority}`;
+  const title = cropPlain(row.title, includeContent ? 58 : 84);
+  const head = `${id} ${meta} ${title}`;
+
+  if (!includeContent) return cropPlain(head, 104);
+
+  const snippet = snip(row.content ?? "", 48);
+  const line = snippet ? `${head} -- ${snippet}` : head;
+  return cropPlain(line, 120);
+}
+
+/** Format a save result object as one ultra-minimal text line. */
+function formatSaveResult(result: any): string {
+  if (!result.ok) return `error: ${result.error}`;
+  const r = result.result;
+  if (!r) return "error: unknown";
+  switch (r.action) {
+    case "inserted": return `saved #${r.id} (p${r.priority})`;
+    case "updated":  return `updated #${r.id} (p${r.priority})`;
+    case "deduped":  return `duplicate #${r.id}`;
+    default:         return `#${r.id} (${r.action})`;
+  }
 }
 
 /**
@@ -702,14 +810,72 @@ async function handleAdmin(
 }
 
 // ---------------------------------------------------------------------------
-// Auto-save prompt helper
+// Minimal tool renderers
 // ---------------------------------------------------------------------------
 
-function shouldSavePrompt(content: string): boolean {
-  const p = content.trim();
-  if (p.length < MIN_PROMPT_CHARS) return false;
-  if (/^(y|yes|s[ií]|ok|okay|dale|go|segu[ií]|contin[uú]a|gracias|thanks|no|next|done|listo|hecho)$/i.test(p)) return false;
-  return true;
+/** Build a tiny component that renders preformatted lines without wrapping. */
+function compactLines(lines: string[]): Component {
+  return {
+    render(width: number): string[] {
+      const safeWidth = Math.max(20, width);
+      return lines.map((line) => truncateToWidth(line, safeWidth));
+    },
+    invalidate() {},
+  };
+}
+
+/** Extract the plain text payload from a tool execution result. */
+function toolText(result: any): string {
+  const item = result?.content?.find?.((entry: any) => entry?.type === "text");
+  return typeof item?.text === "string" ? item.text.trim() : "";
+}
+
+/** Style one memory result line while keeping it compact and ANSI-safe. */
+function styleMemoryLine(line: string, theme: any): string {
+  const match = line.match(/^(#\d+)\s+([a-z]{4})\s+(p\d)\s+(.+)$/);
+  if (!match) return theme.fg("muted", line);
+
+  const [, id, type, priority, rest] = match;
+  const [title, snippet] = rest.split(/\s+--\s+/, 2);
+  let out = `${theme.fg("accent", id)} ${theme.fg("muted", type)} ${theme.fg("warning", priority)} ${title}`;
+  if (snippet) out += theme.fg("dim", ` -- ${snippet}`);
+  return out;
+}
+
+/** Render memory tools as clean single-line summaries and compact result lists. */
+function memoryToolRenderer(label: string) {
+  return {
+    renderCall(args: any, theme: any) {
+      const parts: string[] = [];
+      if (args?.id !== undefined) parts.push(`#${args.id}`);
+      if (args?.query) parts.push(`"${cropPlain(args.query, 34)}"`);
+      if (!args?.query && args?.title) parts.push(`"${cropPlain(args.title, 34)}"`);
+      if (args?.type) parts.push(String(args.type));
+      if (args?.priority_min) parts.push(`p>=${args.priority_min}`);
+      if (args?.limit) parts.push(`n=${args.limit}`);
+      const suffix = parts.length ? theme.fg("dim", ` ${parts.join(" ")}`) : "";
+      return new Text(theme.fg("toolTitle", theme.bold(label)) + suffix, 0, 0);
+    },
+
+    renderResult(result: any, options: any, theme: any) {
+      if (options?.isPartial) return new Text(theme.fg("warning", "working..."), 0, 0);
+
+      const text = toolText(result);
+      if (!text) return new Text(theme.fg("dim", "done"), 0, 0);
+
+      const rawLines = text.split("\n").filter(Boolean);
+      if (rawLines.length === 1 && rawLines[0] === "(no memories found)") {
+        return new Text(theme.fg("dim", "no memories"), 0, 0);
+      }
+
+      const maxLines = options?.expanded ? rawLines.length : 8;
+      const visible = rawLines.slice(0, maxLines).map((line) => styleMemoryLine(line, theme));
+      if (rawLines.length > maxLines) {
+        visible.push(theme.fg("dim", `... ${rawLines.length - maxLines} more`));
+      }
+      return compactLines(visible);
+    },
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -755,7 +921,7 @@ export default function engram(pi: ExtensionAPI) {
     }
   });
 
-  // --- Auto recall + auto save prompts -----------------------------------
+  // --- Auto recall -------------------------------------------------------
   pi.on("before_agent_start", async (event, ctx) => {
     try {
       await ensureDb(pi);
@@ -766,38 +932,32 @@ export default function engram(pi: ExtensionAPI) {
       const prompt = String(event.prompt ?? "").trim();
       if (!prompt || prompt.startsWith("/")) return;
 
-      // Auto-save prompt as low-priority memory (type=prompt, priority=1)
-      if (AUTO_SAVE_PROMPTS && shouldSavePrompt(prompt)) {
-        const cleaned = redactSecrets(prompt);
-        const pTitle = `Prompt: ${cleaned.slice(0, 60)}${cleaned.length > 60 ? "..." : ""}`;
-        const pHash = normalizedHash(pTitle, cleaned, "prompt", "project", info.project);
-        const exists = await sqliteJson<{ id: number }>(
-          pi,
-          `SELECT id FROM observations WHERE normalized_hash=${sql(pHash)} AND deleted_at IS NULL LIMIT 1;`,
-        );
-        if (!exists[0]?.id) {
-          await sqlite(
-            pi,
-            `INSERT INTO observations(session_id, type, title, content, priority, scope, normalized_hash, project) VALUES (${sql(currentSessionId)}, 'prompt', ${sql(pTitle)}, ${sql(cleaned)}, 1, 'project', ${sql(pHash)}, ${sql(info.project)});`,
-          );
-        }
-      }
-
       // Auto-recall: only memories with priority >= 3
       if (!AUTO_RECALL) return;
 
       const terms = extractTerms(prompt);
       if (terms.length === 0) return;
 
-      const likeClauses = terms.map(
-        (t) =>
-          `(o.title LIKE '%' || ${sql(t)} || '%' OR o.content LIKE '%' || ${sql(t)} || '%')`,
-      );
+      const likeClauses = terms.map((term) => {
+        const q = sql(term);
+        return `(lower(o.title) LIKE '%' || ${q} || '%' OR lower(COALESCE(o.topic_key, '')) LIKE '%' || ${q} || '%' OR lower(o.content) LIKE '%' || ${q} || '%')`;
+      });
+      const minCoverage = terms.length >= 4 ? 2 : 1;
+      const relevance = keywordScoreSql(terms);
+      const coverage = keywordCoverageSql(terms);
       const rows = await sqliteJson<ObservationRow>(
         pi,
-        `SELECT o.* FROM observations o WHERE o.deleted_at IS NULL AND o.project=${sql(info.project)} AND o.priority>=3 AND (${likeClauses.join(" OR ")}) ORDER BY o.priority DESC, o.updated_at DESC LIMIT 5;`,
+        `SELECT o.*, (${relevance}) AS relevance, (${coverage}) AS coverage FROM observations o WHERE o.deleted_at IS NULL AND o.project=${sql(info.project)} AND o.priority>=3 AND (${likeClauses.join(" OR ")}) AND (${coverage})>=${sql(minCoverage)} ORDER BY relevance DESC, coverage DESC, o.priority DESC, o.updated_at DESC LIMIT 3;`,
       );
-      if (rows.length === 0) return;
+      if (rows.length === 0) {
+        // No specific memories found, but still remind the LLM that mem_search exists
+        return {
+          systemPrompt:
+            event.systemPrompt +
+            `\n\n# Local persistent memory recall\n` +
+            `No specific memories matched this prompt. Only use mem_search if past context would materially improve the answer. When searching, use 2-5 precise keywords from the user's request, prefer priority_min>=3, limit<=5, and avoid include_content unless you need one exact memory.\n`,
+        };
+      }
 
       const recalled = rows
         .map(
@@ -806,13 +966,14 @@ export default function engram(pi: ExtensionAPI) {
         )
         .join("\n\n");
 
-      const block = clip(recalled, 1000);
+      const block = clip(recalled, MAX_RECALL_CHARS);
 
       return {
         systemPrompt:
           event.systemPrompt +
           `\n\n# Local persistent memory recall\n` +
-          `These are local memories retrieved for the current prompt. Use only when relevant. Do not expose secrets.\n\n` +
+          `These are local memories retrieved for the current prompt. Use only when relevant. Do not expose secrets.\n` +
+          `If additional past context is truly needed, use mem_search with a narrow query, priority_min>=3, limit<=5, and no include_content unless following up by exact id.\n\n` +
           `\`\`\`text\n${block}\n\`\`\``,
       };
     } catch {
@@ -825,20 +986,20 @@ export default function engram(pi: ExtensionAPI) {
     name: "mem_save",
     label: "Save Memory",
     description:
-      "Save or update (via topic_key) an observation. Types: architecture, bugfix, config, decision, discovery, learning, preference, prompt. Priority 1-5 assigned by type unless provided.",
+      "Save or update (via topic_key) an observation. Types: architecture, bugfix, config, decision, discovery, learning, preference. Priority 1-5 assigned by type unless provided. Saved observations are searchable via mem_search and automatically recalled when relevant.",
     parameters: Type.Object({
       title: Type.String({ description: "Short title, max 80 chars" }),
       content: Type.String({ description: "Structured body describing the observation" }),
       type: Type.Optional(
         Type.String({
           description:
-            "Type: architecture|bugfix|config|decision|discovery|learning|preference|prompt",
+            "Type: architecture|bugfix|config|decision|discovery|learning|preference",
         }),
       ),
       priority: Type.Optional(
         Type.Number({
           description:
-            "Importance 1-5. Default by type: arch/bugfix/decision=4, config=3, discovery/learning=2, preference/prompt=1",
+            "Importance 1-5. Default by type: arch/bugfix/decision=4, config=3, discovery/learning=2, preference=1",
         }),
       ),
       topic_key: Type.Optional(
@@ -851,10 +1012,11 @@ export default function engram(pi: ExtensionAPI) {
     async execute(_id, params, signal, _onUpdate, ctx) {
       const result = await handleSave(pi, ctx, params, signal);
       return {
-        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+        content: [{ type: "text", text: formatSaveResult(result) }],
         details: result,
       };
     },
+    ...memoryToolRenderer("mem_save"),
   });
 
   // --- Tool: mem_search --------------------------------------------------
@@ -862,17 +1024,17 @@ export default function engram(pi: ExtensionAPI) {
     name: "mem_search",
     label: "Search Memory",
     description:
-      "Search observations or get recent context. Omit query for recent. Pass id for exact lookup.",
+      "Search memory only when past context is likely to materially help. Be selective: derive 2-5 precise keywords from the user's current request, prefer type/priority filters, use limit 3-5, and do not use include_content for broad searches. Avoid generic recent searches unless the user explicitly asks what this project/session is about. Pass id for exact lookup.",
     parameters: Type.Object({
-      query: Type.Optional(Type.String({ description: "Search terms (optional; omit for recent)" })),
-      type: Type.Optional(Type.String({ description: "Filter by type" })),
+      query: Type.Optional(Type.String({ description: "Precise search keywords from the user's current request. Avoid vague terms; use nouns, filenames, feature names, bugs, decisions, or libraries." })),
+      type: Type.Optional(Type.String({ description: "Optional exact type filter: architecture|bugfix|config|decision|discovery|learning|preference." })),
       priority_min: Type.Optional(
-        Type.Number({ description: "Minimum priority 1-5 (default 0 = no filter)" }),
+        Type.Number({ description: "Minimum priority 1-5 (default 2). Use 3+ for important context." }),
       ),
-      limit: Type.Optional(Type.Number({ description: "Max results 1-15 (default 8)" })),
-      id: Type.Optional(Type.Number({ description: "Get observation by exact ID" })),
+      limit: Type.Optional(Type.Number({ description: "Max results 1-10 (default 5). Prefer 3-5 for focused context." })),
+      id: Type.Optional(Type.Number({ description: "Get one exact memory by ID after a focused search." })),
       include_content: Type.Optional(
-        Type.Boolean({ description: "Return full content instead of snippets" }),
+        Type.Boolean({ description: "Use only for exact/follow-up lookups; broad searches remain compact." }),
       ),
     }),
     async execute(_id, params, signal, _onUpdate, ctx) {
@@ -886,6 +1048,7 @@ export default function engram(pi: ExtensionAPI) {
         details: result,
       };
     },
+    ...memoryToolRenderer("mem_search"),
   });
 
   // --- Tool: mem_admin ---------------------------------------------------
@@ -920,7 +1083,7 @@ export default function engram(pi: ExtensionAPI) {
       const query = args.trim();
       if (!query) return ctx.ui.notify("Usage: /mem <query>", "warning");
       try {
-        const result = await handleSearch(pi, ctx, { query, limit: 8 });
+        const result = await handleSearch(pi, ctx, { query, limit: 5, priority_min: 2 });
         ctx.ui.notify(
           typeof result.result === "string" ? result.result : JSON.stringify(result.result, null, 2),
           "info",
@@ -939,7 +1102,7 @@ export default function engram(pi: ExtensionAPI) {
       if (!title?.trim() || !content) return ctx.ui.notify("Usage: /memsave title :: content", "warning");
       try {
         const result = await handleSave(pi, ctx, { title: title.trim(), content, type: "discovery" });
-        ctx.ui.notify(JSON.stringify(result, null, 2), "info");
+        ctx.ui.notify(formatSaveResult(result), "info");
       } catch (error) {
         ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
       }
@@ -1000,7 +1163,6 @@ export default function engram(pi: ExtensionAPI) {
             `SQLite: ${SQLITE_BIN}`,
             `Project: ${info.project} (${info.project_source})`,
             `Auto recall: ${AUTO_RECALL}`,
-            `Auto save prompts: ${AUTO_SAVE_PROMPTS}`,
             `Max recall chars: ${MAX_RECALL_CHARS}`,
           ].join("\n"),
           "info",
@@ -1193,7 +1355,6 @@ class MemoryBrowser implements Component {
       discovery:    this.a("disc"),
       learning:     this.ok("lear"),
       preference:   this.d("pref"),
-      prompt:       this.d("prom"),
     };
     return labels[type] ?? this.d(type.slice(0, 4));
   }
