@@ -94,8 +94,27 @@ Auto-save stores user prompts as low-priority (1) observations
 
 The injected block also reminds the LLM that it can use `mem_search` to find
 additional context beyond what was auto-recalled. If no relevant memories are
-found, a short reminder about `mem_search` is still injected so the LLM knows
-it can proactively search.
+found, a stronger memory policy is still injected: before reading files or doing
+exploratory work, the LLM should search memory first when the request may depend
+on prior project decisions, architecture, bugs, configuration, user preferences,
+or previous session context.
+
+## Memory behavior policy
+
+The extension adds prompt guidance that nudges the LLM to:
+
+- Use `mem_search` early, before exploratory file reads, for project-specific
+  context that may already be known.
+- Prefer narrow searches: 2-5 concrete keywords, `priority_min>=3`, `limit<=5`.
+- Use exact `id` lookups with `include_content` only after finding a relevant
+  memory.
+- Use `mem_save` after learning durable project knowledge, bug fixes,
+  configuration details, architecture decisions, or user preferences.
+- Write `mem_save.content` as clean Markdown: short headings when helpful,
+  bullet lists for facts and decisions, and fenced code blocks for commands,
+  errors, config, SQL, JSON, or code.
+- Use stable `topic_key` values so evolving knowledge updates instead of
+  duplicating memories.
 
 ## Slash commands
 
@@ -119,7 +138,8 @@ it can proactively search.
 | `PI_MEMORY_AUTO_SAVE_PROMPTS=0` | enabled | Disable prompt auto-save |
 | `PI_MEMORY_MAX_RECALL_CHARS` | 1000 | Max chars for auto-recall |
 | `PI_MEMORY_MIN_PROMPT_CHARS` | 20 | Min length for prompt auto-save |
-| `PI_MEMORY_SQLITE_TIMEOUT_MS` | 8000 | SQLite query timeout |
+| `PI_MEMORY_SQLITE_TIMEOUT_MS` | 8000 | SQLite process timeout |
+| `PI_MEMORY_SQLITE_BUSY_TIMEOUT_MS` | `PI_MEMORY_SQLITE_TIMEOUT_MS - 1000` | SQLite lock wait timeout before retry |
 
 ## Storage
 

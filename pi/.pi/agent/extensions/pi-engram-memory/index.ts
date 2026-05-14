@@ -1,11 +1,11 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { getMarkdownTheme } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, rm, writeFile, readFile } from "node:fs/promises";
 import { dirname, basename, join, isAbsolute, resolve } from "node:path";
 import { homedir } from "node:os";
-import { Box, Container, Text, Spacer, truncateToWidth, visibleWidth, matchesKey, Key, Markdown } from "@earendil-works/pi-tui";
+import { getMarkdownTheme } from "@earendil-works/pi-coding-agent";
+import { Text, truncateToWidth, visibleWidth, matchesKey, Key, Markdown } from "@earendil-works/pi-tui";
 import type { Component } from "@earendil-works/pi-tui";
 
 /**
@@ -29,6 +29,9 @@ const DB_PATH = process.env.PI_MEMORY_DB ?? join(homedir(), ".pi", "agent", "mem
 const AUTO_RECALL = process.env.PI_MEMORY_AUTO_RECALL !== "0";
 const MAX_RECALL_CHARS = Number(process.env.PI_MEMORY_MAX_RECALL_CHARS ?? "1000");
 const SQLITE_TIMEOUT_MS = Number(process.env.PI_MEMORY_SQLITE_TIMEOUT_MS ?? "8000");
+const SQLITE_BUSY_TIMEOUT_MS = Number(
+  process.env.PI_MEMORY_SQLITE_BUSY_TIMEOUT_MS ?? String(Math.max(1000, SQLITE_TIMEOUT_MS - 1000)),
+);
 
 const VALID_TYPES = ["architecture", "bugfix", "config", "decision", "discovery", "learning", "preference"] as const;
 
@@ -86,6 +89,7 @@ interface ObservationRow {
 let initialized = false;
 let currentSessionId = `pi-${Date.now().toString(36)}-${randomUUID().slice(0, 8)}`;
 let lastProjectInfo: ProjectInfo | null = null;
+let sqliteQueue: Promise<unknown> = Promise.resolve();
 const projectCache = new Map<string, ProjectInfo>();
 
 // ---------------------------------------------------------------------------
@@ -229,18 +233,60 @@ function cropPlain(text: string, maxLen: number): string {
 // SQLite helpers
 // ---------------------------------------------------------------------------
 
+/** Run SQLite CLI work sequentially inside this extension process. */
+function enqueueSql<T>(task: () => Promise<T>): Promise<T> {
+  const run = sqliteQueue.then(task, task);
+  sqliteQueue = run.catch(() => undefined);
+  return run;
+}
+
+/** Return true when sqlite reports a transient lock/busy condition. */
+function isSqliteBusyError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /database is locked|database is busy|SQLITE_BUSY|SQLITE_LOCKED/i.test(message);
+}
+
+/** Execute a single SQLite script with WAL, busy timeout, serialization, and retry. */
 async function execSql(pi: ExtensionAPI, sqlText: string, signal?: AbortSignal): Promise<string> {
+  return enqueueSql(async () => {
+    const maxAttempts = 3;
+    let lastError: unknown;
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      if (signal?.aborted) throw new Error("sqlite execution aborted");
+
+      try {
+        return await execSqlOnce(pi, sqlText, signal);
+      } catch (error) {
+        lastError = error;
+        if (!isSqliteBusyError(error) || attempt === maxAttempts) break;
+
+        // Back off a little in case another Pi process is holding the write lock.
+        await new Promise((resolveDelay) => setTimeout(resolveDelay, 150 * attempt));
+      }
+    }
+
+    throw lastError instanceof Error ? lastError : new Error(String(lastError));
+  });
+}
+
+/** Execute a single SQLite script file. Use execSql for callers. */
+async function execSqlOnce(pi: ExtensionAPI, sqlText: string, signal?: AbortSignal): Promise<string> {
   await mkdir(dirname(DB_PATH), { recursive: true });
   const tmpFile = join(
     dirname(DB_PATH),
     `.pi-tmp-${process.pid}-${randomUUID().slice(0, 8)}.sql`,
   );
-  const body = `${sqlText.trim()}\n`;
+  const body = [
+    `.timeout ${SQLITE_BUSY_TIMEOUT_MS}`,
+    sqlText.trim(),
+    "",
+  ].join("\n");
   await writeFile(tmpFile, body, "utf8");
   try {
     const result = await pi.exec(SQLITE_BIN, [DB_PATH, `.read ${tmpFile}`], {
       signal,
-      timeout: SQLITE_TIMEOUT_MS,
+      timeout: SQLITE_TIMEOUT_MS + 2000,
     });
     if (result.code !== 0) {
       throw new Error(
@@ -950,12 +996,13 @@ export default function engram(pi: ExtensionAPI) {
         `SELECT o.*, (${relevance}) AS relevance, (${coverage}) AS coverage FROM observations o WHERE o.deleted_at IS NULL AND o.project=${sql(info.project)} AND o.priority>=3 AND (${likeClauses.join(" OR ")}) AND (${coverage})>=${sql(minCoverage)} ORDER BY relevance DESC, coverage DESC, o.priority DESC, o.updated_at DESC LIMIT 3;`,
       );
       if (rows.length === 0) {
-        // No specific memories found, but still remind the LLM that mem_search exists
+        // No specific memories found, but keep a strong memory policy visible to the LLM.
         return {
           systemPrompt:
             event.systemPrompt +
             `\n\n# Local persistent memory recall\n` +
-            `No specific memories matched this prompt. Only use mem_search if past context would materially improve the answer. When searching, use 2-5 precise keywords from the user's request, prefer priority_min>=3, limit<=5, and avoid include_content unless you need one exact memory.\n`,
+            `No specific memories matched this prompt automatically.\n` +
+            `Memory policy: before reading files or doing exploratory work, use mem_search first when the request may depend on prior project decisions, architecture, bugs, configuration, user preferences, or previous session context. Search with 2-5 precise keywords, priority_min>=3, limit<=5, and avoid include_content unless following up by exact id. After discovering durable project knowledge, fixes, decisions, or user preferences, save it with mem_save.\n`,
         };
       }
 
@@ -972,8 +1019,8 @@ export default function engram(pi: ExtensionAPI) {
         systemPrompt:
           event.systemPrompt +
           `\n\n# Local persistent memory recall\n` +
-          `These are local memories retrieved for the current prompt. Use only when relevant. Do not expose secrets.\n` +
-          `If additional past context is truly needed, use mem_search with a narrow query, priority_min>=3, limit<=5, and no include_content unless following up by exact id.\n\n` +
+          `These are local memories retrieved for the current prompt. Prefer them over redundant file exploration when they answer the question. Do not expose secrets.\n` +
+          `Memory policy: use mem_search before reading files or doing exploratory work when more prior context may exist. Search with narrow keywords, priority_min>=3, limit<=5, and no include_content unless following up by exact id. After discovering durable project knowledge, fixes, decisions, or user preferences, save it with mem_save.\n\n` +
           `\`\`\`text\n${block}\n\`\`\``,
       };
     } catch {
@@ -987,9 +1034,14 @@ export default function engram(pi: ExtensionAPI) {
     label: "Save Memory",
     description:
       "Save or update (via topic_key) an observation. Types: architecture, bugfix, config, decision, discovery, learning, preference. Priority 1-5 assigned by type unless provided. Saved observations are searchable via mem_search and automatically recalled when relevant.",
+    promptGuidelines: [
+      "Use mem_save after learning durable project knowledge: architecture decisions, bug fixes, configuration, debugging findings, user preferences, or decisions that should help future sessions.",
+      "Use stable topic_key values with mem_save for knowledge that may evolve, so future saves update the same memory instead of creating duplicates.",
+      "Write mem_save content as clean Markdown: use short headings when helpful, bullet lists for facts and decisions, and fenced code blocks for commands, errors, config, SQL, JSON, or code.",
+    ],
     parameters: Type.Object({
       title: Type.String({ description: "Short title, max 80 chars" }),
-      content: Type.String({ description: "Structured body describing the observation" }),
+      content: Type.String({ description: "Structured Markdown body describing the observation. Use headings, bullets, and fenced code blocks when helpful." }),
       type: Type.Optional(
         Type.String({
           description:
@@ -1024,7 +1076,12 @@ export default function engram(pi: ExtensionAPI) {
     name: "mem_search",
     label: "Search Memory",
     description:
-      "Search memory only when past context is likely to materially help. Be selective: derive 2-5 precise keywords from the user's current request, prefer type/priority filters, use limit 3-5, and do not use include_content for broad searches. Avoid generic recent searches unless the user explicitly asks what this project/session is about. Pass id for exact lookup.",
+      "Search memory before relying on file exploration when prior project context may answer the request. Be selective: derive 2-5 precise keywords from the user's current request, prefer type/priority filters, use limit 3-5, and do not use include_content for broad searches. Pass id for exact lookup.",
+    promptGuidelines: [
+      "Use mem_search early, before reading files, when the request mentions project-specific decisions, architecture, previous bugs, configuration, user preferences, or prior work.",
+      "Prefer mem_search over exploratory file reads when the answer may already be in memory; then read files only to verify or implement changes.",
+      "Use narrow mem_search queries with 2-5 concrete keywords, priority_min>=3, and limit<=5 unless the user explicitly asks for broader memory history.",
+    ],
     parameters: Type.Object({
       query: Type.Optional(Type.String({ description: "Precise search keywords from the user's current request. Avoid vague terms; use nouns, filenames, feature names, bugs, decisions, or libraries." })),
       type: Type.Optional(Type.String({ description: "Optional exact type filter: architecture|bugfix|config|decision|discovery|learning|preference." })),
@@ -1193,7 +1250,16 @@ export default function engram(pi: ExtensionAPI) {
         await ctx.ui.custom((tui, theme, _keybindings, done) => {
           const browser = new MemoryBrowser(rows, tui, theme, () => done(undefined));
           return browser;
-        }, { overlay: true });
+        }, {
+          overlay: true,
+          overlayOptions: {
+            anchor: "center",
+            width: "74%",
+            minWidth: 72,
+            maxHeight: "86%",
+            margin: 2,
+          },
+        });
       } catch (error) {
         ctx.ui.notify(
           `membrowse error: ${error instanceof Error ? error.message : String(error)}`,
@@ -1206,13 +1272,9 @@ export default function engram(pi: ExtensionAPI) {
 
 // ---------------------------------------------------------------------------
 // MemoryBrowser TUI component
-// Box-drawing borders, theme tokens, three-view navigation:
-//   projects -> list (per-project) -> detail (full memory)
-// ---------------------------------------------------------------------------
-// MemoryBrowser TUI component
-// Rounded borders, theme tokens, three-view navigation:
-//   projects -> list (per-project) -> detail (full memory)
-// Proper caching with version tracking for smooth rendering.
+// Rounded, theme-aware overlay with three-view navigation:
+//   projects -> list (per-project) -> detail (scrollable full memory)
+// Every rendered line is width-bounded and framed to avoid visual spillover.
 // ---------------------------------------------------------------------------
 
 type MemView = "projects" | "list" | "detail";
@@ -1222,19 +1284,17 @@ class MemoryBrowser implements Component {
   private selProject: string | null = null;
   private selIdx = 0;
   private scrollOff = 0;
+  private detailScroll = 0;
   private viewing: ObservationRow | null = null;
   private searchMode = false;
   private searchBuf = "";
+  private mdRenderer: Markdown | null = null;
+  private mdContentKey = "";
 
-  // Render cache
   private cachedWidth = -1;
   private cachedVersion = -1;
   private cachedLines: string[] = [];
   private version = 0;
-
-  // Markdown renderer for detail view content
-  private mdRenderer: Markdown | null = null;
-  private mdContentKey = "";
 
   constructor(
     private all: ObservationRow[],
@@ -1243,432 +1303,381 @@ class MemoryBrowser implements Component {
     private onDone: () => void,
   ) {}
 
+  /** Clear cached render output when state or theme changes. */
   invalidate(): void {
     this.cachedWidth = -1;
     this.cachedVersion = -1;
     this.cachedLines = [];
   }
 
-  render(w: number): string[] {
-    if (this.cachedWidth === w && this.cachedVersion === this.version) {
-      return this.cachedLines;
-    }
+  /** Render the active browser view within the overlay width. */
+  render(width: number): string[] {
+    if (this.cachedWidth === width && this.cachedVersion === this.version) return this.cachedLines;
+
+    const safeWidth = Math.max(60, width);
     let lines: string[];
-    switch (this.view) {
-      case "projects": lines = this.renderProjects(w); break;
-      case "list":     lines = this.renderList(w); break;
-      case "detail":   lines = this.renderDetail(w); break;
-      default:         lines = [];
-    }
-    this.cachedWidth = w;
+    if (this.view === "projects") lines = this.renderProjects(safeWidth);
+    else if (this.view === "list") lines = this.renderList(safeWidth);
+    else lines = this.renderDetail(safeWidth);
+
+    this.cachedWidth = width;
     this.cachedVersion = this.version;
-    this.cachedLines = lines;
-    return lines;
+    this.cachedLines = lines.map((line) => truncateToWidth(line, safeWidth));
+    return this.cachedLines;
   }
 
+  /** Route keyboard input to the active view. */
   handleInput(data: string): void {
-    this.version++;
-    switch (this.view) {
-      case "projects": this.handleProjectsInput(data); break;
-      case "list":     this.handleListInput(data); break;
-      case "detail":   this.handleDetailInput(data); break;
-    }
+    if (this.view === "projects") this.handleProjectsInput(data);
+    else if (this.view === "list") this.handleListInput(data);
+    else this.handleDetailInput(data);
   }
 
-  // ---- theme shorthand ---------------------------------------------------
+  // ---- Theme helpers -----------------------------------------------------
 
-  private paint(token: string, s: string): string {
-    if (this.theme && typeof this.theme.fg === "function") {
-      return this.theme.fg(token, s);
-    }
-    return s;
+  private paint(token: string, value: string): string {
+    return this.theme && typeof this.theme.fg === "function" ? this.theme.fg(token, value) : value;
   }
 
-  private a(s: string): string { return this.paint("accent", s); }
-  private m(s: string): string { return this.paint("muted", s); }
-  private d(s: string): string { return this.paint("dim", s); }
-  private b(s: string): string { return this.paint("border", s); }
-  private ba(s: string): string { return this.paint("borderAccent", s); }
-  private ok(s: string): string { return this.paint("success", s); }
-  private err(s: string): string { return this.paint("error", s); }
-  private warn(s: string): string { return this.paint("warning", s); }
-  private bold(s: string): string {
-    if (this.theme && typeof this.theme.bold === "function") {
-      return this.theme.bold(s);
-    }
-    return s;
+  private a(value: string): string { return this.paint("accent", value); }
+  private m(value: string): string { return this.paint("muted", value); }
+  private d(value: string): string { return this.paint("dim", value); }
+  private b(value: string): string { return this.paint("border", value); }
+  private ba(value: string): string { return this.paint("borderAccent", value); }
+  private ok(value: string): string { return this.paint("success", value); }
+  private err(value: string): string { return this.paint("error", value); }
+  private warn(value: string): string { return this.paint("warning", value); }
+  private bold(value: string): string {
+    return this.theme && typeof this.theme.bold === "function" ? this.theme.bold(value) : value;
   }
 
-  // ---- helpers -----------------------------------------------------------
+  // ---- Layout helpers ----------------------------------------------------
 
-  private maxVis(): number {
-    return Math.max(3, (process.stdout.rows || 24) - 8);
+  /** Number of body rows to render, leaving room for borders and footer. */
+  private maxBodyRows(): number {
+    const terminalRows = process.stdout.rows || 28;
+    return Math.max(8, Math.floor(terminalRows * 0.68));
   }
 
-  private clamp(n: number): void {
-    if (this.selIdx >= n) this.selIdx = Math.max(0, n - 1);
-    if (this.selIdx < 0) this.selIdx = 0;
-    const mv = this.maxVis();
+  /** Pad ANSI-styled text to a visible width. */
+  private pad(value: string, width: number): string {
+    return value + " ".repeat(Math.max(0, width - visibleWidth(value)));
+  }
+
+  /** Truncate ANSI-styled text to a visible width and then pad it. */
+  private fit(value: string, width: number): string {
+    return this.pad(truncateToWidth(value, Math.max(0, width)), width);
+  }
+
+  /** Render a full bordered row with left/right edges. */
+  private row(content: string, innerWidth: number): string {
+    return this.b("│") + this.fit(` ${content}`, innerWidth) + this.b("│");
+  }
+
+  /** Render an empty bordered row for breathing room. */
+  private empty(innerWidth: number): string {
+    return this.b("│") + " ".repeat(innerWidth) + this.b("│");
+  }
+
+  /** Render a rounded header with a centered-ish title. */
+  private top(title: string, innerWidth: number): string {
+    const label = this.fit(` ${title} `, Math.max(10, innerWidth - 4));
+    const lineWidth = Math.max(0, innerWidth - visibleWidth(label));
+    const leftRule = Math.min(2, lineWidth);
+    const rightRule = Math.max(0, lineWidth - leftRule);
+    return this.b("╭") + this.ba("─".repeat(leftRule)) + label + this.b("─".repeat(rightRule)) + this.b("╮");
+  }
+
+  /** Render a footer border with compact keyboard hints. */
+  private bottom(hints: string, innerWidth: number): string[] {
+    return [
+      this.b("├") + this.b("─".repeat(innerWidth)) + this.b("┤"),
+      this.row(this.d(hints), innerWidth),
+      this.b("╰") + this.b("─".repeat(innerWidth)) + this.b("╯"),
+    ];
+  }
+
+  /** Clamp list selection and scroll window to available rows. */
+  private clamp(total: number, visibleRows = this.maxBodyRows()): void {
+    this.selIdx = Math.max(0, Math.min(this.selIdx, Math.max(0, total - 1)));
     if (this.selIdx < this.scrollOff) this.scrollOff = this.selIdx;
-    else if (this.selIdx >= this.scrollOff + mv) this.scrollOff = this.selIdx - mv + 1;
+    if (this.selIdx >= this.scrollOff + visibleRows) this.scrollOff = this.selIdx - visibleRows + 1;
+    this.scrollOff = Math.max(0, Math.min(this.scrollOff, Math.max(0, total - visibleRows)));
   }
 
+  /** Return all project names sorted for stable navigation. */
   private projectNames(): string[] {
-    const s = new Set(this.all.map((r) => r.project || "?"));
-    return [...s].sort();
+    return [...new Set(this.all.map((row) => row.project || "unknown"))].sort();
   }
 
+  /** Count memories and high-priority memories per project. */
   private projectStats(): Map<string, { count: number; high: number }> {
-    const m = new Map<string, { count: number; high: number }>();
-    for (const r of this.all) {
-      const p = r.project || "?";
-      const e = m.get(p) ?? { count: 0, high: 0 };
-      e.count++;
-      if (r.priority >= 3) e.high++;
-      m.set(p, e);
+    const stats = new Map<string, { count: number; high: number }>();
+    for (const row of this.all) {
+      const project = row.project || "unknown";
+      const entry = stats.get(project) ?? { count: 0, high: 0 };
+      entry.count++;
+      if (row.priority >= 3) entry.high++;
+      stats.set(project, entry);
     }
-    return m;
+    return stats;
   }
 
+  /** Return memories filtered by selected project and search query. */
   private items(): ObservationRow[] {
-    let list = this.selProject
-      ? this.all.filter((r) => r.project === this.selProject)
-      : this.all;
-    if (!this.searchBuf) return list;
-    const q = this.searchBuf.toLowerCase();
-    return list.filter(
-      (r) =>
-        r.title.toLowerCase().includes(q) ||
-        (r.content ?? "").toLowerCase().includes(q) ||
-        (r.type ?? "").toLowerCase().includes(q) ||
-        (r.topic_key ?? "").toLowerCase().includes(q),
-    );
+    const base = this.selProject ? this.all.filter((row) => row.project === this.selProject) : this.all;
+    if (!this.searchBuf.trim()) return base;
+    const query = this.searchBuf.toLowerCase();
+    return base.filter((row) => {
+      const haystack = [row.title, row.content, row.type, row.topic_key].join("\n").toLowerCase();
+      return haystack.includes(query);
+    });
   }
 
-  /** Render a compact type badge with semantic color. */
+  /** Compact semantic type badge. */
   private fmtType(type: string): string {
     const labels: Record<string, string> = {
-      architecture: this.bold(this.a("arch")),
-      bugfix:       this.err("bug"),
-      config:       this.a("conf"),
-      decision:     this.warn("deci"),
-      discovery:    this.a("disc"),
-      learning:     this.ok("lear"),
-      preference:   this.d("pref"),
+      architecture: this.a(this.bold("arch")),
+      bugfix: this.err("bugf"),
+      config: this.a("conf"),
+      decision: this.warn("deci"),
+      discovery: this.a("disc"),
+      learning: this.ok("lear"),
+      preference: this.d("pref"),
     };
     return labels[type] ?? this.d(type.slice(0, 4));
   }
 
-  /** Priority rendered as filled/empty circles. */
-  private fmtPriority(p: number): string {
-    const filled = "●".repeat(p);
-    const empty = "○".repeat(5 - p);
-    return `${filled}${empty}`;
+  /** Render priority as a compact block bar. */
+  private fmtPriority(priority: number): string {
+    const p = Math.max(1, Math.min(5, Number(priority) || 1));
+    return (p >= 3 ? this.ok("█".repeat(p)) : this.d("█".repeat(p))) + this.d("░".repeat(5 - p));
   }
 
-  /** Truncate a string with ellipsis, respecting ANSI codes. */
-  private snip(text: string, maxLen: number): string {
-    const flat = text.replace(/\s+/g, " ").trim();
-    const vis = visibleWidth(flat);
-    if (vis <= maxLen) return flat;
-    return truncateToWidth(flat, Math.max(3, maxLen - 3)) + "...";
+  /** Collapse text for one-line list previews. */
+  private preview(value: string, width: number): string {
+    return truncateToWidth(value.replace(/\s+/g, " ").trim(), width);
   }
 
-  /** Scroll position indicator like "8/42". */
-  private scrollInfo(total: number): string {
-    if (total <= 1) return "";
-    const shown = Math.min(total, this.maxVis());
-    const end = Math.min(this.scrollOff + shown, total);
-    return `${this.scrollOff + 1}-${end}/${total}`;
+  /** Render memory content as markdown and keep renderer instances cached per memory. */
+  private renderMarkdownLines(row: ObservationRow, width: number): string[] {
+    const content = row.content?.trim() || "(no content)";
+    const key = `${row.id}:${row.updated_at ?? ""}:${width}`;
+    if (!this.mdRenderer || this.mdContentKey !== key) {
+      this.mdRenderer = new Markdown(content, 0, 0, getMarkdownTheme());
+      this.mdContentKey = key;
+    }
+    return this.mdRenderer.render(width).map((line) => truncateToWidth(line, width));
   }
 
-  /** Render a separator line with label. */
-  private sep(label: string, iw: number): string {
-    const lbl = label ? ` ${label} ` : "";
-    const pad = Math.max(0, iw - visibleWidth(lbl));
-    return this.d("─".repeat(Math.floor(pad / 2))) +
-           this.m(lbl) +
-           this.d("─".repeat(Math.ceil(pad / 2)));
+  /** Mark component state dirty and request a redraw. */
+  private touch(): void {
+    this.version++;
+    this.invalidate();
+    this.tui?.requestRender?.();
   }
 
-  // ---- View: project list ------------------------------------------------
+  // ---- Projects view -----------------------------------------------------
 
-  private renderProjects(w: number): string[] {
-    const projs = this.projectNames();
+  private renderProjects(width: number): string[] {
+    const inner = width - 2;
+    const projects = this.projectNames();
     const stats = this.projectStats();
-    this.clamp(projs.length);
-    const mv = this.maxVis();
-    const iw = w - 2;
-    const lines: string[] = [];
+    const visibleRows = this.maxBodyRows();
+    this.clamp(projects.length, visibleRows);
 
-    // Header with rounded corners
-    lines.push(
-      this.b("\u256D") + this.a(this.bold(" engram ")) + this.m("projects") +
-      this.b("\u2500".repeat(Math.max(0, iw - 16))) + this.b("\u256E"),
-    );
+    const lines = [this.top(`${this.a(this.bold("engram"))} ${this.m("projects")}`, inner), this.empty(inner)];
 
-    // Empty state
-    if (projs.length === 0) {
-      lines.push(this.b("\u2502") + "  " + this.d("No memories yet."));
-      lines.push(this.b("\u2570") + this.b("\u2500".repeat(iw)) + this.b("\u256F"));
-      lines.push(this.d(" q close"));
+    if (projects.length === 0) {
+      lines.push(this.row(this.d("No memories saved yet."), inner));
+      lines.push(...this.bottom("q close", inner));
       return lines;
     }
 
-    // Project list
-    const slice = projs.slice(this.scrollOff, this.scrollOff + mv);
+    const slice = projects.slice(this.scrollOff, this.scrollOff + visibleRows);
     for (let i = 0; i < slice.length; i++) {
-      const name = slice[i];
-      const info = stats.get(name)!;
-      const idx = this.scrollOff + i;
-      const sel = idx === this.selIdx;
-      const arrow = sel ? this.a("\u25B6") : " ";
-      const label = `${this.b("\u2502")} ${arrow} ${this.bold(name)}`;
-      const countS = ` ${info.count} mem  ${info.high} \u2605`;
-      const pad = Math.max(1, iw - visibleWidth(label) - visibleWidth(countS));
-      lines.push(label + " ".repeat(pad) + this.d(countS));
+      const project = slice[i];
+      const selected = this.scrollOff + i === this.selIdx;
+      const info = stats.get(project) ?? { count: 0, high: 0 };
+      const marker = selected ? this.a("▸") : this.d(" ");
+      const left = `${marker} ${this.bold(project)}`;
+      const right = this.d(`${info.count} memories  ${info.high} high`);
+      lines.push(this.row(left + " ".repeat(Math.max(1, inner - 2 - visibleWidth(left) - visibleWidth(right))) + right, inner));
     }
 
-    lines.push(this.b("\u2570") + this.b("\u2500".repeat(iw)) + this.b("\u256F"));
-
-    // Footer with scroll position and keyboard hints
-    const scrollS = this.scrollInfo(projs.length);
-    const hints = "\u2191/\u2193 j/k nav  \u23CE select  q close";
-    if (scrollS) {
-      const hintPad = Math.max(1, iw - visibleWidth(hints) - visibleWidth(scrollS));
-      lines.push(this.d(hints) + " ".repeat(hintPad) + this.m(scrollS));
-    } else {
-      lines.push(this.d(hints));
-    }
+    lines.push(this.empty(inner));
+    lines.push(...this.bottom("j/k navigate • l/enter open • h/q close", inner));
     return lines;
   }
 
   private handleProjectsInput(data: string): void {
-    const projs = this.projectNames();
-    if (matchesKey(data, Key.up) || matchesKey(data, "k")) {
-      this.selIdx = Math.max(0, this.selIdx - 1); this.version++; return;
-    }
-    if (matchesKey(data, Key.down) || matchesKey(data, "j")) {
-      this.selIdx = Math.min(projs.length - 1, this.selIdx + 1); this.version++; return;
-    }
-    if (matchesKey(data, Key.enter) && projs[this.selIdx]) {
-      this.selProject = projs[this.selIdx];
-      this.selIdx = 0; this.scrollOff = 0; this.view = "list"; this.version++;
+    const projects = this.projectNames();
+    if (matchesKey(data, Key.up) || matchesKey(data, "k")) this.selIdx--;
+    else if (matchesKey(data, Key.down) || matchesKey(data, "j")) this.selIdx++;
+    else if ((matchesKey(data, Key.enter) || matchesKey(data, "l")) && projects[this.selIdx]) {
+      this.selProject = projects[this.selIdx];
+      this.selIdx = 0;
+      this.scrollOff = 0;
+      this.searchBuf = "";
+      this.view = "list";
+    } else if (matchesKey(data, Key.escape) || matchesKey(data, "q") || matchesKey(data, "Q")) {
+      this.onDone();
       return;
     }
-    if (matchesKey(data, Key.escape) || matchesKey(data, "q") || matchesKey(data, "Q")) {
-      this.onDone();
-    }
+    this.clamp(projects.length);
+    this.touch();
   }
 
-  // ---- View: memory list -------------------------------------------------
+  // ---- List view ---------------------------------------------------------
 
-  private renderList(w: number): string[] {
-    const list = this.items();
-    this.clamp(list.length);
-    const mv = this.maxVis();
-    const iw = w - 2;
-    const lines: string[] = [];
+  private renderList(width: number): string[] {
+    const inner = width - 2;
+    const rows = this.items();
+    const rowHeight = 2;
+    const visibleItems = Math.max(3, Math.floor((this.maxBodyRows() - (this.searchMode ? 2 : 0)) / rowHeight));
+    this.clamp(rows.length, visibleItems);
 
-    // Header
-    const projL = this.selProject ? ` ${this.selProject} ` : " all ";
-    const cntL = ` ${list.length} `;
-    const headPad = Math.max(1, iw - visibleWidth(projL) - visibleWidth(cntL));
-    lines.push(
-      this.b("\u256D") + this.a(this.bold(projL)) + this.m(cntL) +
-      this.b("\u2500".repeat(headPad)) + this.b("\u256E"),
-    );
+    const title = `${this.a(this.bold(this.selProject ?? "all projects"))} ${this.m(`${rows.length} memories`)}`;
+    const lines = [this.top(title, inner)];
 
-    // Search bar
     if (this.searchMode) {
-      const searchPrefix = this.a("\u2315");
-      const searchContent = this.searchBuf ? this.a(this.searchBuf) : this.d("type to filter...");
-      const cursor = this.a("\u2588");
-      const searchLine = `${this.b("\u2502")} ${searchPrefix} ${searchContent}${cursor}`;
-      const searchPad = Math.max(0, iw - visibleWidth(searchLine) + 1);
-      lines.push(searchLine + " ".repeat(searchPad));
+      const query = this.searchBuf ? this.a(this.searchBuf) : this.d("type to filter...");
+      lines.push(this.row(`${this.a("/")} ${query}${this.a("█")}`, inner));
+      lines.push(this.b("├") + this.b("─".repeat(inner)) + this.b("┤"));
     }
 
-    // Empty state
-    if (list.length === 0) {
-      lines.push(this.b("\u2502") + "  " + this.d(this.searchBuf ? "No memories match your search." : "No memories in this project."));
-      lines.push(this.b("\u2570") + this.b("\u2500".repeat(iw)) + this.b("\u256F"));
-      lines.push(this.d(" \u232B back  q close"));
+    if (rows.length === 0) {
+      lines.push(this.empty(inner));
+      lines.push(this.row(this.d(this.searchBuf ? "No memories match this search." : "No memories in this project."), inner));
+      lines.push(this.empty(inner));
+      lines.push(...this.bottom("backspace projects • q close", inner));
       return lines;
     }
 
-    // Memory rows
-    const slice = list.slice(this.scrollOff, this.scrollOff + mv);
+    const slice = rows.slice(this.scrollOff, this.scrollOff + visibleItems);
     for (let i = 0; i < slice.length; i++) {
       const row = slice[i];
-      const idx = this.scrollOff + i;
-      const sel = idx === this.selIdx;
-      const arrow = sel ? this.a("\u25B6") : " ";
+      const selected = this.scrollOff + i === this.selIdx;
+      const marker = selected ? this.a("▸") : this.d(" ");
+      const titleLeft = `${marker} ${this.fmtType(row.type)} ${this.bold(row.title)}`;
+      const meta = `${this.fmtPriority(row.priority)} ${this.d(`#${row.id}`)} ${this.m((row.updated_at ?? "").slice(0, 10))}`;
+      const titleGap = Math.max(1, inner - 2 - visibleWidth(titleLeft) - visibleWidth(meta));
+      lines.push(this.row(titleLeft + " ".repeat(titleGap) + meta, inner));
 
-      // Row 1: Selection arrow + type badge + title + priority + date
-      const tag = this.fmtType(row.type);
-      const titleS = `${this.b("\u2502")} ${arrow} ${tag} ${this.bold(row.title)}`;
-      const metaS = this.d(`${this.fmtPriority(row.priority)} ${(row.updated_at ?? "").slice(0, 10)}`);
-      const metaL = visibleWidth(metaS);
-      const avail = iw - 1 - visibleWidth(titleS) - metaL;
-      lines.push(titleS + (avail > 0 ? " ".repeat(avail) : "") + metaS);
-
-      // Row 2: Topic key (if present)
-      if (row.topic_key) {
-        const topicContent = `${this.b("\u2502")}    ${this.d("\u21B7")} ${this.m(row.topic_key)}`;
-        lines.push(topicContent);
-      }
-
-      // Row 3: Content snippet
-      const snip = (row.content ?? "").replace(/\s+/g, " ").trim().slice(0, 80);
-      if (snip) {
-        const snippetContent = `${this.b("\u2502")}    ${this.d(snip + (snip.length >= 80 ? "..." : ""))}`;
-        lines.push(snippetContent);
-      }
-
-      // Row 4: Separator between entries
-      lines.push(`${this.b("\u2502")}`);
+      const topic = row.topic_key ? `${this.d("↳")} ${this.m(row.topic_key)}` : this.preview(row.content ?? "", inner - 6);
+      lines.push(this.row(`  ${this.d(topic)}`, inner));
     }
 
-    lines.push(this.b("\u2570") + this.b("\u2500".repeat(iw)) + this.b("\u256F"));
-
-    // Footer
-    const scrollS = this.scrollInfo(list.length);
-    if (this.searchMode) {
-      const hints = "\u23CE apply  \u232B backspace  \u238B esc cancel";
-      const hintPad = scrollS ? Math.max(1, iw - visibleWidth(hints) - visibleWidth(scrollS)) : 0;
-      lines.push(this.d(hints) + (hintPad > 0 ? " ".repeat(hintPad) : "") + (scrollS ? this.m(scrollS) : ""));
-    } else {
-      const hints = "\u2191/\u2193 j/k nav  \u23CE view  / search  \u232B back  q close";
-      const hintPad = scrollS ? Math.max(1, iw - visibleWidth(hints) - visibleWidth(scrollS)) : 0;
-      lines.push(this.d(hints) + (hintPad > 0 ? " ".repeat(hintPad) : "") + (scrollS ? this.m(scrollS) : ""));
-    }
+    const position = rows.length > 0 ? `${this.selIdx + 1}/${rows.length}` : "";
+    const baseHints = this.searchMode
+      ? "enter apply • backspace delete • esc cancel"
+      : "j/k navigate • l/enter detail • h projects • / search • q close";
+    const hints = position ? `${baseHints} • ${position}` : baseHints;
+    lines.push(...this.bottom(hints, inner));
     return lines;
   }
 
   private handleListInput(data: string): void {
-    const list = this.items();
+    const rows = this.items();
 
     if (this.searchMode) {
-      if (matchesKey(data, Key.enter) || matchesKey(data, Key.escape)) {
-        this.searchMode = false; this.selIdx = 0; this.scrollOff = 0; this.version++; return;
-      }
-      if (matchesKey(data, Key.backspace)) {
-        this.searchBuf = this.searchBuf.slice(0, -1); this.selIdx = 0; this.scrollOff = 0; this.version++; return;
-      }
-      if (data.length === 1 && data.charCodeAt(0) >= 32 && data.charCodeAt(0) <= 126) {
-        this.searchBuf += data; this.selIdx = 0; this.scrollOff = 0; this.version++; return;
-      }
+      if (matchesKey(data, Key.enter) || matchesKey(data, Key.escape)) this.searchMode = false;
+      else if (matchesKey(data, Key.backspace)) this.searchBuf = this.searchBuf.slice(0, -1);
+      else if (data.length === 1 && data.charCodeAt(0) >= 32) this.searchBuf += data;
+      this.selIdx = 0;
+      this.scrollOff = 0;
+      this.touch();
       return;
     }
 
-    if (matchesKey(data, Key.up) || matchesKey(data, "k")) { this.selIdx = Math.max(0, this.selIdx - 1); this.version++; return; }
-    if (matchesKey(data, Key.down) || matchesKey(data, "j")) { this.selIdx = Math.min(list.length - 1, this.selIdx + 1); this.version++; return; }
-    if (matchesKey(data, Key.enter) && list[this.selIdx]) {
-      this.viewing = list[this.selIdx]; this.view = "detail"; this.version++; return;
+    if (matchesKey(data, Key.up) || matchesKey(data, "k")) this.selIdx--;
+    else if (matchesKey(data, Key.down) || matchesKey(data, "j")) this.selIdx++;
+    else if (matchesKey(data, Key.home)) this.selIdx = 0;
+    else if (matchesKey(data, Key.end)) this.selIdx = rows.length - 1;
+    else if (matchesKey(data, Key.ctrl("u"))) this.selIdx -= Math.floor(this.maxBodyRows() / 2);
+    else if (matchesKey(data, Key.ctrl("d"))) this.selIdx += Math.floor(this.maxBodyRows() / 2);
+    else if ((matchesKey(data, Key.enter) || matchesKey(data, "l")) && rows[this.selIdx]) {
+      this.viewing = rows[this.selIdx];
+      this.detailScroll = 0;
+      this.view = "detail";
+    } else if (matchesKey(data, "/")) {
+      this.searchMode = true;
+      this.searchBuf = "";
+    } else if (matchesKey(data, Key.backspace) || matchesKey(data, "h")) {
+      this.selProject = null;
+      this.selIdx = 0;
+      this.scrollOff = 0;
+      this.view = "projects";
+    } else if (matchesKey(data, Key.escape) || matchesKey(data, "q") || matchesKey(data, "Q")) {
+      this.onDone();
+      return;
     }
-    if (matchesKey(data, "/")) { this.searchMode = true; this.searchBuf = ""; this.version++; return; }
-    if (matchesKey(data, Key.backspace)) {
-      this.selProject = null; this.selIdx = 0; this.scrollOff = 0; this.view = "projects"; this.version++; return;
-    }
-    if (matchesKey(data, Key.escape) || matchesKey(data, "q") || matchesKey(data, "Q")) {
-      this.onDone(); return;
-    }
-    if (matchesKey(data, Key.home)) { this.selIdx = 0; this.scrollOff = 0; this.version++; return; }
-    if (matchesKey(data, Key.end)) { this.selIdx = list.length - 1; this.version++; return; }
-    if (matchesKey(data, Key.ctrl("u"))) {
-      this.selIdx = Math.max(0, this.selIdx - Math.floor((process.stdout.rows || 24) / 2)); this.version++; return;
-    }
-    if (matchesKey(data, Key.ctrl("d"))) {
-      this.selIdx = Math.min(list.length - 1, this.selIdx + Math.floor((process.stdout.rows || 24) / 2)); this.version++; return;
-    }
+
+    this.clamp(this.items().length);
+    this.touch();
   }
 
-  // ---- View: detail ------------------------------------------------------
+  // ---- Detail view -------------------------------------------------------
 
-  private renderDetail(w: number): string[] {
-    const row = this.viewing!;
-    const iw = Math.max(40, w - 2);
-    const lines: string[] = [];
+  private renderDetail(width: number): string[] {
+    const row = this.viewing;
+    if (!row) return this.renderList(width);
 
-    // Header with type badge, title, priority
-    const tag = this.fmtType(row.type);
-    const titleS = ` ${tag} ${row.title} `;
-    const idS = this.m(`#${row.id}`);
-    const headerL = `${this.bold(titleS)} ${idS}`;
-    const headerPad = Math.max(1, iw - visibleWidth(headerL));
-    lines.push(
-      this.b("\u256D") + headerL + " ".repeat(headerPad) + this.b("\u256E"),
-    );
+    const inner = width - 2;
+    const contentWidth = Math.max(24, inner - 4);
+    const title = `${this.fmtType(row.type)} ${this.bold(row.title)} ${this.m(`#${row.id}`)}`;
+    const lines = [this.top(title, inner)];
 
-    // Metadata section
-    const labelW = 10;
+    const metaPairs = [
+      ["priority", `${this.fmtPriority(row.priority)} ${this.m(`p${row.priority}`)}`],
+      ["type", this.m(row.type)],
+      ["scope", this.m(row.scope)],
+      ["topic", row.topic_key ? this.a("↳ ") + this.m(row.topic_key) : this.d("-")],
+      ["updated", this.m((row.updated_at ?? "").slice(0, 16) || "-")],
+    ];
 
-    // Priority row
-    const pFilled = "●".repeat(row.priority);
-    const pEmpty = "○".repeat(5 - row.priority);
-    const pStr = row.priority >= 3 ? this.ok(pFilled) + this.d(pEmpty) : this.d(pFilled + pEmpty);
-    lines.push(`${this.b("\u2502")}  ${this.d("priority".padEnd(labelW, " "))}${pStr}  ${this.m(`p${row.priority}`)}`);
-
-    // Type row
-    lines.push(`${this.b("\u2502")}  ${this.d("type".padEnd(labelW, " "))}${this.m(row.type)}`);
-
-    // Scope row
-    lines.push(`${this.b("\u2502")}  ${this.d("scope".padEnd(labelW, " "))}${this.m(row.scope)}`);
-
-    // Topic row
-    if (row.topic_key) {
-      lines.push(`${this.b("\u2502")}  ${this.d("topic".padEnd(labelW, " "))}${this.a("\u21B7")} ${this.m(row.topic_key)}`);
+    for (const [label, value] of metaPairs) {
+      lines.push(this.row(`${this.d(label.padEnd(9, " "))} ${value}`, inner));
     }
 
-    // Dates
-    const createdStr = (row.created_at ?? "").slice(0, 16) || "-";
-    const updatedStr = (row.updated_at ?? "").slice(0, 16) || "-";
-    lines.push(`${this.b("\u2502")}  ${this.d("created".padEnd(labelW, " "))}${this.m(createdStr)}`);
-    lines.push(`${this.b("\u2502")}  ${this.d("updated".padEnd(labelW, " "))}${this.m(updatedStr)}`);
+    lines.push(this.b("├") + this.b("─".repeat(2)) + this.m(" content ") + this.b("─".repeat(Math.max(0, inner - 11))) + this.b("┤"));
 
-    // Revision / duplicate info
-    if (row.revision_count > 0 || row.duplicate_count > 0) {
-      const revParts: string[] = [];
-      if (row.revision_count > 0) revParts.push(`${row.revision_count} rev`);
-      if (row.duplicate_count > 0) revParts.push(`${row.duplicate_count} dup`);
-      lines.push(`${this.b("\u2502")}  ${this.d("revisions".padEnd(labelW, " "))}${this.m(revParts.join(", "))}`);
+    const mdLines = this.renderMarkdownLines(row, contentWidth);
+    const visibleContentRows = Math.max(5, this.maxBodyRows() - metaPairs.length - 2);
+    this.detailScroll = Math.max(0, Math.min(this.detailScroll, Math.max(0, mdLines.length - visibleContentRows)));
+    const visible = mdLines.slice(this.detailScroll, this.detailScroll + visibleContentRows);
+
+    for (const contentLine of visible) {
+      lines.push(this.row(`  ${contentLine}`, inner));
     }
 
-    // Separator
-    lines.push(this.b("\u2502") + "  " + this.sep("content", iw - 3));
+    const remaining = visibleContentRows - visible.length;
+    for (let i = 0; i < remaining; i++) lines.push(this.empty(inner));
 
-    // Content section — rendered as Markdown with syntax highlighting
-    const contentRaw = row.content ?? "";
-    const contentKey = `${row.id}-${(row.updated_at ?? "")}`;
-    if (contentRaw) {
-      const contentW = iw - 3;
-      // Re-create markdown renderer only if content changed
-      if (!this.mdRenderer || this.mdContentKey !== contentKey) {
-        this.mdRenderer = new Markdown(contentRaw, 0, 0, getMarkdownTheme());
-        this.mdContentKey = contentKey;
-      }
-      const mdLines = this.mdRenderer.render(contentW);
-      for (const cl of mdLines) {
-        lines.push(`${this.b("\u2502")}  ${cl}`);
-      }
-    } else {
-      lines.push(`${this.b("\u2502")}  ${this.d("(no content)")}`);
-    }
-
-    lines.push(this.b("\u2570") + this.b("\u2500".repeat(iw)) + this.b("\u256F"));
-    lines.push(this.d(" \u232B back  q close"));
+    const pos = mdLines.length > visibleContentRows
+      ? `${this.detailScroll + 1}-${Math.min(this.detailScroll + visibleContentRows, mdLines.length)}/${mdLines.length}`
+      : "";
+    const hints = `j/k scroll • h back • l noop • backspace back • q close${pos ? ` • ${pos}` : ""}`;
+    lines.push(...this.bottom(hints, inner));
     return lines;
   }
 
   private handleDetailInput(data: string): void {
-    if (matchesKey(data, Key.backspace) || matchesKey(data, Key.escape)) {
-      this.view = "list"; this.viewing = null; this.version++; return;
-    }
-    if (matchesKey(data, "q") || matchesKey(data, "Q")) {
+    const maxScroll = Number.MAX_SAFE_INTEGER;
+
+    if (matchesKey(data, Key.up) || matchesKey(data, "k")) this.detailScroll = Math.max(0, this.detailScroll - 1);
+    else if (matchesKey(data, Key.down) || matchesKey(data, "j")) this.detailScroll = Math.min(maxScroll, this.detailScroll + 1);
+    else if (matchesKey(data, Key.ctrl("u"))) this.detailScroll = Math.max(0, this.detailScroll - Math.floor(this.maxBodyRows() / 2));
+    else if (matchesKey(data, Key.ctrl("d"))) this.detailScroll = Math.min(maxScroll, this.detailScroll + Math.floor(this.maxBodyRows() / 2));
+    else if (matchesKey(data, Key.backspace) || matchesKey(data, Key.escape) || matchesKey(data, "h")) {
+      this.view = "list";
+      this.viewing = null;
+      this.detailScroll = 0;
+    } else if (matchesKey(data, "q") || matchesKey(data, "Q")) {
       this.onDone();
+      return;
     }
+    this.touch();
   }
 }
-
 

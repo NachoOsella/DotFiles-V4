@@ -53,9 +53,20 @@ async function fetchDeployedIds(): Promise<Set<string> | null> {
   return new Set(data.data.map((m) => m.id));
 }
 
-const THINKING_LEVEL_MAP = {
+/** Default thinking level map for most models: clamp minimal->low, xhigh->high. */
+const DEFAULT_THINKING_LEVEL_MAP: ProviderModelConfig["thinkingLevelMap"] = {
   minimal: "low",
   xhigh: "high",
+};
+
+/**
+ * DeepSeek models support `max` as their highest reasoning effort.
+ * Map Pi's xhigh to "max" so users can access the maximum thinking budget.
+ * low/medium/high pass through as-is (Pi and DeepSeek share those names).
+ */
+const DEEPSEEK_THINKING_LEVEL_MAP: ProviderModelConfig["thinkingLevelMap"] = {
+  minimal: "low",
+  xhigh: "max",
 };
 
 function buildModelConfigs(freeModels: Map<string, ModelsDevModel>, deployedIds: Set<string> | null): ProviderModelConfig[] {
@@ -65,11 +76,18 @@ function buildModelConfigs(freeModels: Map<string, ModelsDevModel>, deployedIds:
     if (deployedIds && !deployedIds.has(id)) continue;
     if (info.modalities?.output?.includes("image")) continue;
 
+    // Pick per-model-family thinking level map
+    const thinkingLevelMap = info.reasoning
+      ? id.includes("deepseek")
+        ? DEEPSEEK_THINKING_LEVEL_MAP
+        : DEFAULT_THINKING_LEVEL_MAP
+      : undefined;
+
     configs.push({
       id,
       name: info.name ?? id,
       reasoning: info.reasoning ?? false,
-      thinkingLevelMap: info.reasoning ? THINKING_LEVEL_MAP : undefined,
+      thinkingLevelMap,
       input: info.modalities?.input?.includes("image") ? ["text", "image"] : ["text"],
       cost: {
         input: 0,

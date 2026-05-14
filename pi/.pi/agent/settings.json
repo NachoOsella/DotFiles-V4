@@ -1,7 +1,7 @@
 {
   "lastChangelogVersion": "0.74.0",
   "theme": "gruvbox-material-dark-hard",
-  "defaultThinkingLevel": "high",
+  "defaultThinkingLevel": "medium",
   "hideThinkingBlock": false,
   "quietStartup": true,
   "packages": [
@@ -10,7 +10,7 @@
   ],
   "enableSkillCommands": true,
   "extensions": [],
-  "defaultProvider": "openai-codex",
-  "defaultModel": "gpt-5.3-codex",
+  "defaultProvider": "zen-free",
+  "defaultModel": "deepseek-v4-flash-free",
   "steeringMode": "one-at-a-time"
 }

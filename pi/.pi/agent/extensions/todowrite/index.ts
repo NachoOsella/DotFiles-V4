@@ -41,6 +41,9 @@ interface TodoDetails {
 // ---------------------------------------------------------------------------
 
 let todos: Todo[] = [];
+let widgetVisible = false;
+
+const TOGGLE_WIDGET_SHORTCUT = "alt+t";
 
 /**
  * Exported for orchestrator/UI access without coupling to the tool surface.
@@ -62,11 +65,18 @@ export function setTodos(list: Todo[]): void {
 // ---------------------------------------------------------------------------
 
 /**
- * Returns true when the widget should stay visible.
+ * Returns true when there are active todos worth showing.
  * Completed-only or empty lists are considered finished and hidden.
  */
-function shouldShowWidget(): boolean {
+function hasVisibleTodos(): boolean {
   return todos.some((todo) => todo.status !== "completed");
+}
+
+/**
+ * Returns true when the widget is enabled by the user and has content.
+ */
+function shouldShowWidget(): boolean {
+  return widgetVisible && hasVisibleTodos();
 }
 
 /**
@@ -136,6 +146,23 @@ function refreshWidget(ctx: ExtensionContext): void {
 }
 
 /**
+ * Toggle the todo widget visibility from a keyboard shortcut.
+ */
+function toggleWidget(ctx: ExtensionContext): void {
+  widgetVisible = !widgetVisible;
+  refreshWidget(ctx);
+
+  if (!ctx.hasUI) return;
+
+  if (widgetVisible && !hasVisibleTodos()) {
+    ctx.ui.notify("Todo widget enabled, but there are no active todos.", "info");
+    return;
+  }
+
+  ctx.ui.notify(widgetVisible ? "Todo widget shown." : "Todo widget hidden.", "info");
+}
+
+/**
  * Clear the widget (no todos to display).
  */
 function clearWidget(ctx: ExtensionContext): void {
@@ -192,9 +219,17 @@ const TodoWriteParams = Type.Object({
 // ---------------------------------------------------------------------------
 
 export default function (pi: ExtensionAPI) {
-  // Clear state and widget on session start (no persistence across sessions)
+  pi.registerShortcut(TOGGLE_WIDGET_SHORTCUT, {
+    description: "Show or hide the todowrite widget",
+    handler: async (ctx) => {
+      toggleWidget(ctx);
+    },
+  });
+
+  // Clear state and keep the widget hidden on session start (no persistence across sessions).
   pi.on("session_start", async (_event, ctx) => {
     todos = [];
+    widgetVisible = false;
     clearWidget(ctx);
   });
 
