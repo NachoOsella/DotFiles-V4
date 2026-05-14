@@ -2,18 +2,21 @@
 """
 Jira Admin CLI — Programmatic Jira Cloud administration.
 
-Manages epics, stories, subtasks, sprints and assignments.
-Credentials stored in ../config/credentials.json relative to this script.
+Manages epics, stories, subtasks, sprints and assignments using Jira Cloud
+REST APIs. Credentials are stored in ../config/credentials.json relative to
+this script.
 """
 
 import argparse
+import base64
 import json
 import os
-import subprocess
 import sys
 import time
-from datetime import datetime, timedelta
 from pathlib import Path
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlencode
+from urllib.request import Request, urlopen
 
 # --- Paths ---
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -22,7 +25,7 @@ CONFIG_DIR = SKILL_DIR / "config"
 CREDENTIALS_FILE = CONFIG_DIR / "credentials.json"
 CONFIG_DIR.mkdir(parents=True, exist_ok=True)
 
-# --- Issue type IDs for standard Jira Cloud ---
+# --- Issue type IDs for the current Jira Cloud project schema ---
 ISSUE_TYPES = {
     "epic": "10009",
     "story": "10008",
@@ -31,8 +34,14 @@ ISSUE_TYPES = {
     "subtask": "10010",
 }
 
+STORY_POINTS_FIELD = "customfield_10016"
+BULK_CREATE_LIMIT = 50
+SPRINT_ASSIGN_LIMIT = 50
+TRANSIENT_STATUS_CODES = {429, 502, 503, 504}
+
 
 def die(msg):
+    """Print an error message and terminate the CLI with a failing status."""
     print(f"Error: {msg}", file=sys.stderr)
     sys.exit(1)
 
@@ -43,13 +52,13 @@ def die(msg):
 
 
 def load_credentials():
-    """Load credentials from config file."""
+    """Load Jira credentials from the skill configuration file."""
     if not CREDENTIALS_FILE.exists():
         die(
             f"No credentials found at {CREDENTIALS_FILE}.\n"
             f"Run: {sys.argv[0]} auth --email you@example.com --token \"your-api-token\""
         )
-    with open(CREDENTIALS_FILE) as f:
+    with open(CREDENTIALS_FILE, encoding="utf-8") as f:
         creds = json.load(f)
     for key in ("email", "token"):
         if key not in creds:
@@ -58,7 +67,7 @@ def load_credentials():
 
 
 def cmd_auth(args):
-    """Store Jira credentials."""
+    """Store Jira credentials on disk with user-only permissions."""
     email = args.email
     token = args.token
     base_url = getattr(args, "base_url", "https://tecnicatura-team-412023.atlassian.net")
@@ -66,66 +75,147 @@ def cmd_auth(args):
     if not email or not token:
         die("Both --email and --token are required")
 
-    creds = {"email": email, "token": token, "baseUrl": base_url}
-    CREDENTIALS_FILE.write_text(json.dumps(creds, indent=2))
+    creds = {"email": email, "token": token, "baseUrl": base_url.rstrip("/")}
+    CREDENTIALS_FILE.write_text(json.dumps(creds, indent=2), encoding="utf-8")
     os.chmod(CREDENTIALS_FILE, 0o600)
     print(f"Credentials saved to {CREDENTIALS_FILE}")
 
 
 # =========================================================================
-# HTTP helpers
+# HTTP client
 # =========================================================================
 
 
-def _curl(method, path, data=None, raw=False):
-    """Execute a curl request and return parsed JSON or raw output."""
-    creds = load_credentials()
-    email = creds["email"]
-    token = creds["token"]
-    base_url = creds.get("baseUrl", "https://tecnicatura-team-412023.atlassian.net")
-    url = f"{base_url}{path}"
+class JiraClient:
+    """Small Jira Cloud REST client implemented with Python standard library."""
 
-    cmd = [
-        "curl", "-s",
-        "-u", f"{email}:{token}",
-        "-H", "Accept: application/json",
-    ]
-    if data is not None:
-        cmd += ["-H", "Content-Type: application/json", "-X", method, "-d", json.dumps(data)]
-    cmd.append(url)
+    def __init__(self, credentials=None, timeout=30, max_retries=4):
+        """Initialize authentication, base URL, timeout and retry settings."""
+        self.credentials = credentials or load_credentials()
+        self.base_url = self.credentials.get(
+            "baseUrl", "https://tecnicatura-team-412023.atlassian.net"
+        ).rstrip("/")
+        self.timeout = timeout
+        self.max_retries = max_retries
+        auth = f"{self.credentials['email']}:{self.credentials['token']}".encode("utf-8")
+        self.auth_header = "Basic " + base64.b64encode(auth).decode("ascii")
 
-    r = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-    if r.stderr and r.stderr.strip():
-        print(f"  [curl stderr] {r.stderr.strip()[:200]}", file=sys.stderr)
+    def request(self, method, path, data=None, query=None):
+        """Execute an HTTP request with JSON parsing and safe retry behavior."""
+        url = self._url(path, query)
+        body = None if data is None else json.dumps(data).encode("utf-8")
+        headers = {
+            "Accept": "application/json",
+            "Authorization": self.auth_header,
+            "User-Agent": "pi-jira-admin/2.0",
+        }
+        if data is not None:
+            headers["Content-Type"] = "application/json"
 
-    if raw:
-        return r.stdout
+        for attempt in range(self.max_retries + 1):
+            request = Request(url, data=body, headers=headers, method=method)
+            try:
+                with urlopen(request, timeout=self.timeout) as response:
+                    return self._decode_response(response.read())
+            except HTTPError as exc:
+                payload = self._decode_response(exc.read())
+                if exc.code in TRANSIENT_STATUS_CODES and attempt < self.max_retries:
+                    self._sleep_before_retry(exc, attempt)
+                    continue
+                return self._error_payload(exc.code, payload)
+            except URLError as exc:
+                if attempt < self.max_retries:
+                    time.sleep(min(2 ** attempt, 8))
+                    continue
+                return {"_error": str(exc.reason)}
 
-    if not r.stdout.strip():
-        return {}
+        return {"_error": "Request failed after retries"}
 
-    try:
-        return json.loads(r.stdout)
-    except json.JSONDecodeError as e:
-        print(f"  [JSON error] {e}", file=sys.stderr)
-        print(f"  [raw] {r.stdout[:300]}", file=sys.stderr)
-        return {"_error": str(e), "_raw": r.stdout[:200]}
+    def get(self, path, query=None):
+        """Execute a GET request."""
+        return self.request("GET", path, query=query)
+
+    def post(self, path, data, query=None):
+        """Execute a POST request."""
+        return self.request("POST", path, data=data, query=query)
+
+    def put(self, path, data, query=None):
+        """Execute a PUT request."""
+        return self.request("PUT", path, data=data, query=query)
+
+    def delete(self, path, query=None):
+        """Execute a DELETE request."""
+        return self.request("DELETE", path, query=query)
+
+    def _url(self, path, query=None):
+        """Build an absolute Jira API URL from a path and query parameters."""
+        url = f"{self.base_url}{path}"
+        if query:
+            url = f"{url}?{urlencode(query, doseq=True)}"
+        return url
+
+    def _decode_response(self, raw):
+        """Decode a JSON response body, returning an empty dict for empty bodies."""
+        if not raw:
+            return {}
+        text = raw.decode("utf-8", errors="replace")
+        if not text.strip():
+            return {}
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            return {"_raw": text[:500], "_error": "Invalid JSON response"}
+
+    def _error_payload(self, status_code, payload):
+        """Normalize Jira HTTP errors into a printable dictionary."""
+        if isinstance(payload, dict):
+            payload.setdefault("_status", status_code)
+            return payload
+        return {"_status": status_code, "_error": str(payload)}
+
+    def _sleep_before_retry(self, exc, attempt):
+        """Respect Retry-After when present, otherwise use exponential backoff."""
+        retry_after = exc.headers.get("Retry-After")
+        if retry_after:
+            try:
+                delay = int(retry_after)
+            except ValueError:
+                delay = min(2 ** attempt, 8)
+        else:
+            delay = min(2 ** attempt, 8)
+        print(f"  Jira returned {exc.code}; retrying in {delay}s...", file=sys.stderr)
+        time.sleep(delay)
 
 
-def get(path):
-    return _curl("GET", path)
+_CLIENT = None
 
 
-def post(path, data):
-    return _curl("POST", path, data)
+def client():
+    """Return a process-wide Jira client so credentials are loaded once."""
+    global _CLIENT
+    if _CLIENT is None:
+        _CLIENT = JiraClient()
+    return _CLIENT
 
 
-def put(path, data):
-    return _curl("PUT", path, data)
+def get(path, query=None):
+    """Compatibility wrapper for existing command code."""
+    return client().get(path, query=query)
 
 
-def delete(path):
-    return _curl("DELETE", path)
+def post(path, data, query=None):
+    """Compatibility wrapper for existing command code."""
+    return client().post(path, data, query=query)
+
+
+def put(path, data, query=None):
+    """Compatibility wrapper for existing command code."""
+    return client().put(path, data, query=query)
+
+
+def delete(path, query=None):
+    """Compatibility wrapper for existing command code."""
+    return client().delete(path, query=query)
 
 
 # =========================================================================
@@ -138,13 +228,12 @@ def cmd_test(args):
     project = args.project
     result = get(f"/rest/api/3/project/{project}")
     if "key" in result:
-        print(f"OK — Project: {result['key']} ({result.get('name', '?')})")
+        print(f"OK - Project: {result['key']} ({result.get('name', '?')})")
         print(f"  Lead: {result.get('lead', {}).get('displayName', '?')}")
-        types = result.get("issueTypes", [])
-        for t in types:
-            print(f"  Issue type: {t['name']} (ID={t['id']})")
+        for issue_type in result.get("issueTypes", []):
+            print(f"  Issue type: {issue_type['name']} (ID={issue_type['id']})")
     else:
-        print(f"Error: {result.get('errorMessages', result)}")
+        print(f"Error: {format_error(result)}")
 
 
 def cmd_info(args):
@@ -153,8 +242,38 @@ def cmd_info(args):
 
 
 # =========================================================================
-# List
+# Pagination and listing
 # =========================================================================
+
+
+def fetch_paginated(path, item_key, query=None, max_results=100):
+    """Fetch all pages for Jira endpoints that use startAt/maxResults pagination."""
+    items = []
+    start_at = 0
+    query = dict(query or {})
+    while True:
+        page_query = dict(query)
+        page_query.update({"startAt": start_at, "maxResults": max_results})
+        data = get(path, query=page_query)
+        page_items = data.get(item_key, [])
+        items.extend(page_items)
+        if data.get("isLast") is True:
+            break
+        total = data.get("total")
+        start_at += len(page_items)
+        if not page_items or (total is not None and start_at >= total):
+            break
+    return items
+
+
+def fetch_board_issues(board, fields, max_results=100):
+    """Fetch every issue visible on a board with a constrained field list."""
+    return fetch_paginated(
+        f"/rest/agile/1.0/board/{board}/issue",
+        "issues",
+        query={"fields": fields},
+        max_results=max_results,
+    )
 
 
 def cmd_list(args):
@@ -163,172 +282,185 @@ def cmd_list(args):
 
     if kind == "sprints":
         board = args.board or 2
-        data = get(f"/rest/agile/1.0/board/{board}/sprint")
+        sprints = fetch_paginated(f"/rest/agile/1.0/board/{board}/sprint", "values")
         print(f"{'ID':>5}  {'State':10}  {'Name':35}  {'Goal':50}")
         print("-" * 105)
-        for s in data.get("values", []):
+        for sprint in sprints:
             if args.verbose:
-                # Count issues in sprint
-                iss = get(
-                    f"/rest/agile/1.0/sprint/{s['id']}/issue"
-                    "?fields=customfield_10016,issuetype&maxResults=0"
+                issues = get(
+                    f"/rest/agile/1.0/sprint/{sprint['id']}/issue",
+                    query={"fields": f"{STORY_POINTS_FIELD},issuetype", "maxResults": 0},
                 )
-                total = iss.get("total", 0)
+                total = issues.get("total", 0)
                 print(
-                    f"{s['id']:>5}  {s['state']:10}  {s['name'][:35]:35}  "
-                    f"{s.get('goal','')[:50]:50}  ({total} issues)"
+                    f"{sprint['id']:>5}  {sprint['state']:10}  {sprint['name'][:35]:35}  "
+                    f"{sprint.get('goal', '')[:50]:50}  ({total} issues)"
                 )
             else:
-                print(f"{s['id']:>5}  {s['state']:10}  {s['name'][:35]:35}")
+                print(f"{sprint['id']:>5}  {sprint['state']:10}  {sprint['name'][:35]:35}")
     elif kind == "epics":
         board = args.board or 2
-        data = get(f"/rest/agile/1.0/board/{board}/epic?maxResults=100")
+        epics = fetch_paginated(f"/rest/agile/1.0/board/{board}/epic", "values")
         print(f"{'Key':15}  {'Summary'}")
         print("-" * 60)
-        for ep in data.get("values", []):
-            print(f"{ep.get('key','?'):15}  {ep.get('summary','?')[:50]}")
+        for epic in epics:
+            print(f"{epic.get('key', '?'):15}  {epic.get('summary', '?')[:50]}")
     elif kind == "issues":
-        project = args.project
-        max_results = args.max_results or 100
-        data = get(
-            f"/rest/agile/1.0/board/{args.board or 2}/issue"
-            f"?maxResults={max_results}&fields=summary,issuetype,customfield_10016"
-        )
+        board = args.board or 2
+        issues = fetch_board_issues(board, f"summary,issuetype,{STORY_POINTS_FIELD}", args.max_results)
         print(f"{'Key':15}  {'Type':8}  {'SP':4}  {'Summary'}")
         print("-" * 70)
-        for iss in data.get("issues", []):
-            f = iss.get("fields", {})
-            itype = f.get("issuetype", {}).get("name", "?")
-            sp = f.get("customfield_10016", "")
-            sp_str = f"{sp:.0f}" if sp else "-"
+        for issue in issues:
+            fields = issue.get("fields", {})
+            issue_type = fields.get("issuetype", {}).get("name", "?")
+            points = fields.get(STORY_POINTS_FIELD, "")
+            points_text = f"{points:.0f}" if points else "-"
             print(
-                f"{iss.get('key','?'):15}  {itype:8}  {sp_str:4}  "
-                f"{f.get('summary','?')[:50]}"
+                f"{issue.get('key', '?'):15}  {issue_type:8}  {points_text:4}  "
+                f"{fields.get('summary', '?')[:50]}"
             )
     else:
         die(f"Unknown kind: {kind}. Use: sprints, epics, issues")
 
 
 # =========================================================================
-# Create: Epic
+# Issue payload builders and creators
 # =========================================================================
+
+
+def make_issue_payload(project, issue_type, summary, description="", parent_key=None, points=None, labels=None):
+    """Build a Jira issue create payload for single and bulk create endpoints."""
+    fields = {
+        "project": {"key": project},
+        "issuetype": {"id": ISSUE_TYPES[issue_type]},
+        "summary": summary[:255],
+    }
+    doc = _make_doc(description)
+    if doc:
+        fields["description"] = doc
+    if parent_key:
+        fields["parent"] = {"key": parent_key}
+    if points is not None:
+        fields[STORY_POINTS_FIELD] = points
+    if labels:
+        fields["labels"] = labels
+    return {"fields": fields}
 
 
 def cmd_create_epic(args):
     """Create an epic."""
-    project = args.project
-    summary = args.summary
-    description = args.description or ""
-
-    doc = _make_doc(description)
-    data = {
-        "fields": {
-            "project": {"key": project},
-            "issuetype": {"id": ISSUE_TYPES["epic"]},
-            "summary": summary,
-            "description": doc,
-        }
-    }
-    result = post("/rest/api/3/issue", data)
+    payload = make_issue_payload(args.project, "epic", args.summary, args.description or "")
+    result = post("/rest/api/3/issue", payload)
     if "key" in result:
-        print(f"Created epic: {result['key']} — {summary}")
+        print(f"Created epic: {result['key']} - {args.summary}")
         return result["key"]
-    else:
-        print(f"Error: {result.get('errorMessages', result)}", file=sys.stderr)
-        return None
-
-
-# =========================================================================
-# Create: Story
-# =========================================================================
+    print(f"Error: {format_error(result)}", file=sys.stderr)
+    return None
 
 
 def cmd_create_story(args):
-    """Create a story (optionally with subtasks)."""
-    project = args.project
-    summary = args.summary
-    parent_key = args.parent
-    points = args.points or 0
-    description = args.description or ""
-    task_list = args.tasks or []
+    """Create a story and optionally create subtasks below it."""
     labels = args.labels or ["tfi"]
+    payload = make_issue_payload(
+        args.project,
+        "story",
+        args.summary,
+        args.description or "",
+        parent_key=args.parent,
+        points=args.points or 0,
+        labels=labels,
+    )
+    result = post("/rest/api/3/issue", payload)
+    if "key" not in result and len(args.summary) > 80:
+        payload["fields"]["summary"] = args.summary[:80]
+        result = post("/rest/api/3/issue", payload)
 
-    doc = _make_doc(description)
-    data = {
-        "fields": {
-            "project": {"key": project},
-            "issuetype": {"id": ISSUE_TYPES["story"]},
-            "summary": summary,
-            "description": doc,
-            "parent": {"key": parent_key},
-            "customfield_10016": points,
-            "labels": labels,
-        }
-    }
-    result = post("/rest/api/3/issue", data)
     if "key" in result:
         story_key = result["key"]
-        print(f"Created story: {story_key} — {summary} ({points} SP)")
-
-        # Create subtasks
-        for task_summary in task_list:
-            time.sleep(0.2)
-            _create_subtask(task_summary, story_key)
+        print(f"Created story: {story_key} - {args.summary} ({args.points or 0} SP)")
+        for task_summary in args.tasks or []:
+            subtask_key = _create_subtask(task_summary, story_key, args.project)
+            if subtask_key:
+                print(f"  Created subtask: {subtask_key} - {task_summary[:60]}")
         return story_key
-    else:
-        # Try with truncated summary
-        data["fields"]["summary"] = summary[:80]
-        result2 = post("/rest/api/3/issue", data)
-        if "key" in result2:
-            story_key = result2["key"]
-            print(f"Created story: {story_key} — {summary[:60]} ({points} SP)")
-            for task_summary in task_list:
-                time.sleep(0.2)
-                _create_subtask(task_summary, story_key)
-            return story_key
-        print(f"Error creating story: {result.get('errorMessages', result)}", file=sys.stderr)
-        return None
+
+    print(f"Error creating story: {format_error(result)}", file=sys.stderr)
+    return None
 
 
-def _create_subtask(summary, parent_key):
-    """Create a single subtask under a story."""
-    doc = _make_doc(summary)
-    data = {
-        "fields": {
-            "project": {"key": "dummy"},  # Will be overridden by parent's project
-            "issuetype": {"id": ISSUE_TYPES["subtask"]},
-            "summary": summary[:80],
-            "description": doc,
-            "parent": {"key": parent_key},
-            "labels": ["tfi"],
-        }
-    }
-    result = post("/rest/api/3/issue", data)
+def _create_subtask(summary, parent_key, project):
+    """Create a single subtask under a parent story using the real project key."""
+    payload = make_issue_payload(
+        project,
+        "subtask",
+        summary[:80],
+        summary,
+        parent_key=parent_key,
+        labels=["tfi"],
+    )
+    result = post("/rest/api/3/issue", payload)
     if "key" in result:
         return result["key"]
-    else:
-        print(f"  Warning: subtask '{summary[:40]}' failed: {result.get('errorMessages','?')}", file=sys.stderr)
-        return None
-
-
-# =========================================================================
-# Create: Subtask
-# =========================================================================
+    print(f"  Warning: subtask '{summary[:40]}' failed: {format_error(result)}", file=sys.stderr)
+    return None
 
 
 def cmd_create_subtask(args):
     """Create one or more subtasks."""
-    parent_key = args.parent
-    summaries = args.summary
-    for s in summaries:
-        key = _create_subtask(s, parent_key)
+    project = args.project
+    for summary in args.summary:
+        key = _create_subtask(summary, args.parent, project)
         if key:
-            print(f"Created subtask: {key} — {s[:60]}")
-        time.sleep(0.2)
+            print(f"Created subtask: {key} - {summary[:60]}")
+
+
+def bulk_create_issues(issue_updates, label):
+    """Create issues in Jira bulk batches and return result records in input order."""
+    ordered_results = []
+    for batch_number, batch in enumerate(chunked(issue_updates, BULK_CREATE_LIMIT), start=1):
+        result = post("/rest/api/3/issue/bulk", {"issueUpdates": [item["payload"] for item in batch]})
+        batch_results = map_bulk_create_response(batch, result)
+        ordered_results.extend(batch_results)
+        ok_count = sum(1 for item in batch_results if item.get("key"))
+        print(f"  {label} batch {batch_number}: created {ok_count}/{len(batch)}")
+        for item in batch_results:
+            if item.get("error"):
+                print(f"    Failed {item['summary'][:60]}: {item['error']}", file=sys.stderr)
+    return ordered_results
+
+
+def map_bulk_create_response(batch, result):
+    """Map Jira bulk create successes and errors back to the original batch order."""
+    mapped = [
+        {"summary": item["summary"], "key": None, "error": None, "meta": item.get("meta", {})}
+        for item in batch
+    ]
+    if not isinstance(result, dict):
+        for item in mapped:
+            item["error"] = "Unexpected bulk response"
+        return mapped
+
+    errors_by_index = {}
+    for error in result.get("errors", []):
+        index = error.get("failedElementNumber")
+        if index is not None:
+            errors_by_index[index] = format_error(error)
+
+    successes = iter(result.get("issues", []))
+    for index, item in enumerate(mapped):
+        if index in errors_by_index:
+            item["error"] = errors_by_index[index]
+            continue
+        issue = next(successes, None)
+        if issue and issue.get("key"):
+            item["key"] = issue["key"]
+        else:
+            item["error"] = format_error(result) if result.get("_status") else "Missing issue in bulk response"
+    return mapped
 
 
 # =========================================================================
-# Create: Sprint
+# Sprints and assignments
 # =========================================================================
 
 
@@ -341,32 +473,20 @@ def cmd_create_sprint(args):
     if len(name) > 30:
         die(f"Sprint name must be <= 30 characters. Got {len(name)}: '{name}'")
 
-    data = {
-        "name": name,
-        "goal": goal,
-        "originBoardId": board,
-    }
-    result = post("/rest/agile/1.0/sprint", data)
+    result = post("/rest/agile/1.0/sprint", {"name": name, "goal": goal, "originBoardId": board})
     if "id" in result:
-        print(f"Created sprint: ID={result['id']} — {name}")
+        print(f"Created sprint: ID={result['id']} - {name}")
         return result["id"]
-    else:
-        print(f"Error: {result.get('errorMessages', result.get('errors', result))}", file=sys.stderr)
-        return None
-
-
-# =========================================================================
-# Update: Sprint
-# =========================================================================
+    print(f"Error: {format_error(result)}", file=sys.stderr)
+    return None
 
 
 def cmd_update_sprint(args):
-    """Update sprint name/goal."""
-    sprint_id = args.id
+    """Update sprint name and/or goal."""
     data = {}
     if args.name:
         if len(args.name) > 30:
-            die(f"Sprint name must be <= 30 characters")
+            die("Sprint name must be <= 30 characters")
         data["name"] = args.name
     if args.goal:
         data["goal"] = args.goal
@@ -375,70 +495,76 @@ def cmd_update_sprint(args):
         print("Nothing to update. Provide --name and/or --goal.")
         return
 
-    result = put(f"/rest/agile/1.0/sprint/{sprint_id}", data)
+    result = put(f"/rest/agile/1.0/sprint/{args.id}", data)
     if "id" in result:
-        print(f"Updated sprint {sprint_id}: name='{result.get('name','')}' goal='{result.get('goal','')}'")
+        print(f"Updated sprint {args.id}: name='{result.get('name', '')}' goal='{result.get('goal', '')}'")
     else:
-        print(f"Error: {result}", file=sys.stderr)
-
-
-# =========================================================================
-# Assign
-# =========================================================================
+        print(f"Error: {format_error(result)}", file=sys.stderr)
 
 
 def cmd_assign(args):
-    """Assign issues to a sprint."""
+    """Assign issues to a sprint by explicit keys, HU prefixes, or source sprint."""
     sprint_id = args.sprint
-    issue_keys = args.issues or []
-    by_hu = args.by_hu or []
-    from_sprint = getattr(args, "from_sprint", None)
+    issue_keys = list(args.issues or [])
 
-    # If --by-hu, resolve HU prefixes to actual keys
-    if by_hu:
-        board = getattr(args, "board", 2)
-        resolved = _resolve_hu_keys(by_hu, board)
-        issue_keys.extend(resolved)
+    if args.by_hu:
+        issue_keys.extend(resolve_hu_keys(args.by_hu, args.board or 2))
 
-    # If --from-sprint, move all issues from that sprint
-    if from_sprint:
-        data = get(f"/rest/agile/1.0/sprint/{from_sprint}/issue?fields=issuetype&maxResults=200")
-        for iss in data.get("issues", []):
-            f = iss.get("fields", {})
-            if f.get("issuetype", {}).get("name") == "Story":
-                issue_keys.append(iss.get("key"))
-        print(f"Moved {len(issue_keys)} stories from sprint {from_sprint}")
+    if args.from_sprint:
+        source_issues = fetch_paginated(
+            f"/rest/agile/1.0/sprint/{args.from_sprint}/issue",
+            "issues",
+            query={"fields": "issuetype"},
+        )
+        moved = 0
+        for issue in source_issues:
+            fields = issue.get("fields", {})
+            if fields.get("issuetype", {}).get("name") == "Story":
+                issue_keys.append(issue.get("key"))
+                moved += 1
+        print(f"Moved {moved} stories from sprint {args.from_sprint}")
 
+    issue_keys = dedupe([key for key in issue_keys if key])
     if not issue_keys:
         die("No issues to assign. Provide --issues, --by-hu or --from-sprint.")
 
-    # Assign in batches of 50
+    assign_issues_to_sprint(sprint_id, issue_keys)
+
+
+def assign_issues_to_sprint(sprint_id, issue_keys):
+    """Assign issue keys to a sprint in Jira-supported batches."""
     total = len(issue_keys)
-    for i in range(0, total, 50):
-        batch = issue_keys[i : i + 50]
+    assigned = 0
+    for index, batch in enumerate(chunked(issue_keys, SPRINT_ASSIGN_LIMIT), start=1):
         result = post(f"/rest/agile/1.0/sprint/{sprint_id}/issue", {"issues": batch})
         if isinstance(result, dict) and result.get("errorMessages"):
-            print(f"  Batch error: {result['errorMessages']}")
+            print(f"  Batch error: {result['errorMessages']}", file=sys.stderr)
         else:
-            print(f"  Batch {i//50+1}: assigned {len(batch)} issues to sprint {sprint_id}")
+            assigned += len(batch)
+            print(f"  Batch {index}: assigned {len(batch)} issues to sprint {sprint_id}")
+    print(f"Total: {assigned}/{total} issues assigned.")
+    return assigned
 
-    print(f"Total: {total} issues assigned.")
+
+def resolve_hu_keys(hu_prefixes, board=2):
+    """Resolve HU prefixes to Jira issue keys using one paginated board query."""
+    issues = fetch_board_issues(board, "summary,issuetype")
+    return resolve_hu_keys_from_issues(hu_prefixes, issues)
 
 
-def _resolve_hu_keys(hu_prefixes, board=2):
-    """Resolve HU-XX prefixes to Jira issue keys by querying the board."""
-    data = get(f"/rest/agile/1.0/board/{board}/issue?maxResults=300&fields=summary,issuetype")
+def resolve_hu_keys_from_issues(hu_prefixes, issues):
+    """Resolve HU prefixes from an existing issue collection without more API calls."""
     resolved = []
-    for iss in data.get("issues", []):
-        f = iss.get("fields", {})
-        if f.get("issuetype", {}).get("name") != "Story":
+    for issue in issues:
+        fields = issue.get("fields", {})
+        if fields.get("issuetype", {}).get("name") != "Story":
             continue
-        summary = f.get("summary", "")
+        summary = fields.get("summary", "")
         for prefix in hu_prefixes:
             if summary.startswith(prefix) or prefix in summary:
-                resolved.append(iss.get("key"))
+                resolved.append(issue.get("key"))
                 break
-    return resolved
+    return dedupe([key for key in resolved if key])
 
 
 # =========================================================================
@@ -447,97 +573,246 @@ def _resolve_hu_keys(hu_prefixes, board=2):
 
 
 def cmd_create_from_plan(args):
-    """Create everything from a JSON plan file."""
-    plan_file = args.plan
-    if not os.path.exists(plan_file):
-        die(f"Plan file not found: {plan_file}")
-
-    with open(plan_file) as f:
-        plan = json.load(f)
+    """Create epics, stories, subtasks, sprints and assignments from a JSON plan."""
+    plan = load_plan(args.plan)
+    errors = validate_plan(plan)
+    if errors:
+        for error in errors:
+            print(f"Validation error: {error}", file=sys.stderr)
+        die("Plan validation failed")
 
     project = plan.get("project", "RN412023")
     board = plan.get("board", 2)
+    summary = summarize_plan(plan)
 
-    # 1. Create epics with their stories
-    epic_keys = {}  # summary -> key
+    if args.dry_run:
+        print_dry_run(summary, plan)
+        return
+
+    report = {
+        "epics": 0,
+        "stories": 0,
+        "subtasks": 0,
+        "sprints": 0,
+        "assignments": 0,
+        "errors": [],
+    }
+
+    print("Creating epics in bulk...")
+    epic_items = []
     for epic_def in plan.get("epics", []):
-        epic_summary = epic_def["summary"]
-        epic_desc = epic_def.get("description", "")
-        epic_key = cmd_create_epic(
-            argparse.Namespace(
-                project=project,
-                summary=epic_summary,
-                description=epic_desc,
-            )
+        epic_items.append(
+            {
+                "summary": epic_def["summary"],
+                "payload": make_issue_payload(project, "epic", epic_def["summary"], epic_def.get("description", "")),
+                "meta": {"epic": epic_def},
+            }
         )
-        if epic_key:
-            epic_keys[epic_summary] = epic_key
-            time.sleep(0.3)
+    epic_results = bulk_create_issues(epic_items, "Epic") if epic_items else []
+    epic_keys = {item["summary"]: item["key"] for item in epic_results if item.get("key")}
+    report["epics"] = len(epic_keys)
+    collect_errors(report, "epic", epic_results)
 
-        # Create stories under this epic
+    print("Creating stories in bulk...")
+    story_items = []
+    for epic_def in plan.get("epics", []):
+        epic_key = epic_keys.get(epic_def["summary"])
+        if not epic_key:
+            continue
         for story_def in epic_def.get("stories", []):
-            if not epic_key:
-                print(f"  Skipping story '{story_def['summary']}' (epic failed)")
-                continue
-            time.sleep(0.3)
-            cmd_create_story(
-                argparse.Namespace(
-                    project=project,
-                    summary=story_def["summary"],
-                    parent=epic_key,
-                    points=story_def.get("points", 0),
-                    description=story_def.get("description", ""),
-                    tasks=story_def.get("tasks", []),
-                    labels=story_def.get("labels", ["tfi"]),
-                )
+            story_items.append(
+                {
+                    "summary": story_def["summary"],
+                    "payload": make_issue_payload(
+                        project,
+                        "story",
+                        story_def["summary"],
+                        story_def.get("description", ""),
+                        parent_key=epic_key,
+                        points=story_def.get("points", 0),
+                        labels=story_def.get("labels", ["tfi"]),
+                    ),
+                    "meta": {"story": story_def, "epic_key": epic_key},
+                }
             )
+    story_results = bulk_create_issues(story_items, "Story") if story_items else []
+    story_keys = {item["summary"]: item["key"] for item in story_results if item.get("key")}
+    hu_map = {extract_hu(item["summary"]): item["key"] for item in story_results if item.get("key") and extract_hu(item["summary"])}
+    report["stories"] = len(story_keys)
+    collect_errors(report, "story", story_results)
 
-    # 2. Create sprints
+    print("Creating subtasks in bulk...")
+    subtask_items = []
+    for item in story_results:
+        story_key = item.get("key")
+        story_def = item.get("meta", {}).get("story", {})
+        if not story_key:
+            continue
+        for task_summary in story_def.get("tasks", []):
+            subtask_items.append(
+                {
+                    "summary": task_summary,
+                    "payload": make_issue_payload(
+                        project,
+                        "subtask",
+                        task_summary[:80],
+                        task_summary,
+                        parent_key=story_key,
+                        labels=story_def.get("labels", ["tfi"]),
+                    ),
+                    "meta": {"story_key": story_key},
+                }
+            )
+    subtask_results = bulk_create_issues(subtask_items, "Subtask") if subtask_items else []
+    report["subtasks"] = sum(1 for item in subtask_results if item.get("key"))
+    collect_errors(report, "subtask", subtask_results)
+
+    print("Creating sprints...")
     sprint_ids = {}
     for sprint_def in plan.get("sprints", []):
-        time.sleep(0.3)
-        sid = cmd_create_sprint(
-            argparse.Namespace(
-                board=board,
-                name=sprint_def["name"][:30],
-                goal=sprint_def.get("goal", ""),
-            )
+        sprint_id = cmd_create_sprint(
+            argparse.Namespace(board=board, name=sprint_def["name"], goal=sprint_def.get("goal", ""))
         )
-        if sid:
-            sprint_ids[sprint_def["name"]] = sid
+        if sprint_id:
+            sprint_ids[sprint_def["name"]] = sprint_id
+    report["sprints"] = len(sprint_ids)
 
-    # 3. Assign stories to sprints by HU prefix
-    if plan.get("sprints"):
-        # Get all stories to build HU -> key mapping
-        all_data = get(
-            f"/rest/agile/1.0/board/{board}/issue?maxResults=300&fields=summary,issuetype"
-        )
-        hu_map = {}
-        for iss in all_data.get("issues", []):
-            f = iss.get("fields", {})
-            if f.get("issuetype", {}).get("name") == "Story":
-                s = f.get("summary", "")
-                if s.startswith("HU-"):
-                    hu_id = s.split(":")[0].strip()
-                    hu_map[hu_id] = iss.get("key")
+    print("Assigning stories to sprints...")
+    for sprint_def in plan.get("sprints", []):
+        sprint_id = sprint_ids.get(sprint_def["name"])
+        if not sprint_id:
+            continue
+        keys = []
+        for ref in sprint_def.get("stories", []):
+            key = hu_map.get(ref) or story_keys.get(ref)
+            if key:
+                keys.append(key)
+        if keys:
+            report["assignments"] += assign_issues_to_sprint(sprint_id, dedupe(keys))
 
-        for sprint_def in plan.get("sprints", []):
-            sid = sprint_ids.get(sprint_def["name"])
-            if not sid:
+    print_plan_report(report, plan, board, project)
+
+
+def load_plan(plan_file):
+    """Read a JSON plan file from disk and return its parsed content."""
+    if not os.path.exists(plan_file):
+        die(f"Plan file not found: {plan_file}")
+    try:
+        with open(plan_file, encoding="utf-8") as f:
+            return json.load(f)
+    except json.JSONDecodeError as exc:
+        die(f"Invalid JSON in {plan_file}: {exc}")
+
+
+def validate_plan(plan):
+    """Validate a create-from-plan document before making Jira write requests."""
+    errors = []
+    if not isinstance(plan, dict):
+        return ["Plan must be a JSON object"]
+    if not plan.get("project"):
+        errors.append("Missing required 'project'")
+    if "epics" in plan and not isinstance(plan["epics"], list):
+        errors.append("'epics' must be a list")
+    if "sprints" in plan and not isinstance(plan["sprints"], list):
+        errors.append("'sprints' must be a list")
+
+    story_refs = set()
+    for epic_index, epic_def in enumerate(plan.get("epics", []), start=1):
+        if not isinstance(epic_def, dict):
+            errors.append(f"Epic #{epic_index} must be an object")
+            continue
+        if not epic_def.get("summary"):
+            errors.append(f"Epic #{epic_index} is missing summary")
+        if not isinstance(epic_def.get("stories", []), list):
+            errors.append(f"Epic '{epic_def.get('summary', epic_index)}' stories must be a list")
+            continue
+        for story_index, story_def in enumerate(epic_def.get("stories", []), start=1):
+            if not isinstance(story_def, dict):
+                errors.append(f"Story #{story_index} in epic '{epic_def.get('summary', epic_index)}' must be an object")
                 continue
-            keys = [hu_map[hu] for hu in sprint_def.get("stories", []) if hu in hu_map]
-            if keys:
-                for i in range(0, len(keys), 50):
-                    batch = keys[i : i + 50]
-                    result = post(f"/rest/agile/1.0/sprint/{sid}/issue", {"issues": batch})
-                    if isinstance(result, dict) and result.get("errorMessages"):
-                        print(f"  Assign error: {result['errorMessages']}")
-                    else:
-                        print(f"  Sprint '{sprint_def['name']}': assigned {len(batch)} stories")
-                time.sleep(0.3)
+            summary = story_def.get("summary")
+            if not summary:
+                errors.append(f"Story #{story_index} in epic '{epic_def.get('summary', epic_index)}' is missing summary")
+                continue
+            story_refs.add(summary)
+            hu = extract_hu(summary)
+            if hu:
+                story_refs.add(hu)
+            if not isinstance(story_def.get("tasks", []), list):
+                errors.append(f"Story '{summary}' tasks must be a list")
 
-    print("\nDone. Review at:")
-    print(f"  https://{plan.get('site', 'tecnicatura-team-412023')}.atlassian.net/jira/software/projects/{project}/boards/{board}")
+    for sprint_index, sprint_def in enumerate(plan.get("sprints", []), start=1):
+        if not isinstance(sprint_def, dict):
+            errors.append(f"Sprint #{sprint_index} must be an object")
+            continue
+        name = sprint_def.get("name")
+        if not name:
+            errors.append(f"Sprint #{sprint_index} is missing name")
+        elif len(name) > 30:
+            errors.append(f"Sprint '{name}' name must be <= 30 characters")
+        if not isinstance(sprint_def.get("stories", []), list):
+            errors.append(f"Sprint '{name or sprint_index}' stories must be a list")
+            continue
+        for story_ref in sprint_def.get("stories", []):
+            if story_ref not in story_refs:
+                errors.append(f"Sprint '{name}' references unknown story '{story_ref}'")
+    return errors
+
+
+def summarize_plan(plan):
+    """Count the main resources described by a plan."""
+    epics = len(plan.get("epics", []))
+    stories = 0
+    subtasks = 0
+    for epic_def in plan.get("epics", []):
+        for story_def in epic_def.get("stories", []):
+            stories += 1
+            subtasks += len(story_def.get("tasks", []))
+    return {"epics": epics, "stories": stories, "subtasks": subtasks, "sprints": len(plan.get("sprints", []))}
+
+
+def print_dry_run(summary, plan):
+    """Print the write operations that would be performed without calling Jira."""
+    print("Dry run: no Jira write requests will be made.")
+    print(f"Project: {plan.get('project')}")
+    print(f"Board: {plan.get('board', 2)}")
+    print(
+        "Would create: "
+        f"{summary['epics']} epics, {summary['stories']} stories, "
+        f"{summary['subtasks']} subtasks, {summary['sprints']} sprints"
+    )
+    for epic_def in plan.get("epics", []):
+        print(f"  Epic: {epic_def['summary']}")
+        for story_def in epic_def.get("stories", []):
+            print(f"    Story: {story_def['summary']} ({story_def.get('points', 0)} SP)")
+            for task_summary in story_def.get("tasks", []):
+                print(f"      Subtask: {task_summary}")
+    for sprint_def in plan.get("sprints", []):
+        print(f"  Sprint: {sprint_def['name']} -> {', '.join(sprint_def.get('stories', []))}")
+
+
+def collect_errors(report, kind, results):
+    """Append bulk operation errors to the final report."""
+    for item in results:
+        if item.get("error"):
+            report["errors"].append(f"{kind} '{item['summary']}': {item['error']}")
+
+
+def print_plan_report(report, plan, board, project):
+    """Print a concise create-from-plan summary and the Jira board URL."""
+    print("\nDone.")
+    print(f"  Epics created: {report['epics']}")
+    print(f"  Stories created: {report['stories']}")
+    print(f"  Subtasks created: {report['subtasks']}")
+    print(f"  Sprints created: {report['sprints']}")
+    print(f"  Story sprint assignments: {report['assignments']}")
+    if report["errors"]:
+        print("  Errors:", file=sys.stderr)
+        for error in report["errors"]:
+            print(f"    - {error}", file=sys.stderr)
+    site = plan.get("site") or client().base_url.replace("https://", "").split(".")[0]
+    print("Review at:")
+    print(f"  https://{site}.atlassian.net/jira/software/projects/{project}/boards/{board}")
 
 
 # =========================================================================
@@ -546,16 +821,61 @@ def cmd_create_from_plan(args):
 
 
 def _make_doc(text):
-    """Create an Atlassian Document Format body."""
+    """Create an Atlassian Document Format body from plain text."""
     if not text:
         return None
-    lines = text.strip().split("\n")
     content = []
-    for line in lines:
-        content.append(
-            {"type": "paragraph", "content": [{"type": "text", "text": line}]}
-        )
+    for line in text.strip().split("\n"):
+        content.append({"type": "paragraph", "content": [{"type": "text", "text": line}]})
     return {"type": "doc", "version": 1, "content": content}
+
+
+def extract_hu(summary):
+    """Extract a HU-XX prefix from a story summary when present."""
+    if not isinstance(summary, str):
+        return None
+    text = summary.strip()
+    if not text.startswith("HU-"):
+        return None
+    return text.split(":", 1)[0].strip()
+
+
+def chunked(items, size):
+    """Yield fixed-size chunks from a sequence."""
+    for index in range(0, len(items), size):
+        yield items[index : index + size]
+
+
+def dedupe(items):
+    """Return items with duplicates removed while preserving first-seen order."""
+    seen = set()
+    unique = []
+    for item in items:
+        if item in seen:
+            continue
+        seen.add(item)
+        unique.append(item)
+    return unique
+
+
+def format_error(result):
+    """Format Jira error payloads into concise human-readable text."""
+    if not isinstance(result, dict):
+        return str(result)
+    parts = []
+    if result.get("_status"):
+        parts.append(f"HTTP {result['_status']}")
+    if result.get("errorMessages"):
+        parts.extend(result["errorMessages"])
+    if result.get("errors"):
+        parts.append(json.dumps(result["errors"], ensure_ascii=False))
+    if result.get("message"):
+        parts.append(str(result["message"]))
+    if result.get("_error"):
+        parts.append(str(result["_error"]))
+    if result.get("elementErrors"):
+        parts.append(json.dumps(result["elementErrors"], ensure_ascii=False))
+    return "; ".join(parts) if parts else json.dumps(result, ensure_ascii=False)[:500]
 
 
 # =========================================================================
@@ -564,36 +884,32 @@ def _make_doc(text):
 
 
 def main():
+    """Parse command-line arguments and dispatch to the selected command."""
     parser = argparse.ArgumentParser(
-        description="Jira Admin CLI — Programmatic Jira Cloud management",
+        description="Jira Admin CLI - Programmatic Jira Cloud management",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     sub = parser.add_subparsers(dest="command", help="Command to execute")
 
-    # auth
     p_auth = sub.add_parser("auth", help="Store Jira credentials")
     p_auth.add_argument("--email", required=True, help="Atlassian account email")
     p_auth.add_argument("--token", required=True, help="Atlassian API token")
-    p_auth.add_argument("--base-url", default="https://tecnicatura-team-412023.atlassian.net",
-                        help="Jira base URL")
+    p_auth.add_argument("--base-url", default="https://tecnicatura-team-412023.atlassian.net", help="Jira base URL")
 
-    # test / info
     p_test = sub.add_parser("test", help="Test API connection")
     p_test.add_argument("--project", default="RN412023", help="Project key")
     p_info = sub.add_parser("info", help="Show project info")
     p_info.add_argument("--project", default="RN412023", help="Project key")
 
-    # list
     p_list = sub.add_parser("list", help="List resources (sprints, epics, issues)")
     p_list.add_argument("kind", choices=["sprints", "epics", "issues"], help="What to list")
     p_list.add_argument("--board", type=int, default=2, help="Board ID")
     p_list.add_argument("--project", default="RN412023", help="Project key")
-    p_list.add_argument("--max-results", type=int, default=100, help="Max results")
+    p_list.add_argument("--max-results", type=int, default=100, help="Page size for issue listing")
     p_list.add_argument("--verbose", "-v", action="store_true", help="Show details")
 
-    # create epic
-    p_ce = sub.add_parser("create", help="Create resources (epic, story, subtask, sprint)")
-    create_sub = p_ce.add_subparsers(dest="create_type")
+    p_create = sub.add_parser("create", help="Create resources (epic, story, subtask, sprint)")
+    create_sub = p_create.add_subparsers(dest="create_type")
 
     p_epic = create_sub.add_parser("epic", help="Create an epic")
     p_epic.add_argument("--project", default="RN412023", required=True)
@@ -610,23 +926,22 @@ def main():
     p_story.add_argument("--labels", nargs="*", default=["tfi"])
 
     p_subtask = create_sub.add_parser("subtask", help="Create one or more subtasks")
+    p_subtask.add_argument("--project", default="RN412023", help="Project key")
     p_subtask.add_argument("--parent", required=True, help="Parent story key")
-    p_subtask.add_argument("summary", nargs="+", help="Subtask summary(ies)")
+    p_subtask.add_argument("summary", nargs="+", help="Subtask summary or summaries")
 
     p_sprint = create_sub.add_parser("sprint", help="Create a sprint")
     p_sprint.add_argument("--board", type=int, default=2)
     p_sprint.add_argument("--name", required=True)
     p_sprint.add_argument("--goal", default="")
 
-    # update sprint
-    p_us = sub.add_parser("update", help="Update sprint")
-    update_sub = p_us.add_subparsers(dest="update_type")
-    p_us_sprint = update_sub.add_parser("sprint", help="Update sprint name/goal")
-    p_us_sprint.add_argument("--id", type=int, required=True)
-    p_us_sprint.add_argument("--name", help="New name (max 30 chars)")
-    p_us_sprint.add_argument("--goal", help="New goal")
+    p_update = sub.add_parser("update", help="Update sprint")
+    update_sub = p_update.add_subparsers(dest="update_type")
+    p_update_sprint = update_sub.add_parser("sprint", help="Update sprint name/goal")
+    p_update_sprint.add_argument("--id", type=int, required=True)
+    p_update_sprint.add_argument("--name", help="New name (max 30 chars)")
+    p_update_sprint.add_argument("--goal", help="New goal")
 
-    # assign
     p_assign = sub.add_parser("assign", help="Assign issues to a sprint")
     p_assign.add_argument("--sprint", type=int, required=True, help="Sprint ID")
     p_assign.add_argument("--board", type=int, default=2)
@@ -634,9 +949,9 @@ def main():
     p_assign.add_argument("--by-hu", nargs="*", default=[], help="HU prefixes (e.g. HU-01 HU-02)")
     p_assign.add_argument("--from-sprint", type=int, help="Move all stories from another sprint")
 
-    # create-from-plan
     p_plan = sub.add_parser("create-from-plan", help="Bulk create from JSON plan")
     p_plan.add_argument("plan", help="Path to JSON plan file")
+    p_plan.add_argument("--dry-run", action="store_true", help="Validate and print planned writes without calling Jira")
 
     args = parser.parse_args()
 
@@ -644,7 +959,6 @@ def main():
         parser.print_help()
         sys.exit(1)
 
-    # Dispatch
     handlers = {
         "auth": cmd_auth,
         "test": cmd_test,
@@ -667,7 +981,7 @@ def main():
         if handler:
             handler(args)
         else:
-            p_ce.print_help()
+            p_create.print_help()
     elif args.command == "update":
         if args.update_type == "sprint":
             cmd_update_sprint(args)

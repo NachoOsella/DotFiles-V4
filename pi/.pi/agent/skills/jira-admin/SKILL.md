@@ -9,7 +9,11 @@ description: |
 # Jira Admin Skill
 
 Provides a CLI script (`scripts/jira.py`) to programmatically manage a Jira Cloud project.
-Creates epics, stories (with subtasks and story points), sprints, and assigns issues to sprints.
+Creates epics, stories with subtasks and story points, sprints, and sprint assignments.
+
+The script uses only Python standard library modules. Bulk plan creation uses Jira Cloud's
+`/rest/api/3/issue/bulk` endpoint in batches of up to 50 issues, and retries safely on Jira
+rate limits or temporary server errors.
 
 ## Setup
 
@@ -33,8 +37,12 @@ All commands follow: `jira.py <command> [options]`
 # Store credentials (first time)
 jira.py auth --email user@example.com --token "ATATT3xxx"
 
+# Store credentials for a specific Jira Cloud site
+jira.py auth --email user@example.com --token "ATATT3xxx" \
+  --base-url "https://your-domain.atlassian.net"
+
 # Test that credentials work
-jira.py test
+jira.py test --project RN412023
 
 # Show current project info
 jira.py info --project RN412023
@@ -80,12 +88,12 @@ jira.py create story --project RN412023 \
 
 ```bash
 # Single subtask
-jira.py create subtask --parent RN412023-16 \
-  --summary "Implement login endpoint"
+jira.py create subtask --project RN412023 --parent RN412023-16 \
+  "Implement login endpoint"
 
 # Multiple subtasks at once
-jira.py create subtask --parent RN412023-16 \
-  --summary "JWT validation" "Token interceptor" "Route guard"
+jira.py create subtask --project RN412023 --parent RN412023-16 \
+  "JWT validation" "Token interceptor" "Route guard"
 ```
 
 ### Managing Sprints
@@ -109,16 +117,26 @@ jira.py update sprint --id 6 --name "S1 - Base and Catalog" --goal "New goal"
 # Assign multiple issues to a sprint
 jira.py assign --sprint 6 --issues RN412023-16 RN412023-23 RN412023-29
 
-# Move all issues from one sprint to another
-jira.py assign --from-sprint 6 --to-sprint 7
+# Assign by HU prefix with one paginated board lookup
+jira.py assign --sprint 6 --by-hu HU-01 HU-02 HU-03 --board 2
+
+# Move all stories from one sprint to another
+jira.py assign --sprint 7 --from-sprint 6
 ```
 
 ### Bulk Operations from JSON Plan
 
 ```bash
+# Validate and preview all writes without touching Jira
+jira.py create-from-plan plan.json --dry-run
+
 # Create everything from a JSON file (epics + stories + subtasks + sprints)
 jira.py create-from-plan plan.json
 ```
+
+`create-from-plan` validates the plan before writing. It rejects missing summaries,
+invalid structure, sprint names longer than 30 characters, and sprint story references
+that do not match a story summary or HU prefix in the plan.
 
 ## Plan JSON Format
 
@@ -149,7 +167,7 @@ The bulk operation (`create-from-plan`) accepts a JSON file with this structure:
     {
       "name": "S1 - Base",
       "goal": "Base system",
-      "stories": ["HU-01", "HU-02"]
+      "stories": ["HU-01"]
     }
   ]
 }
@@ -160,20 +178,19 @@ The bulk operation (`create-from-plan`) accepts a JSON file with this structure:
 When the user asks to migrate a backlog to Jira:
 
 1. **Authenticate**: Ensure credentials are stored (`jira.py auth`)
-2. **Verify access**: `jira.py test` to confirm the project exists
-3. **Create epics** first (they have no dependencies)
-4. **Create stories** with `--parent EPIC-KEY` to link them
-5. **Create subtasks** with `--parent STORY-KEY`
-6. **Create sprints** after all issues exist
-7. **Assign** stories to sprints by their HU prefix or key
+2. **Verify access**: `jira.py test --project PROJECTKEY` to confirm the project exists
+3. **Create or validate a plan**: use `jira.py create-from-plan backlog.json --dry-run`
+4. **Bulk-create the plan**: run `jira.py create-from-plan backlog.json`
+5. **Review the final report**: confirm created epics, stories, subtasks, sprints, and assignments
 
 Tips:
 - Sprint names are limited to **30 characters** in Jira Cloud
 - Story points use `customfield_10016`
-- Subtasks use issue type ID `10010` (for the standard Jira Cloud schema)
+- Subtasks use issue type ID `10010` for the current Jira Cloud schema
 - Epics use issue type ID `10009`
 - Stories use issue type ID `10008`
 - The `parent` field links stories to epics in simplified Jira projects
+- Jira rate limits are handled with `Retry-After` and exponential backoff
 
 ## Examples Asked by Users
 
@@ -183,15 +200,11 @@ Tips:
 # 1. Authenticate
 jira.py auth --email user@example.com --token "xxx"
 
-# 2. Create plan file with all epics+stories+tasks, then:
+# 2. Create plan file with all epics+stories+tasks, then validate:
+jira.py create-from-plan backlog.json --dry-run
+
+# 3. Bulk create and assign from the plan:
 jira.py create-from-plan backlog.json
-
-# 3. Create 4 sprints
-jira.py create sprint --board 2 --name "S1 - Base" --goal "Base system"
-jira.py create sprint --board 2 --name "S2 - Catalog" --goal "Products and stock"
-
-# 4. Assign by HU prefix
-jira.py assign --sprint 6 --by-hu HU-01 HU-02 HU-03
 ```
 
 ### "Update sprint names or goals"

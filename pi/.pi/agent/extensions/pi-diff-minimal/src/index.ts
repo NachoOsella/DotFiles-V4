@@ -29,6 +29,7 @@ import { parseDiff } from "./core/diff.js";
 
 const MAX_TERM_WIDTH = 210;
 const DEFAULT_TERM_WIDTH = 200;
+const MIN_TERM_WIDTH = 40;
 
 const MAX_PREVIEW_LINES = 60; // edit tool preview
 const MAX_RENDER_LINES = 150; // write tool result
@@ -40,13 +41,16 @@ const ANSI_RE = /\x1b\[[0-9;]*m/g;
 // Utilities
 // ---------------------------------------------------------------------------
 
+/** Width to render diffs at. Pi's tool content area is roughly raw - 8. */
 function termW(): number {
 	const raw =
 		process.stdout.columns ||
 		(process.stderr as any).columns ||
 		Number.parseInt(process.env.COLUMNS ?? "", 10) ||
 		DEFAULT_TERM_WIDTH;
-	return Math.max(80, Math.min(raw - 4, MAX_TERM_WIDTH));
+
+	// raw - 8 accounts for terminal chrome (scrollbar, border) + Pi's box padding (1 each side)
+	return Math.max(MIN_TERM_WIDTH, Math.min(raw - 8, MAX_TERM_WIDTH));
 }
 
 function shortPath(cwd: string, home: string, p: string): string {
@@ -106,15 +110,13 @@ export default async function diffRendererExtension(pi: any): Promise<void> {
 	// Apply diff theme palette from env/settings before rendering
 	applyDiffPalette();
 
-	let createWriteTool: any, createEditTool: any, getMarkdownTheme: any, TextComponent: any, MarkdownComponent: any;
+	let createWriteTool: any, createEditTool: any, TextComponent: any;
 	try {
 		const sdk = await import("@mariozechner/pi-coding-agent");
 		const tui = await import("@mariozechner/pi-tui");
 		createWriteTool = sdk.createWriteTool;
 		createEditTool = sdk.createEditTool;
-		getMarkdownTheme = sdk.getMarkdownTheme;
 		TextComponent = tui.Text;
-		MarkdownComponent = tui.Markdown;
 	} catch (error) {
 		console.error(
 			`[pi-diff-minimal] failed to load Pi SDK dependencies: ${error instanceof Error ? error.message : String(error)}`,
@@ -173,7 +175,7 @@ export default async function diffRendererExtension(pi: any): Promise<void> {
 			// Streaming
 			if (args?.content && !ctx.argsComplete) {
 				const n = String(args.content).split("\n").length;
-				text.setText(`${hdr}  ${theme.fg("muted", `(${n} lines\u2026)`)}`);
+				text.setText(`${hdr}  ${theme.fg("muted", `(${n} lines…)`)}`);
 				return text;
 			}
 
@@ -218,7 +220,7 @@ export default async function diffRendererExtension(pi: any): Promise<void> {
 				const key = `wd:${themeCacheKey(theme)}:${w}:${d.summary}:${d.diff?.lines?.length ?? 0}:${d.language ?? ""}`;
 				if (ctx.state._wdk !== key) {
 					ctx.state._wdk = key;
-					ctx.state._wdt = `  ${d.summary}\n${theme.fg("muted", "  rendering diff\u2026")}`;
+					ctx.state._wdt = `  ${d.summary}\n${theme.fg("muted", "  rendering diff…")}`;
 					const dc = resolveDiffColors(theme);
 					renderSplit(d.diff, d.language, MAX_RENDER_LINES, dc, w)
 						.then((rendered: string) => {
@@ -244,20 +246,20 @@ export default async function diffRendererExtension(pi: any): Promise<void> {
 				const pk = `code-frame-result-v1:${themeCacheKey(theme)}:${fp}:${lineCount}:${String(rawContent ?? "").length}:${termW()}`;
 				if (ctx.state._nfk !== pk) {
 					ctx.state._nfk = pk;
-					ctx.state._nft = `  ${theme.fg("success", `✓ new file (${lineCount} lines)`)}`;
+					ctx.state._nft = `  ${theme.fg("success", `\u2713 new file (${lineCount} lines)`)}`;
 					const lg = detectDiffLanguage(fp);
 					if (rawContent) {
 						resolveDiffColors(theme);
 						renderCodeFrame(String(rawContent), lg, ctx.expanded ? Number.MAX_SAFE_INTEGER : MAX_WRITE_NEW_PREVIEW_LINES, termW())
 							.then((preview: string) => {
 								if (ctx.state._nfk !== pk) return;
-								ctx.state._nft = `  ${theme.fg("success", `✓ new file (${lineCount} lines)`)}\n${preview}`;
+								ctx.state._nft = `  ${theme.fg("success", `\u2713 new file (${lineCount} lines)`)}\n${preview}`;
 								ctx.invalidate();
 							})
 							.catch(() => {});
 					}
 				}
-				text.setText(ctx.state._nft ?? `  ${theme.fg("success", `✓ new file (${lineCount} lines)`)}`);
+				text.setText(ctx.state._nft ?? `  ${theme.fg("success", `\u2713 new file (${lineCount} lines)`)}`);
 				return text;
 			}
 			text.setText(`  ${theme.fg("dim", String(result?.content?.[0]?.text ?? "written").slice(0, 120))}`);
@@ -283,8 +285,8 @@ export default async function diffRendererExtension(pi: any): Promise<void> {
 			if (operations.length === 0) return result;
 
 			const { diffs, summary } = summarizeEditOperations(operations);
+			let editLine = 0;
 			if (operations.length === 1) {
-				let editLine = 0;
 				try {
 					if (fp && existsSync(fp)) {
 						const f = readFileSync(fp, "utf-8");
@@ -294,14 +296,16 @@ export default async function diffRendererExtension(pi: any): Promise<void> {
 				} catch {
 					editLine = 0;
 				}
-				(result as any).details = { _type: "editInfo", summary, editLine };
-				return result;
 			}
 
+			// Store parsed diff so renderResult can show the full diff
 			(result as any).details = {
-				_type: "multiEditInfo",
+				_type: "editDiff",
 				summary,
 				editCount: operations.length,
+				editLine,
+				diffs,
+				language: detectDiffLanguage(fp),
 				diffLineCount: diffs.reduce((sum, diff) => sum + diff.lines.length, 0),
 			};
 			return result;
@@ -318,10 +322,11 @@ export default async function diffRendererExtension(pi: any): Promise<void> {
 				return text;
 			}
 
+			// Show loading immediately, then async-render the diff
 			const pk = JSON.stringify({ fp, operations, theme: themeCacheKey(theme), w: termW() });
 			if (ctx.state._pk !== pk) {
 				ctx.state._pk = pk;
-				ctx.state._pt = `${hdr}  ${theme.fg("muted", "(rendering\u2026)")}`;
+				ctx.state._pt = `${hdr}  ${theme.fg("muted", "(rendering…)")}`;
 				const lg = detectDiffLanguage(fp);
 				const dc = resolveDiffColors(theme);
 
@@ -343,13 +348,13 @@ export default async function diffRendererExtension(pi: any): Promise<void> {
 					const maxShown = Math.min(operations.length, 3);
 					const previewLines = Math.max(8, Math.floor(MAX_PREVIEW_LINES / maxShown));
 					Promise.all(
-						diffs.slice(0, maxShown).map((diff, index) =>
+						diffs.slice(0, maxShown).map((diff: any, index: number) =>
 							renderSplit(diff, lg, previewLines, dc, termW())
 								.then((rendered) => `Edit ${index + 1}/${operations.length}\n${rendered}`)
 								.catch(() => `Edit ${index + 1}/${operations.length}  ${summarize(diff.added, diff.removed)}`),
 						),
 					)
-						.then((sections) => {
+						.then((sections: string[]) => {
 							if (ctx.state._pk !== pk) return;
 							const remainder = operations.length - maxShown;
 							const suffix = remainder > 0 ? `\n${theme.fg("muted", `\u2026 ${remainder} more edit blocks`)}` : "";
@@ -379,23 +384,17 @@ export default async function diffRendererExtension(pi: any): Promise<void> {
 				text.setText(`\n${theme.fg("error", e)}`);
 				return text;
 			}
-			if (result.details?._type === "editInfo") {
-				const { summary: s, editLine } = result.details;
-				const loc = editLine > 0 ? ` ${theme.fg("muted", `at line ${editLine}`)}` : "";
-				const content = `  ${s}${loc}`;
-				const vis = content.replace(ANSI_RE, "").length;
-				const pad = Math.max(0, termW() - vis);
-				text.setText(`${content}${" ".repeat(pad)}`);
+
+			if (result.details?._type === "editDiff") {
+				const { summary: s, editCount, editLine, diffLineCount } = result.details;
+				const loc = editCount === 1 && editLine > 0 ? ` ${theme.fg("muted", `at line ${editLine}`)}` : "";
+				const count = editCount > 1 ? `${editCount} edits ` : "";
+				const lineInfo = typeof diffLineCount === "number" ? ` ${theme.fg("muted", `(${diffLineCount} diff lines)`)}` : "";
+				// Just a summary line: the full diff was already shown in renderCall
+				text.setText(`  ${count}${s}${loc}${lineInfo}`);
 				return text;
 			}
-			if (result.details?._type === "multiEditInfo") {
-				const { summary: s, editCount, diffLineCount } = result.details;
-				const content = `  ${editCount} edits ${s}${typeof diffLineCount === "number" ? ` ${theme.fg("muted", `(${diffLineCount} diff lines)`)}` : ""}`;
-				const vis = content.replace(ANSI_RE, "").length;
-				const pad = Math.max(0, termW() - vis);
-				text.setText(`${content}${" ".repeat(pad)}`);
-				return text;
-			}
+
 			text.setText(`  ${theme.fg("dim", String(result?.content?.[0]?.text ?? "edited").slice(0, 120))}`);
 			return text;
 		},
