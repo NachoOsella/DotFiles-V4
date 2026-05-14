@@ -1,0 +1,79 @@
+{
+  "comment": [
+    "GENERIC TEMPLATE - Scrum plan JSON for bulk Jira import.",
+    "",
+    "Instructions for the AI:",
+    "1. Replace 'PROJECT_KEY' with the actual Jira project key (e.g. APP, WEB, BACK).",
+    "2. Replace BOARD_ID with the real Scrum board ID (get with: jira.py list sprints --board X).",
+    "3. Fill in epics and stories with actual project data.",
+    "4. Keep issue content (summaries, descriptions) in the language the user requests.",
+    "5. Sprint name max 30 characters.",
+    "6. Story points field: customfield_10016 (verify with: jira.py info --project KEY).",
+    "7. Issue type IDs: check with jira.py info --project KEY and update in jira.py if different.",
+    "8. Always run with --dry-run first to validate.",
+    "9. Then run without --dry-run to create in Jira."
+  ],
+  "project": "PROJECT_KEY",
+  "board": 1,
+  "epics": [
+    {
+      "summary": "[PREFIX-00]: Nombre de la epica",
+      "description": "Descripcion del proposito y alcance de la epica. Explicar que problema resuelve, que modulos abarca, y cual es su valor de negocio.",
+      "stories": [
+        {
+          "summary": "US-01: Nombre de la historia de usuario",
+          "description": "Como [rol], quiero [funcionalidad] para [beneficio]. Describir el contexto y la necesidad de negocio.",
+          "points": 5,
+          "tasks": [
+            "Tarea tecnica concreta 1: describir que archivo crear y donde",
+            "Tarea tecnica concreta 2: endpoint, servicio o componente a implementar",
+            "Tarea tecnica concreta 3: pruebas a escribir",
+            "Agregar tantas tareas como sea necesario para cubrir la implementacion"
+          ]
+        },
+        {
+          "summary": "US-02: Otra historia de usuario",
+          "description": "Como [rol], quiero [funcionalidad] para [beneficio].",
+          "points": 3,
+          "tasks": [
+            "Tarea 1",
+            "Tarea 2"
+          ]
+        }
+      ]
+    },
+    {
+      "summary": "[PREFIX-01]: Otra epica",
+      "description": "Descripcion de la segunda epica.",
+      "stories": [
+        {
+          "summary": "US-03: Historia en otra epica",
+          "description": "Descripcion de la historia.",
+          "points": 8,
+          "tasks": [
+            "Tarea detallada 1",
+            "Tarea detallada 2",
+            "Tarea detallada 3"
+          ]
+        }
+      ]
+    }
+  ],
+  "sprints": [
+    {
+      "name": "S1 - Nombre corto (max 30 chars)",
+      "goal": "Objetivo del sprint: describir que se espera entregar al finalizar el sprint.",
+      "stories": [
+        "US-01: Nombre de la historia de usuario",
+        "US-02: Otra historia de usuario"
+      ]
+    },
+    {
+      "name": "S2 - Otro sprint (max 30 chars)",
+      "goal": "Objetivo del segundo sprint.",
+      "stories": [
+        "US-03: Historia en otra epica"
+      ]
+    }
+  ]
+}
