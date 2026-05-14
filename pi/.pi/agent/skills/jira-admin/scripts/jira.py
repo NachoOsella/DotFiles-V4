@@ -276,12 +276,54 @@ def fetch_board_issues(board, fields, max_results=100):
     )
 
 
+def fetch_project_boards(project_key=None):
+    """Fetch Jira Agile boards, optionally constrained to a project key."""
+    query = {"maxResults": 50}
+    if project_key:
+        query["projectKeyOrId"] = project_key
+    return fetch_paginated("/rest/agile/1.0/board", "values", query=query, max_results=50)
+
+
+def resolve_board_id(args):
+    """Return an explicit board ID or auto-detect the single board for a project."""
+    if args.board:
+        return args.board
+
+    project = getattr(args, "project", None)
+    boards = fetch_project_boards(project)
+    if len(boards) == 1:
+        board = boards[0]
+        print(f"Using board {board['id']} - {board.get('name', '')}", file=sys.stderr)
+        return board["id"]
+
+    if not boards:
+        die(f"No boards found for project '{project}'. Use 'list boards' to inspect available boards.")
+
+    print("Multiple boards found. Re-run with --board ID. Available boards:", file=sys.stderr)
+    for board in boards:
+        location = board.get("location", {})
+        print(
+            f"  {board.get('id')}: {board.get('name', '')} "
+            f"({location.get('projectKey', location.get('displayName', ''))})",
+            file=sys.stderr,
+        )
+    die("Board auto-detection is ambiguous")
+
+
 def cmd_list(args):
-    """List epics, stories, or sprints."""
+    """List boards, epics, issues, or sprints."""
     kind = args.kind
 
-    if kind == "sprints":
-        board = args.board or 2
+    if kind == "boards":
+        boards = fetch_project_boards(args.project)
+        print(f"{'ID':>5}  {'Type':10}  {'Name':35}  {'Project'}")
+        print("-" * 80)
+        for board in boards:
+            location = board.get("location", {})
+            project = location.get("projectKey") or location.get("displayName", "")
+            print(f"{board.get('id', '?'):>5}  {board.get('type', '?'):10}  {board.get('name', '')[:35]:35}  {project}")
+    elif kind == "sprints":
+        board = resolve_board_id(args)
         sprints = fetch_paginated(f"/rest/agile/1.0/board/{board}/sprint", "values")
         print(f"{'ID':>5}  {'State':10}  {'Name':35}  {'Goal':50}")
         print("-" * 105)
@@ -299,14 +341,14 @@ def cmd_list(args):
             else:
                 print(f"{sprint['id']:>5}  {sprint['state']:10}  {sprint['name'][:35]:35}")
     elif kind == "epics":
-        board = args.board or 2
+        board = resolve_board_id(args)
         epics = fetch_paginated(f"/rest/agile/1.0/board/{board}/epic", "values")
         print(f"{'Key':15}  {'Summary'}")
         print("-" * 60)
         for epic in epics:
             print(f"{epic.get('key', '?'):15}  {epic.get('summary', '?')[:50]}")
     elif kind == "issues":
-        board = args.board or 2
+        board = resolve_board_id(args)
         issues = fetch_board_issues(board, f"summary,issuetype,{STORY_POINTS_FIELD}", args.max_results)
         print(f"{'Key':15}  {'Type':8}  {'SP':4}  {'Summary'}")
         print("-" * 70)
@@ -320,7 +362,7 @@ def cmd_list(args):
                 f"{fields.get('summary', '?')[:50]}"
             )
     else:
-        die(f"Unknown kind: {kind}. Use: sprints, epics, issues")
+        die(f"Unknown kind: {kind}. Use: boards, sprints, epics, issues")
 
 
 # =========================================================================
@@ -465,8 +507,8 @@ def map_bulk_create_response(batch, result):
 
 
 def cmd_create_sprint(args):
-    """Create a sprint."""
-    board = args.board or 2
+    """Create a sprint on the explicit or auto-detected project board."""
+    board = resolve_board_id(args)
     name = args.name
     goal = args.goal or ""
 
@@ -508,7 +550,7 @@ def cmd_assign(args):
     issue_keys = list(args.issues or [])
 
     if args.by_hu:
-        issue_keys.extend(resolve_hu_keys(args.by_hu, args.board or 2))
+        issue_keys.extend(resolve_hu_keys(args.by_hu, resolve_board_id(args)))
 
     if args.from_sprint:
         source_issues = fetch_paginated(
@@ -901,10 +943,10 @@ def main():
     p_info = sub.add_parser("info", help="Show project info")
     p_info.add_argument("--project", default="RN412023", help="Project key")
 
-    p_list = sub.add_parser("list", help="List resources (sprints, epics, issues)")
-    p_list.add_argument("kind", choices=["sprints", "epics", "issues"], help="What to list")
-    p_list.add_argument("--board", type=int, default=2, help="Board ID")
-    p_list.add_argument("--project", default="RN412023", help="Project key")
+    p_list = sub.add_parser("list", help="List resources (boards, sprints, epics, issues)")
+    p_list.add_argument("kind", choices=["boards", "sprints", "epics", "issues"], help="What to list")
+    p_list.add_argument("--board", type=int, help="Board ID. If omitted, the script auto-detects the project board when possible.")
+    p_list.add_argument("--project", default="RN412023", help="Project key used for board auto-detection")
     p_list.add_argument("--max-results", type=int, default=100, help="Page size for issue listing")
     p_list.add_argument("--verbose", "-v", action="store_true", help="Show details")
 
@@ -931,7 +973,8 @@ def main():
     p_subtask.add_argument("summary", nargs="+", help="Subtask summary or summaries")
 
     p_sprint = create_sub.add_parser("sprint", help="Create a sprint")
-    p_sprint.add_argument("--board", type=int, default=2)
+    p_sprint.add_argument("--board", type=int, help="Board ID. If omitted, the script auto-detects the project board when possible.")
+    p_sprint.add_argument("--project", default="RN412023", help="Project key used for board auto-detection")
     p_sprint.add_argument("--name", required=True)
     p_sprint.add_argument("--goal", default="")
 
@@ -944,7 +987,8 @@ def main():
 
     p_assign = sub.add_parser("assign", help="Assign issues to a sprint")
     p_assign.add_argument("--sprint", type=int, required=True, help="Sprint ID")
-    p_assign.add_argument("--board", type=int, default=2)
+    p_assign.add_argument("--board", type=int, help="Board ID. If omitted, the script auto-detects the project board when possible.")
+    p_assign.add_argument("--project", default="RN412023", help="Project key used for board auto-detection")
     p_assign.add_argument("--issues", nargs="*", default=[], help="Issue keys")
     p_assign.add_argument("--by-hu", nargs="*", default=[], help="HU prefixes (e.g. HU-01 HU-02)")
     p_assign.add_argument("--from-sprint", type=int, help="Move all stories from another sprint")
