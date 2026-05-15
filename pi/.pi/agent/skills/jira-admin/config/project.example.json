@@ -1,0 +1,11 @@
+{
+  "project": "TU-PROJECT-KEY",
+  "board": 123,
+  "labels": ["tfi"],
+  "storyPointsField": "customfield_10016",
+  "issueTypes": {
+    "epic": "10009",
+    "story": "10008",
+    "subtask": "10010"
+  }
+}

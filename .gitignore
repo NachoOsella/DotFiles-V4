@@ -36,8 +36,11 @@ pi/.pi/agent/pi-crash.log
 # Sensitive files
 *.pem
 *.key
-*credentials*
 *secret*
+
+# Jira skill config (actual data, not templates)
+pi/.pi/agent/skills/jira-admin/config/credentials.json
+pi/.pi/agent/skills/jira-admin/config/project.json
 
 # KeePassXC local config can contain KeeShare private keys
 keepassxc/.config/keepassxc/keepassxc.ini

@@ -17,15 +17,44 @@ rate limits or temporary server errors.
 
 ## Setup
 
-Store your Jira credentials once (email + API token):
+The skill uses two configuration files inside `config/`:
+
+| File | Purpose | Tracked in git? |
+|---|---|---|
+| `config/credentials.json` | Jira Cloud auth (email + API token + base URL) | No (gitignored) |
+| `config/project.json` | Project-scoped defaults (project key, board, labels, issue types) | No (gitignored) |
+
+### First-time setup from scratch
 
 ```bash
-~/.pi/agent/skills/jira-admin/scripts/jira.py auth --email tu@email.com --token "tu-api-token"
+# 1. Store Jira credentials (email + API token)
+jira.py auth --email tu@email.com --token "tu-api-token"
+
+# 2. Save project defaults so you can omit --project later
+jira.py config --project LEMBAS --board 35 --labels tfi
 ```
 
-The token is saved in `~/.pi/agent/skills/jira-admin/config/credentials.json`
-(chmod 600). Your Atlassian API token is generated at
-https://id.atlassian.com/manage/api-tokens
+The token is saved in `config/credentials.json` (chmod 600). Your Atlassian API token
+is generated at https://id.atlassian.com/manage/api-tokens
+
+### First-time setup from a cloned repo
+
+The repository ships template files (`config/*.example.json`) with placeholder values.
+When you clone the skill for the first time:
+
+```bash
+# Copy templates and fill in your real values
+cp config/credentials.example.json config/credentials.json
+cp config/project.example.json    config/project.json
+# Then edit both files with your Jira credentials and project settings
+# OR use the CLI commands below
+
+# Alternative: use the CLI to generate them
+jira.py auth --email tu@email.com --token "tu-api-token"
+jira.py config --project LEMBAS --board 35 --labels tfi
+```
+
+The `.example` files are safe to commit and share; they contain only placeholder data.
 
 ## Project Configuration
 
@@ -266,17 +295,23 @@ jira.py list sprints --verbose
 
 ## Configuration
 
-| File | Purpose | Created by |
+Both files live under `config/`. Actual data (`credentials.json`, `project.json`) are
+gitignored. Template files with placeholders are provided as `*.example.json` and are safe
+to commit.
+
+| File | Purpose | Tracked in git? |
 |---|---|---|
-| `config/credentials.json` | Jira auth (email + token + baseUrl) | `jira.py auth` |
-| `config/project.json` | Project-scoped defaults (project, board, labels, issue types, etc.) | `jira.py config` |
+| `config/credentials.example.json` | Template with placeholder values | Yes |
+| `config/credentials.json` | Real credentials | No (gitignored) |
+| `config/project.example.json` | Template with placeholder values | Yes |
+| `config/project.json` | Real project defaults | No (gitignored) |
 
 ### credentials.json
 
 ```json
 {
   "email": "user@example.com",
-  "token": "ATATT3xxx",
+  "token": "ATATT3xFfGF0...tu-api-token...",
   "baseUrl": "https://your-domain.atlassian.net"
 }
 ```
