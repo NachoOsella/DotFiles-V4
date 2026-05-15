@@ -25,6 +25,24 @@ CONFIG_DIR = SKILL_DIR / "config"
 CREDENTIALS_FILE = CONFIG_DIR / "credentials.json"
 CONFIG_DIR.mkdir(parents=True, exist_ok=True)
 
+PROJECT_CONFIG_FILE = CONFIG_DIR / "project.json"
+
+# Ultimate fallback defaults for optional values.
+# Override them per-project by running: jira.py config --project KEY --board ID
+HARDCODED_DEFAULTS = {
+    "project": "RN412023",
+    "labels": ["tfi"],
+    "storyPointsField": "customfield_10016",
+    "issueTypes": {
+        "epic": "10009",
+        "story": "10008",
+        "task": "10006",
+        "bug": "10007",
+        "subtask": "10010",
+    },
+    "baseUrl": "https://tecnicatura-team-412023.atlassian.net",
+}
+
 # --- Issue type IDs for the current Jira Cloud project schema ---
 ISSUE_TYPES = {
     "epic": "10009",
@@ -66,11 +84,62 @@ def load_credentials():
     return creds
 
 
+# =========================================================================
+# Project configuration
+# =========================================================================
+
+
+def project_config():
+    """Load project-scoped configuration merged on top of HARDCODED_DEFAULTS."""
+    config = dict(HARDCODED_DEFAULTS)
+    if PROJECT_CONFIG_FILE.exists():
+        with open(PROJECT_CONFIG_FILE, encoding="utf-8") as f:
+            user_config = json.load(f)
+            config.update(user_config)
+            if "issueTypes" in user_config:
+                config["issueTypes"] = {
+                    **HARDCODED_DEFAULTS["issueTypes"],
+                    **user_config["issueTypes"],
+                }
+    return config
+
+
+def apply_project_config():
+    """Update module-level constants from project config (called once at startup)."""
+    cfg = project_config()
+    global ISSUE_TYPES, STORY_POINTS_FIELD
+    if cfg.get("issueTypes"):
+        ISSUE_TYPES = dict(cfg["issueTypes"])
+    if cfg.get("storyPointsField"):
+        STORY_POINTS_FIELD = cfg["storyPointsField"]
+
+
+def resolve_project(args):
+    """Resolve project key: explicit CLI arg > project config > HARDCODED_DEFAULTS."""
+    val = getattr(args, "project", None)
+    if val:
+        return val
+    return project_config().get("project", HARDCODED_DEFAULTS["project"])
+
+
+def resolve_labels(args):
+    """Resolve labels: explicit CLI arg > project config > HARDCODED_DEFAULTS."""
+    val = getattr(args, "labels", None)
+    if val is not None:
+        return val
+    return project_config().get("labels", HARDCODED_DEFAULTS["labels"])
+
+
+# =========================================================================
+# Auth
+# =========================================================================
+
+
 def cmd_auth(args):
     """Store Jira credentials on disk with user-only permissions."""
     email = args.email
     token = args.token
-    base_url = getattr(args, "base_url", "https://tecnicatura-team-412023.atlassian.net")
+    base_url = getattr(args, "base_url", HARDCODED_DEFAULTS["baseUrl"])
 
     if not email or not token:
         die("Both --email and --token are required")
@@ -79,6 +148,58 @@ def cmd_auth(args):
     CREDENTIALS_FILE.write_text(json.dumps(creds, indent=2), encoding="utf-8")
     os.chmod(CREDENTIALS_FILE, 0o600)
     print(f"Credentials saved to {CREDENTIALS_FILE}")
+
+
+# =========================================================================
+# Config command
+# =========================================================================
+
+
+def cmd_config(args):
+    """Store project-scoped configuration (project.json)."""
+    cfg = project_config()
+    for key in ("project", "storyPointsField"):
+        val = getattr(args, key, None)
+        if val is not None:
+            cfg[key] = val
+    if args.board is not None:
+        cfg["board"] = args.board
+    if args.labels is not None:
+        cfg["labels"] = args.labels
+    if args.base_url is not None:
+        cfg["baseUrl"] = args.base_url
+
+    issue_types = {}
+    if args.epic_type:
+        issue_types["epic"] = args.epic_type
+    if args.story_type:
+        issue_types["story"] = args.story_type
+    if args.subtask_type:
+        issue_types["subtask"] = args.subtask_type
+    if args.task_type:
+        issue_types["task"] = args.task_type
+    if args.bug_type:
+        issue_types["bug"] = args.bug_type
+    if issue_types:
+        cfg.setdefault("issueTypes", {}).update(issue_types)
+
+    # Strip entries that match HARDCODED_DEFAULTS to keep the file minimal
+    for key in list(cfg.keys()):
+        if key in HARDCODED_DEFAULTS and cfg[key] == HARDCODED_DEFAULTS[key]:
+            if key == "issueTypes":
+                continue  # handled below
+            del cfg[key]
+    if "issueTypes" in cfg and cfg["issueTypes"] == HARDCODED_DEFAULTS.get("issueTypes"):
+        del cfg["issueTypes"]
+    if "baseUrl" in cfg and cfg["baseUrl"] == HARDCODED_DEFAULTS.get("baseUrl"):
+        del cfg["baseUrl"]
+
+    PROJECT_CONFIG_FILE.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+    print(f"Project config saved to {PROJECT_CONFIG_FILE}")
+    if cfg:
+        print(json.dumps(cfg, indent=2))
+    else:
+        print("(empty -- all values match hardcoded defaults)")
 
 
 # =========================================================================
@@ -225,7 +346,7 @@ def delete(path, query=None):
 
 def cmd_test(args):
     """Test connection by fetching project info."""
-    project = args.project
+    project = resolve_project(args)
     result = get(f"/rest/api/3/project/{project}")
     if "key" in result:
         print(f"OK - Project: {result['key']} ({result.get('name', '?')})")
@@ -238,6 +359,8 @@ def cmd_test(args):
 
 def cmd_info(args):
     """Show project metadata."""
+    if not getattr(args, "project", None):
+        args.project = resolve_project(args)
     cmd_test(args)
 
 
@@ -286,10 +409,10 @@ def fetch_project_boards(project_key=None):
 
 def resolve_board_id(args):
     """Return an explicit board ID or auto-detect the single board for a project."""
-    if args.board:
+    if getattr(args, "board", None):
         return args.board
 
-    project = getattr(args, "project", None)
+    project = resolve_project(args)
     boards = fetch_project_boards(project)
     if len(boards) == 1:
         board = boards[0]
@@ -315,7 +438,8 @@ def cmd_list(args):
     kind = args.kind
 
     if kind == "boards":
-        boards = fetch_project_boards(args.project)
+        project = getattr(args, "project", None) or resolve_project(args)
+        boards = fetch_project_boards(project)
         print(f"{'ID':>5}  {'Type':10}  {'Name':35}  {'Project'}")
         print("-" * 80)
         for board in boards:
@@ -391,7 +515,8 @@ def make_issue_payload(project, issue_type, summary, description="", parent_key=
 
 def cmd_create_epic(args):
     """Create an epic."""
-    payload = make_issue_payload(args.project, "epic", args.summary, args.description or "")
+    project = resolve_project(args)
+    payload = make_issue_payload(project, "epic", args.summary, args.description or "")
     result = post("/rest/api/3/issue", payload)
     if "key" in result:
         print(f"Created epic: {result['key']} - {args.summary}")
@@ -402,9 +527,10 @@ def cmd_create_epic(args):
 
 def cmd_create_story(args):
     """Create a story and optionally create subtasks below it."""
-    labels = args.labels or ["tfi"]
+    project = resolve_project(args)
+    labels = resolve_labels(args)
     payload = make_issue_payload(
-        args.project,
+        project,
         "story",
         args.summary,
         args.description or "",
@@ -421,7 +547,7 @@ def cmd_create_story(args):
         story_key = result["key"]
         print(f"Created story: {story_key} - {args.summary} ({args.points or 0} SP)")
         for task_summary in args.tasks or []:
-            subtask_key = _create_subtask(task_summary, story_key, args.project)
+            subtask_key = _create_subtask(task_summary, story_key, project)
             if subtask_key:
                 print(f"  Created subtask: {subtask_key} - {task_summary[:60]}")
         return story_key
@@ -432,13 +558,14 @@ def cmd_create_story(args):
 
 def _create_subtask(summary, parent_key, project):
     """Create a single subtask under a parent story using the real project key."""
+    labels = project_config().get("labels", HARDCODED_DEFAULTS["labels"])
     payload = make_issue_payload(
         project,
         "subtask",
         summary[:80],
         summary,
         parent_key=parent_key,
-        labels=["tfi"],
+        labels=labels,
     )
     result = post("/rest/api/3/issue", payload)
     if "key" in result:
@@ -449,7 +576,7 @@ def _create_subtask(summary, parent_key, project):
 
 def cmd_create_subtask(args):
     """Create one or more subtasks."""
-    project = args.project
+    project = resolve_project(args)
     for summary in args.summary:
         key = _create_subtask(summary, args.parent, project)
         if key:
@@ -623,12 +750,12 @@ def cmd_create_from_plan(args):
             print(f"Validation error: {error}", file=sys.stderr)
         die("Plan validation failed")
 
-    project = plan.get("project", "RN412023")
-    board = plan.get("board", 2)
+    project = plan.get("project") or resolve_project(args)
+    board = plan.get("board") or resolve_board_id(argparse.Namespace(board=None, project=project))
     summary = summarize_plan(plan)
 
     if args.dry_run:
-        print_dry_run(summary, plan)
+        print_dry_run(summary, plan, board=board)
         return
 
     report = {
@@ -813,11 +940,11 @@ def summarize_plan(plan):
     return {"epics": epics, "stories": stories, "subtasks": subtasks, "sprints": len(plan.get("sprints", []))}
 
 
-def print_dry_run(summary, plan):
+def print_dry_run(summary, plan, board=None):
     """Print the write operations that would be performed without calling Jira."""
     print("Dry run: no Jira write requests will be made.")
     print(f"Project: {plan.get('project')}")
-    print(f"Board: {plan.get('board', 2)}")
+    print(f"Board: {board or plan.get('board', '?')}")
     print(
         "Would create: "
         f"{summary['epics']} epics, {summary['stories']} stories, "
@@ -933,20 +1060,32 @@ def main():
     )
     sub = parser.add_subparsers(dest="command", help="Command to execute")
 
+    p_config = sub.add_parser("config", help="Set project-scoped defaults (saved to project.json)")
+    p_config.add_argument("--project", default=None, help="Default project key")
+    p_config.add_argument("--board", type=int, default=None, help="Default board ID")
+    p_config.add_argument("--labels", nargs="*", default=None, help="Default issue labels")
+    p_config.add_argument("--story-points-field", default=None, help="Story points custom field ID")
+    p_config.add_argument("--epic-type", default=None, help="Epic issue type ID")
+    p_config.add_argument("--story-type", default=None, help="Story issue type ID")
+    p_config.add_argument("--subtask-type", default=None, help="Subtask issue type ID")
+    p_config.add_argument("--task-type", default=None, help="Task issue type ID")
+    p_config.add_argument("--bug-type", default=None, help="Bug issue type ID")
+    p_config.add_argument("--base-url", default=None, help="Default Jira base URL")
+
     p_auth = sub.add_parser("auth", help="Store Jira credentials")
     p_auth.add_argument("--email", required=True, help="Atlassian account email")
     p_auth.add_argument("--token", required=True, help="Atlassian API token")
-    p_auth.add_argument("--base-url", default="https://tecnicatura-team-412023.atlassian.net", help="Jira base URL")
+    p_auth.add_argument("--base-url", help="Jira base URL (default: config or hardcoded)")
 
     p_test = sub.add_parser("test", help="Test API connection")
-    p_test.add_argument("--project", default="RN412023", help="Project key")
+    p_test.add_argument("--project", default=None, help="Project key (default: config or hardcoded)")
     p_info = sub.add_parser("info", help="Show project info")
-    p_info.add_argument("--project", default="RN412023", help="Project key")
+    p_info.add_argument("--project", default=None, help="Project key (default: config or hardcoded)")
 
     p_list = sub.add_parser("list", help="List resources (boards, sprints, epics, issues)")
     p_list.add_argument("kind", choices=["boards", "sprints", "epics", "issues"], help="What to list")
     p_list.add_argument("--board", type=int, help="Board ID. If omitted, the script auto-detects the project board when possible.")
-    p_list.add_argument("--project", default="RN412023", help="Project key used for board auto-detection")
+    p_list.add_argument("--project", default=None, help="Project key used for board auto-detection (default: config or hardcoded)")
     p_list.add_argument("--max-results", type=int, default=100, help="Page size for issue listing")
     p_list.add_argument("--verbose", "-v", action="store_true", help="Show details")
 
@@ -954,27 +1093,27 @@ def main():
     create_sub = p_create.add_subparsers(dest="create_type")
 
     p_epic = create_sub.add_parser("epic", help="Create an epic")
-    p_epic.add_argument("--project", default="RN412023", required=True)
+    p_epic.add_argument("--project", default=None, help="Project key (default: config or hardcoded)")
     p_epic.add_argument("--summary", required=True)
     p_epic.add_argument("--description", default="")
 
     p_story = create_sub.add_parser("story", help="Create a user story")
-    p_story.add_argument("--project", default="RN412023", required=True)
+    p_story.add_argument("--project", default=None, help="Project key (default: config or hardcoded)")
     p_story.add_argument("--summary", required=True)
     p_story.add_argument("--parent", required=True, help="Epic key (e.g. RN412023-2)")
     p_story.add_argument("--points", type=int, default=0, help="Story points")
     p_story.add_argument("--description", default="")
     p_story.add_argument("--tasks", nargs="*", default=[], help="Subtask summaries")
-    p_story.add_argument("--labels", nargs="*", default=["tfi"])
+    p_story.add_argument("--labels", nargs="*", default=None, help="Issue labels (default: config or ['tfi'])")
 
     p_subtask = create_sub.add_parser("subtask", help="Create one or more subtasks")
-    p_subtask.add_argument("--project", default="RN412023", help="Project key")
+    p_subtask.add_argument("--project", default=None, help="Project key (default: config or hardcoded)")
     p_subtask.add_argument("--parent", required=True, help="Parent story key")
     p_subtask.add_argument("summary", nargs="+", help="Subtask summary or summaries")
 
     p_sprint = create_sub.add_parser("sprint", help="Create a sprint")
     p_sprint.add_argument("--board", type=int, help="Board ID. If omitted, the script auto-detects the project board when possible.")
-    p_sprint.add_argument("--project", default="RN412023", help="Project key used for board auto-detection")
+    p_sprint.add_argument("--project", default=None, help="Project key used for board auto-detection (default: config or hardcoded)")
     p_sprint.add_argument("--name", required=True)
     p_sprint.add_argument("--goal", default="")
 
@@ -988,7 +1127,7 @@ def main():
     p_assign = sub.add_parser("assign", help="Assign issues to a sprint")
     p_assign.add_argument("--sprint", type=int, required=True, help="Sprint ID")
     p_assign.add_argument("--board", type=int, help="Board ID. If omitted, the script auto-detects the project board when possible.")
-    p_assign.add_argument("--project", default="RN412023", help="Project key used for board auto-detection")
+    p_assign.add_argument("--project", default=None, help="Project key used for board auto-detection (default: config or hardcoded)")
     p_assign.add_argument("--issues", nargs="*", default=[], help="Issue keys")
     p_assign.add_argument("--by-hu", nargs="*", default=[], help="HU prefixes (e.g. HU-01 HU-02)")
     p_assign.add_argument("--from-sprint", type=int, help="Move all stories from another sprint")
@@ -1003,7 +1142,12 @@ def main():
         parser.print_help()
         sys.exit(1)
 
+    # Load project config and apply it to module-level globals
+    if args.command != "auth":
+        apply_project_config()
+
     handlers = {
+        "config": cmd_config,
         "auth": cmd_auth,
         "test": cmd_test,
         "info": cmd_info,
