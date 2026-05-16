@@ -126,6 +126,7 @@ The extension adds prompt guidance that nudges the LLM to:
 | `/memexport [path]` | Export all memory to JSON |
 | `/memimport <path>` | Import from JSON (dedup) |
 | `/memsetup` | Validate config and show status |
+| `/membrowse` | Browse all projects in an interactive TUI; current project appears first and `d` hard-deletes a memory after confirmation |
 
 ## Environment variables
 

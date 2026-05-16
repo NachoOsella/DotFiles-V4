@@ -1244,11 +1244,21 @@ export default function engram(pi: ExtensionAPI) {
         const info = await detectProject(pi, ctx);
         const rows = await sqliteJson<ObservationRow>(
           pi,
-          `SELECT * FROM observations WHERE deleted_at IS NULL AND project=${sql(info.project)} ORDER BY priority DESC, updated_at DESC LIMIT 200;`,
+          `SELECT * FROM observations WHERE deleted_at IS NULL ORDER BY CASE WHEN project=${sql(info.project)} THEN 0 ELSE 1 END, project ASC, priority DESC, updated_at DESC LIMIT 1000;`,
         );
 
+        const deleteMemory = async (row: ObservationRow): Promise<boolean> => {
+          // The browser can show every project, so delete against the row project
+          // instead of the current project used by mem_admin's command/tool scope.
+          const result = await sqliteJson<{ changed: number }>(
+            pi,
+            `DELETE FROM observations WHERE id=${sql(row.id)} AND project=${sql(row.project)}; SELECT changes() AS changed;`,
+          );
+          return Number(result[0]?.changed ?? 0) > 0;
+        };
+
         await ctx.ui.custom((tui, theme, _keybindings, done) => {
-          const browser = new MemoryBrowser(rows, tui, theme, () => done(undefined));
+          const browser = new MemoryBrowser(rows, info.project, tui, theme, () => done(undefined), deleteMemory);
           return browser;
         }, {
           overlay: true,
@@ -1288,6 +1298,9 @@ class MemoryBrowser implements Component {
   private viewing: ObservationRow | null = null;
   private searchMode = false;
   private searchBuf = "";
+  private pendingDelete: ObservationRow | null = null;
+  private busy = false;
+  private message: string | null = null;
   private mdRenderer: Markdown | null = null;
   private mdContentKey = "";
 
@@ -1298,9 +1311,11 @@ class MemoryBrowser implements Component {
 
   constructor(
     private all: ObservationRow[],
+    private currentProject: string,
     private tui: any,
     private theme: any,
     private onDone: () => void,
+    private onDelete: (row: ObservationRow) => Promise<boolean>,
   ) {}
 
   /** Clear cached render output when state or theme changes. */
@@ -1405,9 +1420,14 @@ class MemoryBrowser implements Component {
     this.scrollOff = Math.max(0, Math.min(this.scrollOff, Math.max(0, total - visibleRows)));
   }
 
-  /** Return all project names sorted for stable navigation. */
+  /** Return all project names, keeping the current project first for quick access. */
   private projectNames(): string[] {
-    return [...new Set(this.all.map((row) => row.project || "unknown"))].sort();
+    const projects = [...new Set([this.currentProject, ...this.all.map((row) => row.project || "unknown")])].sort();
+    return projects.sort((left, right) => {
+      if (left === this.currentProject) return -1;
+      if (right === this.currentProject) return 1;
+      return left.localeCompare(right);
+    });
   }
 
   /** Count memories and high-priority memories per project. */
@@ -1477,6 +1497,84 @@ class MemoryBrowser implements Component {
     this.tui?.requestRender?.();
   }
 
+  /** Render transient browser status without exceeding the overlay width. */
+  private statusRows(innerWidth: number): string[] {
+    if (this.busy) return [this.row(this.warn("Deleting..."), innerWidth)];
+    if (this.message) return [this.row(this.m(this.message), innerWidth)];
+    return [];
+  }
+
+  /** Start hard-delete confirmation for the provided memory. */
+  private requestDelete(row: ObservationRow | undefined): void {
+    if (!row || this.busy) return;
+    this.pendingDelete = row;
+    this.message = null;
+    this.touch();
+  }
+
+  /** Cancel an active hard-delete confirmation prompt. */
+  private cancelDelete(): void {
+    this.pendingDelete = null;
+    this.message = "Delete cancelled.";
+    this.touch();
+  }
+
+  /** Execute the confirmed hard delete and update the in-memory browser list. */
+  private async confirmDelete(): Promise<void> {
+    const row = this.pendingDelete;
+    if (!row || this.busy) return;
+
+    this.busy = true;
+    this.message = null;
+    this.touch();
+
+    try {
+      const deleted = await this.onDelete(row);
+      if (!deleted) {
+        this.message = `Could not delete #${row.id}.`;
+        return;
+      }
+
+      this.all = this.all.filter((item) => item.id !== row.id);
+      this.message = `Deleted #${row.id}.`;
+      if (this.view === "detail") {
+        this.view = "list";
+        this.viewing = null;
+        this.detailScroll = 0;
+      }
+      this.clamp(this.items().length);
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      this.message = `Could not delete #${row.id}: ${cropPlain(msg, 80)}`;
+    } finally {
+      this.pendingDelete = null;
+      this.busy = false;
+      this.touch();
+    }
+  }
+
+  /** Handle the confirmation keys shared by list and detail views. */
+  private handleDeleteConfirmation(data: string): boolean {
+    if (!this.pendingDelete) return false;
+    if (this.busy) return true;
+    if (matchesKey(data, "y") || matchesKey(data, "Y")) {
+      void this.confirmDelete();
+      return true;
+    }
+    if (matchesKey(data, "n") || matchesKey(data, "N") || matchesKey(data, Key.escape)) {
+      this.cancelDelete();
+      return true;
+    }
+    return true;
+  }
+
+  /** Return footer hints, replacing normal controls during delete confirmation. */
+  private footerHints(normal: string): string {
+    if (this.pendingDelete) return `Confirm hard delete #${this.pendingDelete.id}? y confirm • n/esc cancel`;
+    if (this.busy) return "Deleting...";
+    return normal;
+  }
+
   // ---- Projects view -----------------------------------------------------
 
   private renderProjects(width: number): string[] {
@@ -1500,11 +1598,13 @@ class MemoryBrowser implements Component {
       const selected = this.scrollOff + i === this.selIdx;
       const info = stats.get(project) ?? { count: 0, high: 0 };
       const marker = selected ? this.a("▸") : this.d(" ");
-      const left = `${marker} ${this.bold(project)}`;
+      const current = project === this.currentProject ? ` ${this.ok("current")}` : "";
+      const left = `${marker} ${this.bold(project)}${current}`;
       const right = this.d(`${info.count} memories  ${info.high} high`);
       lines.push(this.row(left + " ".repeat(Math.max(1, inner - 2 - visibleWidth(left) - visibleWidth(right))) + right, inner));
     }
 
+    lines.push(...this.statusRows(inner));
     lines.push(this.empty(inner));
     lines.push(...this.bottom("j/k navigate • l/enter open • h/q close", inner));
     return lines;
@@ -1549,8 +1649,9 @@ class MemoryBrowser implements Component {
     if (rows.length === 0) {
       lines.push(this.empty(inner));
       lines.push(this.row(this.d(this.searchBuf ? "No memories match this search." : "No memories in this project."), inner));
+      lines.push(...this.statusRows(inner));
       lines.push(this.empty(inner));
-      lines.push(...this.bottom("backspace projects • q close", inner));
+      lines.push(...this.bottom(this.footerHints("backspace projects • q close"), inner));
       return lines;
     }
 
@@ -1568,16 +1669,20 @@ class MemoryBrowser implements Component {
       lines.push(this.row(`  ${this.d(topic)}`, inner));
     }
 
+    lines.push(...this.statusRows(inner));
     const position = rows.length > 0 ? `${this.selIdx + 1}/${rows.length}` : "";
     const baseHints = this.searchMode
       ? "enter apply • backspace delete • esc cancel"
-      : "j/k navigate • l/enter detail • h projects • / search • q close";
+      : "j/k navigate • l/enter detail • d delete • h projects • / search • q close";
     const hints = position ? `${baseHints} • ${position}` : baseHints;
-    lines.push(...this.bottom(hints, inner));
+    lines.push(...this.bottom(this.footerHints(hints), inner));
     return lines;
   }
 
   private handleListInput(data: string): void {
+    if (this.handleDeleteConfirmation(data)) return;
+    if (this.busy) return;
+
     const rows = this.items();
 
     if (this.searchMode) {
@@ -1603,6 +1708,8 @@ class MemoryBrowser implements Component {
     } else if (matchesKey(data, "/")) {
       this.searchMode = true;
       this.searchBuf = "";
+    } else if (matchesKey(data, "d") || matchesKey(data, "D")) {
+      this.requestDelete(rows[this.selIdx]);
     } else if (matchesKey(data, Key.backspace) || matchesKey(data, "h")) {
       this.selProject = null;
       this.selIdx = 0;
@@ -1657,18 +1764,23 @@ class MemoryBrowser implements Component {
     const pos = mdLines.length > visibleContentRows
       ? `${this.detailScroll + 1}-${Math.min(this.detailScroll + visibleContentRows, mdLines.length)}/${mdLines.length}`
       : "";
-    const hints = `j/k scroll • h back • l noop • backspace back • q close${pos ? ` • ${pos}` : ""}`;
-    lines.push(...this.bottom(hints, inner));
+    lines.push(...this.statusRows(inner));
+    const hints = `j/k scroll • d delete • h back • backspace back • q close${pos ? ` • ${pos}` : ""}`;
+    lines.push(...this.bottom(this.footerHints(hints), inner));
     return lines;
   }
 
   private handleDetailInput(data: string): void {
+    if (this.handleDeleteConfirmation(data)) return;
+    if (this.busy) return;
+
     const maxScroll = Number.MAX_SAFE_INTEGER;
 
     if (matchesKey(data, Key.up) || matchesKey(data, "k")) this.detailScroll = Math.max(0, this.detailScroll - 1);
     else if (matchesKey(data, Key.down) || matchesKey(data, "j")) this.detailScroll = Math.min(maxScroll, this.detailScroll + 1);
     else if (matchesKey(data, Key.ctrl("u"))) this.detailScroll = Math.max(0, this.detailScroll - Math.floor(this.maxBodyRows() / 2));
     else if (matchesKey(data, Key.ctrl("d"))) this.detailScroll = Math.min(maxScroll, this.detailScroll + Math.floor(this.maxBodyRows() / 2));
+    else if (matchesKey(data, "d") || matchesKey(data, "D")) this.requestDelete(this.viewing ?? undefined);
     else if (matchesKey(data, Key.backspace) || matchesKey(data, Key.escape) || matchesKey(data, "h")) {
       this.view = "list";
       this.viewing = null;
