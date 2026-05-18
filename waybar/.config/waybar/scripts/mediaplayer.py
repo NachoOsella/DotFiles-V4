@@ -82,7 +82,6 @@ class PlayerManager:
             "text": display_text,
             "class": "custom-" + player.props.player_name,
             "alt": player.props.player_name,
-            "tooltip": track_text,
         }
 
         sys.stdout.write(json.dumps(output) + "\n")

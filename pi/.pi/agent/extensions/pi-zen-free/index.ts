@@ -1,6 +1,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { fetchDeployedIds, fetchFreeModelsFromDev } from "./api.js";
 import { ZEN_BASE_URL, ZEN_KEY_VAR } from "./config.js";
+import { createOpenCodeZenHeaders } from "./headers.js";
 import { buildModelConfigs } from "./models.js";
 
 /** Register the OpenCode Zen free provider when free models are available. */
@@ -9,7 +10,7 @@ export default async function (pi: ExtensionAPI) {
 
   const [freeModels, deployedIds] = await Promise.all([
     fetchFreeModelsFromDev(),
-    fetchDeployedIds(),
+    fetchDeployedIds(process.env[ZEN_KEY_VAR]),
   ]);
 
   const models = buildModelConfigs(freeModels, deployedIds);
@@ -20,6 +21,7 @@ export default async function (pi: ExtensionAPI) {
     baseUrl: ZEN_BASE_URL,
     apiKey: ZEN_KEY_VAR,
     headers: {
+      ...createOpenCodeZenHeaders(),
       "X-Title": "Pi",
       "HTTP-Referer": "https://opencode.ai/",
     },

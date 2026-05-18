@@ -1,11 +1,11 @@
-import { FETCH_TIMEOUT_MS, MODELS_DEV_URL, ZEN_BASE_URL } from "./config.js";
+import { FETCH_TIMEOUT_MS, MODELS_DEV_URL, OPENCODE_CLI_USER_AGENT, ZEN_BASE_URL } from "./config.js";
 import type { ModelsDevModel } from "./types.js";
 
 /** Fetch JSON with a short timeout and return null on network or HTTP failures. */
 async function fetchJson<T>(url: string, headers?: Record<string, string>): Promise<T | null> {
   try {
     const response = await fetch(url, {
-      headers: { "User-Agent": "pi-zen-free", ...headers },
+      headers: { "User-Agent": OPENCODE_CLI_USER_AGENT, ...headers },
       signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
     });
     if (!response.ok) return null;
@@ -35,9 +35,9 @@ export async function fetchFreeModelsFromDev(): Promise<Map<string, ModelsDevMod
 }
 
 /** Load the set of model ids currently deployed by the Zen endpoint. */
-export async function fetchDeployedIds(): Promise<Set<string> | null> {
+export async function fetchDeployedIds(apiKey: string): Promise<Set<string> | null> {
   const data = await fetchJson<{ data?: { id: string }[] }>(`${ZEN_BASE_URL}/models`, {
-    Authorization: "Bearer public",
+    Authorization: `Bearer ${apiKey}`,
   });
   if (!data?.data) return null;
   return new Set(data.data.map((model) => model.id));
