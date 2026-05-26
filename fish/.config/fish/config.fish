@@ -39,4 +39,5 @@ set --export PATH $BUN_INSTALL/bin $PATH
 # nvim mason
 fish_add_path ~/.local/share/nvim/mason/bin
 
-fish_add_path "$HOME/.spicetify"
+# Added by Antigravity CLI installer
+set -gx PATH "/home/nacho/.local/bin" $PATH

@@ -1,7 +1,7 @@
 {
 	"name": "@nacho/pi-diff-minimal",
 	"version": "0.1.0",
-	"description": "Shiki-powered terminal diff renderer for pi — syntax-highlighted, word-level diffs in split and unified views. Stripped-down: just the diff rendering, no review slop. Theme-aware colors.",
+	"description": "Shiki-powered terminal diff renderer for pi \u2014 syntax-highlighted, word-level diffs in split and unified views. Stripped-down: just the diff rendering, no review slop. Theme-aware colors.",
 	"author": "nacho",
 	"license": "MIT",
 	"repository": {

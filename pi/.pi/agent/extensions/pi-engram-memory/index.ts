@@ -62,6 +62,8 @@ let ftsAvailable: boolean | null = null;
 let currentSessionId = `pi-${Date.now().toString(36)}-${randomUUID().slice(0, 8)}`;
 let lastProjectInfo: ProjectInfo | null = null;
 let sqliteQueue: Promise<unknown> = Promise.resolve();
+let startupInitPromise: Promise<ProjectInfo> | null = null;
+let startupInitError: unknown = null;
 const projectCache = new Map<string, ProjectInfo>();
 
 // ---------------------------------------------------------------------------
@@ -370,6 +372,49 @@ async function ensureSession(pi: ExtensionAPI, info: ProjectInfo, signal?: Abort
   );
 }
 
+/** Log startup profile data only when explicitly requested. */
+function profileStartup(label: string, startedAt: number): void {
+  if (process.env.PI_STARTUP_PROFILE !== "1") return;
+  const elapsedMs = Math.round((performance.now() - startedAt) * 10) / 10;
+  console.error(`[pi-startup] pi-engram-memory ${label}: ${elapsedMs}ms`);
+}
+
+/** Start database and project initialization without blocking Pi's startup path. */
+function startBackgroundInit(pi: ExtensionAPI, ctx: ExtensionContext): Promise<ProjectInfo> {
+  if (startupInitPromise) return startupInitPromise;
+
+  const startedAt = performance.now();
+  startupInitError = null;
+  startupInitPromise = (async () => {
+    await ensureDb(pi);
+    const info = await detectProject(pi, ctx);
+    await ensureSession(pi, info);
+    lastProjectInfo = info;
+    profileStartup(`background init (${info.project})`, startedAt);
+    return info;
+  })().catch((error) => {
+    startupInitError = error;
+    startupInitPromise = null;
+    throw error;
+  });
+
+  return startupInitPromise;
+}
+
+/** Wait for startup initialization when memory is actually needed. */
+async function ensureMemoryReady(pi: ExtensionAPI, ctx: ExtensionContext | any, signal?: AbortSignal): Promise<void> {
+  if (startupInitPromise) {
+    await startupInitPromise;
+    return;
+  }
+  if (startupInitError) throw startupInitError;
+
+  await ensureDb(pi, signal);
+  const info = await detectProject(pi, ctx, signal);
+  await ensureSession(pi, info, signal);
+  lastProjectInfo = info;
+}
+
 // ---------------------------------------------------------------------------
 // Tool implementations
 // ---------------------------------------------------------------------------
@@ -387,9 +432,8 @@ async function handleSave(
   params: any,
   signal?: AbortSignal,
 ) {
-  await ensureDb(pi, signal);
-  const info = await detectProject(pi, ctx, signal);
-  await ensureSession(pi, info, signal);
+  await ensureMemoryReady(pi, ctx, signal);
+  const info = lastProjectInfo ?? (await detectProject(pi, ctx, signal));
 
   const title = redactSecrets(String(params.title ?? "").trim());
   const content = redactSecrets(String(params.content ?? "").trim());
@@ -477,8 +521,8 @@ async function handleSearch(
   params: any,
   signal?: AbortSignal,
 ) {
-  await ensureDb(pi, signal);
-  const info = await detectProject(pi, ctx, signal);
+  await ensureMemoryReady(pi, ctx, signal);
+  const info = lastProjectInfo ?? (await detectProject(pi, ctx, signal));
   const includeContent = Boolean(params.include_content);
   const limit = Math.max(1, Math.min(Number(params.limit ?? 5), 10));
 
@@ -620,8 +664,8 @@ async function handleAdmin(
   params: any,
   signal?: AbortSignal,
 ) {
-  await ensureDb(pi, signal);
-  const info = await detectProject(pi, ctx, signal);
+  await ensureMemoryReady(pi, ctx, signal);
+  const info = lastProjectInfo ?? (await detectProject(pi, ctx, signal));
   const action = String(params.action ?? "").trim();
 
   if (action === "stats") {
@@ -858,25 +902,29 @@ function formatRecallBlock(rows: ObservationRow[]): string {
 export default function engram(pi: ExtensionAPI) {
   // --- Session lifecycle ------------------------------------------------
   pi.on("session_start", async (_event, ctx) => {
-    try {
-      await ensureDb(pi);
-      lastProjectInfo = await detectProject(pi, ctx);
-      await ensureSession(pi, lastProjectInfo);
-      ctx.ui.setStatus(
-        "memory",
-        `${ctx.ui.theme.fg("accent", "◆")} ${ctx.ui.theme.fg("muted", "mem")} ${ctx.ui.theme.fg("success", lastProjectInfo.project)}`,
-      );
-    } catch (error) {
-      const msg = error instanceof Error ? error.message : String(error);
-      ctx.ui.setStatus(
-        "memory",
-        `${ctx.ui.theme.fg("error", "◆")} ${ctx.ui.theme.fg("muted", "mem unavailable")}`,
-      );
-      ctx.ui.notify(
-        `engram is not available. Install sqlite3 (Arch: sudo pacman -S sqlite). ${msg}`,
-        "warning",
-      );
-    }
+    ctx.ui.setStatus(
+      "memory",
+      `${ctx.ui.theme.fg("accent", "◆")} ${ctx.ui.theme.fg("muted", "mem init")}`,
+    );
+
+    void startBackgroundInit(pi, ctx)
+      .then((info) => {
+        ctx.ui.setStatus(
+          "memory",
+          `${ctx.ui.theme.fg("accent", "◆")} ${ctx.ui.theme.fg("muted", "mem")} ${ctx.ui.theme.fg("success", info.project)}`,
+        );
+      })
+      .catch((error) => {
+        const msg = error instanceof Error ? error.message : String(error);
+        ctx.ui.setStatus(
+          "memory",
+          `${ctx.ui.theme.fg("error", "◆")} ${ctx.ui.theme.fg("muted", "mem unavailable")}`,
+        );
+        ctx.ui.notify(
+          `engram is not available. Install sqlite3 (Arch: sudo pacman -S sqlite). ${msg}`,
+          "warning",
+        );
+      });
   });
 
   pi.on("session_shutdown", async (_event, ctx) => {
@@ -897,10 +945,8 @@ export default function engram(pi: ExtensionAPI) {
   // --- Auto recall -------------------------------------------------------
   pi.on("before_agent_start", async (event, ctx) => {
     try {
-      await ensureDb(pi);
-      const info = await detectProject(pi, ctx);
-      await ensureSession(pi, info);
-      lastProjectInfo = info;
+      await ensureMemoryReady(pi, ctx);
+      const info = lastProjectInfo ?? (await detectProject(pi, ctx));
 
       const prompt = String(event.prompt ?? "").trim();
       if (!prompt || prompt.startsWith("/")) return;

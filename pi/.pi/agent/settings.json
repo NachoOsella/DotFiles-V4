@@ -1,12 +1,12 @@
 {
-  "lastChangelogVersion": "0.75.0",
+  "lastChangelogVersion": "0.75.5",
   "theme": "gruvbox-material-dark-hard",
   "defaultThinkingLevel": "low",
   "hideThinkingBlock": false,
   "quietStartup": true,
   "packages": [
     "git:github.com/nicobailon/pi-web-access",
-    "git:github.com/mattleong/pi-better-openai"
+    "git:github.com/ninehills/pi-commandcode-provider"
   ],
   "enableSkillCommands": true,
   "extensions": [],

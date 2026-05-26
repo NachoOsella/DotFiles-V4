@@ -224,14 +224,16 @@ export default function codexPlanModeExtension(pi: ExtensionAPI): void {
 					source: "codex-plan-mode",
 				});
 				ctx.ui.notify("Switching to execute mode.", "info");
-				pi.sendUserMessage("Implement the approved plan.");
+				// Queue the implementation request after the current turn finishes.
+				pi.sendUserMessage("Implement the approved plan.", { deliverAs: "followUp" });
 				return;
 			}
 
 			if (choice === "Refine with additional feedback") {
 				const feedback = await ctx.ui.editor("How should the plan be refined?", "");
 				if (feedback?.trim()) {
-					pi.sendUserMessage(`Refine the plan using this feedback:\n${feedback.trim()}`);
+					// Queue the refinement request instead of interrupting the active turn.
+					pi.sendUserMessage(`Refine the plan using this feedback:\n${feedback.trim()}`, { deliverAs: "followUp" });
 				}
 			}
 		} finally {

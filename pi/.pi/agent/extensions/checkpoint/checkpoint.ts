@@ -68,6 +68,9 @@ interface ExtensionContext {
 
 interface CheckpointState {
   gitAvailable: boolean;
+  gitChecked: boolean;
+  gitInitPromise: Promise<boolean> | null;
+  gitInitCwd: string | null;
   checkpointingFailed: boolean;
   currentSessionId: string;
   currentSessionFile: string | undefined;
@@ -78,6 +81,9 @@ interface CheckpointState {
 function createInitialState(): CheckpointState {
   return {
     gitAvailable: false,
+    gitChecked: false,
+    gitInitPromise: null,
+    gitInitCwd: null,
     checkpointingFailed: false,
     currentSessionId: "",
     currentSessionFile: undefined,
@@ -207,6 +213,58 @@ function updateSessionInfo(state: CheckpointState, sessionManager: SessionManage
   state.currentSessionFile = sessionManager.getSessionFile();
   const header = sessionManager.getHeader();
   state.currentSessionId = header?.id && isSafeId(header.id) ? header.id : "";
+}
+
+/** Log startup profile data only when explicitly requested. */
+function profileStartup(label: string, startedAt: number): void {
+  if (process.env.PI_STARTUP_PROFILE !== "1") return;
+  const elapsedMs = Math.round((performance.now() - startedAt) * 10) / 10;
+  console.error(`[pi-startup] checkpoint ${label}: ${elapsedMs}ms`);
+}
+
+/** Detect Git support lazily so startup is not blocked by repository checks. */
+async function ensureGitState(state: CheckpointState, ctx: ExtensionContext): Promise<boolean> {
+  if (state.gitChecked && state.gitInitCwd === ctx.cwd) {
+    if (state.gitAvailable) updateSessionInfo(state, ctx.sessionManager);
+    return state.gitAvailable;
+  }
+
+  if (state.gitInitPromise && state.gitInitCwd === ctx.cwd) {
+    const available = await state.gitInitPromise;
+    if (available) updateSessionInfo(state, ctx.sessionManager);
+    return available;
+  }
+
+  const startedAt = performance.now();
+  resetRepoCache();
+  state.gitChecked = false;
+  state.gitAvailable = false;
+  state.gitInitCwd = ctx.cwd;
+  state.gitInitPromise = isGitRepo(ctx.cwd)
+    .then((available) => {
+      state.gitAvailable = available;
+      state.gitChecked = true;
+      profileStartup(`git detection (${available ? "repo" : "no repo"})`, startedAt);
+      return available;
+    })
+    .catch(() => {
+      state.gitAvailable = false;
+      state.gitChecked = true;
+      profileStartup("git detection failed", startedAt);
+      return false;
+    })
+    .finally(() => {
+      state.gitInitPromise = null;
+    });
+
+  const available = await state.gitInitPromise;
+  if (available) updateSessionInfo(state, ctx.sessionManager);
+  return available;
+}
+
+/** Start Git detection in the background without awaiting it. */
+function startGitStateInit(state: CheckpointState, ctx: ExtensionContext): void {
+  void ensureGitState(state, ctx);
 }
 
 // ============================================================================
@@ -439,34 +497,28 @@ export default function (pi: ExtensionAPI) {
   const state = createInitialState();
 
   pi.on("session_start", async (_event: any, ctx: ExtensionContext) => {
-    resetRepoCache();
-
-    state.gitAvailable = await isGitRepo(ctx.cwd);
-    if (!state.gitAvailable) return;
-
-    updateSessionInfo(state, ctx.sessionManager);
-
+    startGitStateInit(state, ctx);
   });
 
   pi.on("session_switch", async (_event: any, ctx: ExtensionContext) => {
-    if (!state.gitAvailable) return;
+    if (!(await ensureGitState(state, ctx))) return;
     updateSessionInfo(state, ctx.sessionManager);
   });
 
   pi.on("session_fork", async (_event: any, ctx: ExtensionContext) => {
-    if (!state.gitAvailable) return;
+    if (!(await ensureGitState(state, ctx))) return;
     updateSessionInfo(state, ctx.sessionManager);
   });
 
   pi.on("session_before_fork", async (event: any, ctx: ExtensionContext) => {
-    if (!state.gitAvailable) return undefined;
+    if (!(await ensureGitState(state, ctx))) return undefined;
     return handleRestorePrompt(state, ctx, () => event.entryId, {
       codeOnly: "skipConversationRestore",
     });
   });
 
   pi.on("session_before_tree", async (event: any, ctx: ExtensionContext) => {
-    if (!state.gitAvailable) return undefined;
+    if (!(await ensureGitState(state, ctx))) return undefined;
     return handleRestorePrompt(state, ctx, () => event.preparation.targetId, {
       codeOnly: "cancel",
       requireUserEntry: true,
@@ -474,7 +526,7 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.on("turn_start", async (event: any, ctx: ExtensionContext) => {
-    if (!state.gitAvailable || state.checkpointingFailed) return;
+    if (!(await ensureGitState(state, ctx)) || state.checkpointingFailed) return;
 
     if (!state.currentSessionId && state.currentSessionFile) {
       state.currentSessionId = await getSessionIdFromFile(state.currentSessionFile);

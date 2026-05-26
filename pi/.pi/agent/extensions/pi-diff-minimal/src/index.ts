@@ -11,17 +11,82 @@
  */
 
 import { existsSync, readFileSync } from "node:fs";
-import { relative } from "node:path";
+import { extname, relative } from "node:path";
 
-import {
-	applyDiffPalette,
-	lang as detectDiffLanguage,
-	renderCodeFrame,
-	renderSplit,
-	resolveDiffColors,
-	themeCacheKey,
-} from "./renderer.js";
 import { parseDiff } from "./core/diff.js";
+import type { ParsedDiff } from "./core/diff.js";
+
+type RendererModule = typeof import("./renderer.js");
+
+/**
+ * Small renderer used until the Shiki renderer is warmed in the background.
+ * It avoids loading @shikijs/cli on Pi startup while keeping diff output readable.
+ */
+const fallbackRenderer = {
+	applyDiffPalette() {},
+	lang(filePath: string): string {
+		return extname(filePath || "").replace(/^\./, "") || "text";
+	},
+	renderCodeFrame(content: string, _language: string, maxLines: number): Promise<string> {
+		return Promise.resolve(String(content ?? "").split("\n").slice(0, maxLines).join("\n"));
+	},
+	renderSplit(diff: ParsedDiff, _language: string, maxLines: number): Promise<string> {
+		return Promise.resolve(
+			diff.lines
+				.slice(0, maxLines)
+				.map((line: any) => `${line.type === "add" ? "+" : line.type === "del" ? "-" : " "}${line.text ?? ""}`)
+				.join("\n"),
+		);
+	},
+	resolveDiffColors(): any {
+		return {};
+	},
+	themeCacheKey(): string {
+		return "fallback";
+	},
+} as unknown as RendererModule;
+
+let renderer = fallbackRenderer;
+let rendererLoadPromise: Promise<RendererModule> | null = null;
+
+/** Start loading the full Shiki renderer without blocking extension registration. */
+function warmRenderer(): Promise<RendererModule> {
+	if (rendererLoadPromise) return rendererLoadPromise;
+	const startedAt = performance.now();
+	rendererLoadPromise = import("./renderer.js")
+		.then((module) => {
+			renderer = module;
+			module.applyDiffPalette();
+			if (process.env.PI_EXTENSION_PROFILE === "1" || process.env.PI_STARTUP_PROFILE === "1") {
+				const elapsedMs = Math.round((performance.now() - startedAt) * 10) / 10;
+				console.error(`[pi-startup] pi-diff-minimal renderer warmup: ${elapsedMs}ms`);
+			}
+			return module;
+		})
+		.catch((error) => {
+			rendererLoadPromise = null;
+			if (process.env.PI_EXTENSION_PROFILE === "1" || process.env.PI_STARTUP_PROFILE === "1") {
+				const message = error instanceof Error ? error.message : String(error);
+				console.error(`[pi-startup] pi-diff-minimal renderer warmup failed: ${message}`);
+			}
+			return fallbackRenderer;
+		});
+	return rendererLoadPromise;
+}
+
+/** Invalidate a pending render after the full renderer becomes available. */
+function invalidateAfterWarmup(ctx: any): void {
+	if (renderer !== fallbackRenderer) return;
+	void warmRenderer()
+		.then(() => ctx.invalidate?.())
+		.catch(() => undefined);
+}
+
+const detectDiffLanguage = (filePath: string) => renderer.lang(filePath);
+const renderCodeFrame = (...args: Parameters<RendererModule["renderCodeFrame"]>) => renderer.renderCodeFrame(...args);
+const renderSplit = (...args: Parameters<RendererModule["renderSplit"]>) => renderer.renderSplit(...args);
+const resolveDiffColors = (...args: Parameters<RendererModule["resolveDiffColors"]>) => renderer.resolveDiffColors(...args);
+const themeCacheKey = (...args: Parameters<RendererModule["themeCacheKey"]>) => renderer.themeCacheKey(...args);
 
 // ---------------------------------------------------------------------------
 // Config
@@ -107,8 +172,10 @@ function summarizeEditOperations(operations: Array<{ oldText: string; newText: s
 // ---------------------------------------------------------------------------
 
 export default async function diffRendererExtension(pi: any): Promise<void> {
-	// Apply diff theme palette from env/settings before rendering
-	applyDiffPalette();
+	// Warm the heavy Shiki renderer after startup instead of blocking extension load.
+	pi.on("session_start", async () => {
+		setTimeout(() => void warmRenderer(), 250).unref?.();
+	});
 
 	let createWriteTool: any, createEditTool: any, TextComponent: any;
 	try {

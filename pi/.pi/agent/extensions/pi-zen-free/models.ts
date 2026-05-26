@@ -19,6 +19,13 @@ export function buildModelConfigs(
         : DEFAULT_THINKING_LEVEL_MAP
       : undefined;
 
+    // qwen3.6-plus-free is excluded because the Zen API /chat/completions endpoint
+    // returns Anthropic Messages format (message_start, content_block_delta, etc.)
+    // instead of OpenAI Chat Completions SSE format. Since pi-zen-free registers
+    // as "openai-completions", the stream parser never receives finish_reason.
+    // This is a backend issue on OpenCode's side, not a Pi configuration problem.
+    if (id === "qwen3.6-plus-free") continue;
+
     configs.push({
       id,
       name: info.name ?? id,
