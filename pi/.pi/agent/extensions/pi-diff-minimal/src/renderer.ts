@@ -7,9 +7,8 @@
  *   3. For word-level changes, inject brighter bg at changed char positions
  *   4. Result: syntax fg + diff bg + word emphasis — all three visible together
  *
- * Views:
- *   - Split (side-by-side) — edit tool, auto-falls back to unified on narrow terminals
- *   - Unified (stacked)    — write tool overwrites
+ * View:
+ *   - Unified (stacked) — single column layout
  *
  * Theme integration:
  *   - Colors ALWAYS derive from the user's pi theme on first render
@@ -161,12 +160,6 @@ function envBg(name: string, fallback: string): string {
 	const b = Number.parseInt(hex.slice(5, 7), 16);
 	return `\x1b[48;2;${r};${g};${b}m`;
 }
-
-// --- Split-view thresholds ---
-const SPLIT_MIN_WIDTH = envInt("DIFF_SPLIT_MIN_WIDTH", 150);
-const SPLIT_MIN_CODE_WIDTH = envInt("DIFF_SPLIT_MIN_CODE_WIDTH", 60);
-const SPLIT_MAX_WRAP_RATIO = 0.2;
-const SPLIT_MAX_WRAP_LINES = 8;
 
 // --- Terminal bounds ---
 const MAX_TERM_WIDTH = 210;
@@ -721,35 +714,6 @@ function rule(width: number): string {
 	return `${BG_BASE}${FG_RULE}${"\u2500".repeat(width)}${RST}`;
 }
 
-function shouldUseSplit(diff: ParsedDiff, width: number, maxRows: number): boolean {
-	if (!diff.lines.length) return false;
-	if (width < SPLIT_MIN_WIDTH) return false;
-
-	const nw = Math.max(
-		2,
-		String(Math.max(...diff.lines.map((l) => l.oldNum ?? l.newNum ?? 0), 0)).length,
-	);
-	const half = Math.floor((width - 1) / 2);
-	const gw = nw + 5;
-	const cw = Math.max(12, half - gw);
-	if (cw < SPLIT_MIN_CODE_WIDTH) return false;
-
-	const vis = diff.lines.slice(0, maxRows);
-	let contentLines = 0;
-	let wrapCandidates = 0;
-	for (const l of vis) {
-		if (l.type === "sep") continue;
-		contentLines++;
-		if (tabs(l.content).length > cw) wrapCandidates++;
-	}
-	if (contentLines === 0) return true;
-
-	const wrapRatio = wrapCandidates / contentLines;
-	if (wrapCandidates >= SPLIT_MAX_WRAP_LINES) return false;
-	if (wrapRatio >= SPLIT_MAX_WRAP_RATIO) return false;
-	return true;
-}
-
 // ---------------------------------------------------------------------------
 // Language detection
 // ---------------------------------------------------------------------------
@@ -798,6 +762,9 @@ const EXT_LANG: Record<string, BundledLanguage> = {
 export function lang(fp: string): BundledLanguage | undefined {
 	return EXT_LANG[extname(fp).slice(1).toLowerCase()];
 }
+
+/** Alias for `lang` — used by index.ts */
+export const detectDiffLanguage = lang;
 
 // ---------------------------------------------------------------------------
 // Shiki ANSI cache + pre-warm
@@ -1104,157 +1071,3 @@ export async function renderUnified(
 	return out.join("\n");
 }
 
-// ---------------------------------------------------------------------------
-// Split view (auto-fallback to unified when narrow)
-// ---------------------------------------------------------------------------
-
-export async function renderSplit(
-	diff: ParsedDiff,
-	language: BundledLanguage | undefined,
-	maxLines: number,
-	colors: DiffColors,
-	width: number,
-): Promise<string> {
-	if (!shouldUseSplit(diff, width, maxLines)) return renderUnified(diff, language, maxLines, colors, width);
-	if (!diff.lines.length) return "";
-
-	type Row = { left: (typeof diff.lines)[number] | null; right: (typeof diff.lines)[number] | null };
-	const rows: Row[] = [];
-	let i = 0;
-	while (i < diff.lines.length) {
-		const l = diff.lines[i];
-		if (l.type === "sep" || l.type === "ctx") {
-			rows.push({ left: l, right: l });
-			i++;
-			continue;
-		}
-		const dels: (typeof diff.lines) = [],
-			adds: (typeof diff.lines) = [];
-		while (i < diff.lines.length && diff.lines[i].type === "del") {
-			dels.push(diff.lines[i]);
-			i++;
-		}
-		while (i < diff.lines.length && diff.lines[i].type === "add") {
-			adds.push(diff.lines[i]);
-			i++;
-		}
-		const n = Math.max(dels.length, adds.length);
-		for (let j = 0; j < n; j++) rows.push({ left: dels[j] ?? null, right: adds[j] ?? null });
-	}
-
-	const vis = rows.slice(0, maxLines);
-	const renderWidth = Math.max(MIN_RENDER_WIDTH, width);
-	const half = Math.floor((renderWidth - 1) / 2);
-	const nw = Math.max(
-		2,
-		String(Math.max(...diff.lines.map((l) => l.oldNum ?? l.newNum ?? 0), 0)).length,
-	);
-	const gw = nw + 5;
-	const cw = Math.max(12, half - gw);
-	const canHL = diff.chars <= MAX_HL_CHARS && vis.length * 2 <= maxLines * 2;
-
-	const leftSrc: string[] = [],
-		rightSrc: string[] = [];
-	for (const r of vis) {
-		if (r.left && r.left.type !== "sep") leftSrc.push(r.left.content);
-		if (r.right && r.right.type !== "sep") rightSrc.push(r.right.content);
-	}
-	const [leftHL, rightHL] = canHL
-		? await Promise.all([hlBlock(leftSrc.join("\n"), language), hlBlock(rightSrc.join("\n"), language)])
-		: [leftSrc, rightSrc];
-
-	let lI = 0,
-		rI = 0;
-
-	type HalfResult = { gutter: string; contGutter: string; bodyRows: string[] };
-	const emptyBody = `${BG_EMPTY}${" ".repeat(cw)}${RST}`;
-
-	function half_build(
-		line: (typeof diff.lines)[number] | null,
-		hl: string,
-		ranges: Array<[number, number]> | null,
-		side: "left" | "right",
-	): HalfResult {
-		if (!line) {
-			const gw2 = nw + 2;
-			const g = `${BG_BASE} ${" ".repeat(gw2)}${FG_RULE}\u2502${RST} `;
-			return { gutter: g, contGutter: g, bodyRows: [emptyBody] };
-		}
-		if (line.type === "sep") {
-			const label = line.newNum && line.newNum > 0 ? `\u00B7\u00B7\u00B7 ${line.newNum} lines \u00B7\u00B7\u00B7` : "\u00B7\u00B7\u00B7";
-			const g = `${BG_BASE} ${FG_DIM}${fit("", nw + 2)}${RST}${FG_RULE}\u2502${RST} `;
-			return { gutter: g, contGutter: g, bodyRows: [`${BG_BASE}${FG_DIM}${fit(label, cw)}${RST}`] };
-		}
-
-		const isDel = line.type === "del",
-			isAdd = line.type === "add";
-		const gBg = isDel ? BG_GUTTER_DEL : isAdd ? BG_GUTTER_ADD : BG_BASE;
-		const cBg = isDel ? BG_DEL : isAdd ? BG_ADD : BG_BASE;
-		const sFg = isDel ? colors.fgDel : isAdd ? colors.fgAdd : colors.fgCtx;
-		const sign = isDel ? "-" : isAdd ? "+" : " ";
-		const num = isDel ? line.oldNum : isAdd ? line.newNum : side === "left" ? line.oldNum : line.newNum;
-
-		const borderFg = isDel ? colors.fgDel : isAdd ? colors.fgAdd : "";
-		const border = borderFg ? `${borderFg}${BORDER_BAR}${RST}` : ` ${BG_BASE}`;
-		const numFg = borderFg || FG_LNUM;
-
-		let body: string;
-		if (ranges && ranges.length > 0) {
-			body = injectBg(hl, ranges, cBg, isDel ? BG_DEL_W : BG_ADD_W);
-		} else if (isDel || isAdd) {
-			body = `${cBg}${hl}`;
-		} else {
-			body = `${BG_BASE}${DIM}${hl}`;
-		}
-
-		const gutter = `${border}${gBg}${lnum(num, nw, numFg)}${sFg}${BOLD}${sign}${RST} ${FG_RULE}\u2502${RST} `;
-		const contGutter = `${border}${gBg}${" ".repeat(nw + 1)}${RST} ${FG_RULE}\u2502${RST} `;
-		const bodyRows = wrapAnsi(tabs(body), cw, adaptiveWrapRows(renderWidth), cBg);
-		return { gutter, contGutter, bodyRows };
-	}
-
-	const out: string[] = [];
-	out.push(`${rule(half)}${FG_RULE}\u250A${RST}${rule(half)}`);
-
-	for (const r of vis) {
-		const leftLine = r.left,
-			rightLine = r.right;
-		const paired = leftLine && rightLine && leftLine.type === "del" && rightLine.type === "add";
-		const wd = paired ? wordDiffAnalysis(leftLine.content, rightLine.content) : null;
-
-		let lResult: HalfResult, rResult: HalfResult;
-
-		if (paired && wd && wd.similarity >= WORD_DIFF_MIN_SIM && canHL) {
-			const lhl = leftHL[lI++] ?? leftLine.content;
-			const rhl = rightHL[rI++] ?? rightLine.content;
-			lResult = half_build(leftLine, lhl, wd.oldRanges, "left");
-			rResult = half_build(rightLine, rhl, wd.newRanges, "right");
-		} else if (paired && wd && wd.similarity >= WORD_DIFF_MIN_SIM && !canHL) {
-			const pwd = plainWordDiff(leftLine.content, rightLine.content);
-			lI++;
-			rI++;
-			lResult = half_build(leftLine, pwd.old, null, "left");
-			rResult = half_build(rightLine, pwd.new, null, "right");
-		} else {
-			const lhl = leftLine && leftLine.type !== "sep" ? (leftHL[lI++] ?? leftLine?.content ?? "") : "";
-			const rhl = rightLine && rightLine.type !== "sep" ? (rightHL[rI++] ?? rightLine?.content ?? "") : "";
-			lResult = half_build(leftLine, lhl, null, "left");
-			rResult = half_build(rightLine, rhl, null, "right");
-		}
-
-		const maxRows = Math.max(lResult.bodyRows.length, rResult.bodyRows.length);
-		for (let row = 0; row < maxRows; row++) {
-			const lg = row === 0 ? lResult.gutter : lResult.contGutter;
-			const rg = row === 0 ? rResult.gutter : rResult.contGutter;
-			const lb = lResult.bodyRows[row] ?? emptyBody;
-			const rb = rResult.bodyRows[row] ?? emptyBody;
-			out.push(`${lg}${lb}${DIVIDER}${rg}${rb}`);
-		}
-	}
-
-	out.push(`${rule(half)}${FG_RULE}\u250A${RST}${rule(half)}`);
-	if (rows.length > vis.length) {
-		out.push(`${BG_BASE}${FG_DIM}  \u2026 ${rows.length - vis.length} more lines${RST}`);
-	}
-	return out.join("\n");
-}

@@ -99,14 +99,19 @@ searched separately and may be recalled when they match the prompt.
 
 ## Search and recall
 
-Before each non-command turn, engram performs two bounded recall passes:
+Before each non-command turn, engram now defaults to `PI_MEMORY_RECALL_MODE=index`:
 
-1. Matching global personal preferences.
-2. Matching high-priority current-project memories.
+1. Build a lightweight memory index from pinned/always-include rows, matching personal preferences, matching project memories, important project memories, and recent project memories.
+2. Inject titles, IDs, topics, tags, aliases, and summaries so the agent can pick relevant memories.
+3. The agent should call `mem_search` with `id` and `include_content=true` to expand only the memories it needs.
 
-Results are injected as compact snippets and capped by `PI_MEMORY_MAX_RECALL_ITEMS`
-and `PI_MEMORY_MAX_RECALL_CHARS`. If a memory includes citations, the prompt
-reminds the agent to verify the cited files before relying on that fact.
+Legacy snippet recall is still available with `PI_MEMORY_RECALL_MODE=recall`. `hybrid`
+injects the index plus `always_include` memories, and `full` injects both the index
+and legacy recall snippets. Index output is capped by `PI_MEMORY_MAX_INDEX_ITEMS`
+and `PI_MEMORY_MAX_INDEX_CHARS`; snippet recall remains capped by
+`PI_MEMORY_MAX_RECALL_ITEMS` and `PI_MEMORY_MAX_RECALL_CHARS`. If a memory includes
+citations, the prompt reminds the agent to verify the cited files before relying on
+that fact.
 
 Search uses SQLite FTS5 BM25 with weighted columns when available:
 
@@ -164,10 +169,15 @@ The extension nudges the agent to:
 | `PI_MEMORY_DB` | `~/.pi/agent/memory/pi-memory.db` | Database path. |
 | `PI_MEMORY_SQLITE_BIN` | `sqlite3` | SQLite binary. |
 | `PI_MEMORY_PROJECT` | auto-detect | Force project name. |
-| `PI_MEMORY_AUTO_RECALL=0` | enabled | Disable auto-recall. |
+| `PI_MEMORY_AUTO_RECALL=0` | enabled | Disable auto-recall/index injection. |
+| `PI_MEMORY_RECALL_MODE` | `index` | Injection mode: `index`, `hybrid`, `recall`, `full`, or `off`. |
 | `PI_MEMORY_AUTO_CAPTURE=0` | enabled | Disable selective preference auto-capture. |
-| `PI_MEMORY_MAX_RECALL_ITEMS` | 5 | Max memories injected before a turn. |
-| `PI_MEMORY_MAX_RECALL_CHARS` | 1000 | Max chars for injected recall block. |
+| `PI_MEMORY_MAX_INDEX_ITEMS` | 40 | Max memories listed in the injected index. |
+| `PI_MEMORY_MAX_INDEX_CHARS` | 4000 | Max chars for the injected index block. |
+| `PI_MEMORY_INDEX_VERBOSITY` | `compact` | Per-entry detail: `compact`, `standard`, or `verbose`. |
+| `PI_MEMORY_INDEX_PREVIEW_CHARS` | 90 | One-line preview length per index entry. |
+| `PI_MEMORY_MAX_RECALL_ITEMS` | 5 | Max memories injected as legacy recall snippets. |
+| `PI_MEMORY_MAX_RECALL_CHARS` | 1000 | Max chars for injected recall snippet block. |
 | `PI_MEMORY_SQLITE_TIMEOUT_MS` | 8000 | SQLite process timeout. |
 | `PI_MEMORY_SQLITE_BUSY_TIMEOUT_MS` | `PI_MEMORY_SQLITE_TIMEOUT_MS - 1000` | SQLite lock wait timeout before retry. |
 
@@ -188,6 +198,10 @@ place and adds optional metadata columns:
 
 - `tags`
 - `citations`
+- `summary`
+- `aliases`
+- `pinned`
+- `always_include`
 - `confidence`
 - `status`
 - `verified_at`

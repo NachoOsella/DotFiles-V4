@@ -152,9 +152,11 @@ export function keywordScoreSql(terms: string[]): string {
         `(CASE WHEN lower(o.title)=${q} THEN 10 ELSE 0 END)`,
         `(CASE WHEN lower(o.title) LIKE '%' || ${q} || '%' THEN 5 ELSE 0 END)`,
         `(CASE WHEN lower(COALESCE(o.topic_key, '')) LIKE '%' || ${q} || '%' THEN 4 ELSE 0 END)`,
+        `(CASE WHEN lower(COALESCE(o.aliases, '')) LIKE '%' || ${q} || '%' THEN 5 ELSE 0 END)`,
+        `(CASE WHEN lower(COALESCE(o.summary, '')) LIKE '%' || ${q} || '%' THEN 3 ELSE 0 END)`,
         `(CASE WHEN lower(COALESCE(o.tags, '')) LIKE '%' || ${q} || '%' THEN 2 ELSE 0 END)`,
         `(CASE WHEN lower(COALESCE(o.citations, '')) LIKE '%' || ${q} || '%' THEN 2 ELSE 0 END)`,
-        `(CASE WHEN lower(o.content) LIKE '%' || ${q} || '%' THEN 1 ELSE 0 END)`,
+        `(CASE WHEN lower(o.content) LIKE '%' || ${q} || '%' THEN 1 ELSE 0 END)`, 
       ].join(" + ");
     })
     .join(" + ");
@@ -166,7 +168,7 @@ export function keywordCoverageSql(terms: string[]): string {
   return terms
     .map((term) => {
       const q = sql(term);
-      return `(CASE WHEN lower(o.title) LIKE '%' || ${q} || '%' OR lower(COALESCE(o.topic_key, '')) LIKE '%' || ${q} || '%' OR lower(o.content) LIKE '%' || ${q} || '%' OR lower(COALESCE(o.tags, '')) LIKE '%' || ${q} || '%' OR lower(COALESCE(o.citations, '')) LIKE '%' || ${q} || '%' THEN 1 ELSE 0 END)`;
+      return `(CASE WHEN lower(o.title) LIKE '%' || ${q} || '%' OR lower(COALESCE(o.topic_key, '')) LIKE '%' || ${q} || '%' OR lower(COALESCE(o.summary, '')) LIKE '%' || ${q} || '%' OR lower(COALESCE(o.aliases, '')) LIKE '%' || ${q} || '%' OR lower(o.content) LIKE '%' || ${q} || '%' OR lower(COALESCE(o.tags, '')) LIKE '%' || ${q} || '%' OR lower(COALESCE(o.citations, '')) LIKE '%' || ${q} || '%' THEN 1 ELSE 0 END)`;
     })
     .join(" + ");
 }

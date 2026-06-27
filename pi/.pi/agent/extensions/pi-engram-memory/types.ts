@@ -25,6 +25,10 @@ export interface ObservationRow {
   project: string;
   tags?: string | null;
   citations?: string | null;
+  summary?: string | null;
+  aliases?: string | null;
+  pinned?: number | null;
+  always_include?: number | null;
   confidence?: number | null;
   status?: string | null;
   verified_at?: string | null;

@@ -3,7 +3,7 @@
  *
  * Only hooks into write/edit tools to show enhanced diffs:
  *   - Syntax-highlighted via Shiki (190+ languages)
- *   - Split view (side-by-side) or unified view (stacked)
+ *   - Unified view (stacked)
  *   - Word-level emphasis on changed characters
  *   - Colors derived from user's pi theme
  *
@@ -16,77 +16,16 @@ import { extname, relative } from "node:path";
 import { parseDiff } from "./core/diff.js";
 import type { ParsedDiff } from "./core/diff.js";
 
-type RendererModule = typeof import("./renderer.js");
+import { renderUnified, resolveDiffColors, themeCacheKey, detectDiffLanguage, renderCodeFrame } from "./renderer.js";
 
-/**
- * Small renderer used until the Shiki renderer is warmed in the background.
- * It avoids loading @shikijs/cli on Pi startup while keeping diff output readable.
- */
-const fallbackRenderer = {
-	applyDiffPalette() {},
-	lang(filePath: string): string {
-		return extname(filePath || "").replace(/^\./, "") || "text";
-	},
-	renderCodeFrame(content: string, _language: string, maxLines: number): Promise<string> {
-		return Promise.resolve(String(content ?? "").split("\n").slice(0, maxLines).join("\n"));
-	},
-	renderSplit(diff: ParsedDiff, _language: string, maxLines: number): Promise<string> {
-		return Promise.resolve(
-			diff.lines
-				.slice(0, maxLines)
-				.map((line: any) => `${line.type === "add" ? "+" : line.type === "del" ? "-" : " "}${line.text ?? ""}`)
-				.join("\n"),
-		);
-	},
-	resolveDiffColors(): any {
-		return {};
-	},
-	themeCacheKey(): string {
-		return "fallback";
-	},
-} as unknown as RendererModule;
+let rendererWarmed = false;
 
-let renderer = fallbackRenderer;
-let rendererLoadPromise: Promise<RendererModule> | null = null;
-
-/** Start loading the full Shiki renderer without blocking extension registration. */
-function warmRenderer(): Promise<RendererModule> {
-	if (rendererLoadPromise) return rendererLoadPromise;
-	const startedAt = performance.now();
-	rendererLoadPromise = import("./renderer.js")
-		.then((module) => {
-			renderer = module;
-			module.applyDiffPalette();
-			if (process.env.PI_EXTENSION_PROFILE === "1" || process.env.PI_STARTUP_PROFILE === "1") {
-				const elapsedMs = Math.round((performance.now() - startedAt) * 10) / 10;
-				console.error(`[pi-startup] pi-diff-minimal renderer warmup: ${elapsedMs}ms`);
-			}
-			return module;
-		})
-		.catch((error) => {
-			rendererLoadPromise = null;
-			if (process.env.PI_EXTENSION_PROFILE === "1" || process.env.PI_STARTUP_PROFILE === "1") {
-				const message = error instanceof Error ? error.message : String(error);
-				console.error(`[pi-startup] pi-diff-minimal renderer warmup failed: ${message}`);
-			}
-			return fallbackRenderer;
-		});
-	return rendererLoadPromise;
+/** Warm the renderer by applying palette. */
+async function warmRenderer(): Promise<void> {
+	if (rendererWarmed) return;
+	await import("./renderer.js"); // side-effect: module loads
+	rendererWarmed = true;
 }
-
-/** Invalidate a pending render after the full renderer becomes available. */
-function invalidateAfterWarmup(ctx: any): void {
-	if (renderer !== fallbackRenderer) return;
-	void warmRenderer()
-		.then(() => ctx.invalidate?.())
-		.catch(() => undefined);
-}
-
-const detectDiffLanguage = (filePath: string) => renderer.lang(filePath);
-const renderCodeFrame = (...args: Parameters<RendererModule["renderCodeFrame"]>) => renderer.renderCodeFrame(...args);
-const renderSplit = (...args: Parameters<RendererModule["renderSplit"]>) => renderer.renderSplit(...args);
-const resolveDiffColors = (...args: Parameters<RendererModule["resolveDiffColors"]>) => renderer.resolveDiffColors(...args);
-const themeCacheKey = (...args: Parameters<RendererModule["themeCacheKey"]>) => renderer.themeCacheKey(...args);
 
 // ---------------------------------------------------------------------------
 // Config
@@ -253,7 +192,7 @@ export default async function diffRendererExtension(pi: any): Promise<void> {
 					ctx.state._previewKey = previewKey;
 					ctx.state._previewText = hdr;
 					const lg = detectDiffLanguage(fp);
-					resolveDiffColors(theme);
+					warmRenderer();
 					renderCodeFrame(String(args.content), lg, ctx.expanded ? Number.MAX_SAFE_INTEGER : 16, termW())
 						.then((preview: string) => {
 							if (ctx.state._previewKey !== previewKey) return;
@@ -289,7 +228,8 @@ export default async function diffRendererExtension(pi: any): Promise<void> {
 					ctx.state._wdk = key;
 					ctx.state._wdt = `  ${d.summary}\n${theme.fg("muted", "  rendering diff…")}`;
 					const dc = resolveDiffColors(theme);
-					renderSplit(d.diff, d.language, MAX_RENDER_LINES, dc, w)
+					warmRenderer();
+					renderUnified(d.diff, d.language, MAX_RENDER_LINES, dc, w)
 						.then((rendered: string) => {
 							if (ctx.state._wdk !== key) return;
 							ctx.state._wdt = `  ${d.summary}\n${rendered}`;
@@ -396,10 +336,11 @@ export default async function diffRendererExtension(pi: any): Promise<void> {
 				ctx.state._pt = `${hdr}  ${theme.fg("muted", "(rendering…)")}`;
 				const lg = detectDiffLanguage(fp);
 				const dc = resolveDiffColors(theme);
+				warmRenderer();
 
 				if (operations.length === 1) {
 					const diff = parseDiff(operations[0].oldText, operations[0].newText);
-					renderSplit(diff, lg, MAX_PREVIEW_LINES, dc, termW())
+					renderUnified(diff, lg, MAX_PREVIEW_LINES, dc, termW())
 						.then((rendered) => {
 							if (ctx.state._pk !== pk) return;
 							ctx.state._pt = `${hdr}\n${summarize(diff.added, diff.removed)}\n${rendered}`;
@@ -416,7 +357,7 @@ export default async function diffRendererExtension(pi: any): Promise<void> {
 					const previewLines = Math.max(8, Math.floor(MAX_PREVIEW_LINES / maxShown));
 					Promise.all(
 						diffs.slice(0, maxShown).map((diff: any, index: number) =>
-							renderSplit(diff, lg, previewLines, dc, termW())
+							renderUnified(diff, lg, previewLines, dc, termW())
 								.then((rendered) => `Edit ${index + 1}/${operations.length}\n${rendered}`)
 								.catch(() => `Edit ${index + 1}/${operations.length}  ${summarize(diff.added, diff.removed)}`),
 						),

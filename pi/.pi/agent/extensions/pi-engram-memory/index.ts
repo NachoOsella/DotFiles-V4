@@ -11,9 +11,14 @@ import {
   AUTO_CAPTURE,
   AUTO_RECALL,
   DB_PATH,
+  INDEX_PREVIEW_CHARS,
+  INDEX_VERBOSITY,
+  MAX_INDEX_CHARS,
+  MAX_INDEX_ITEMS,
   MAX_RECALL_CHARS,
   MAX_RECALL_ITEMS,
   PERSONAL_PROJECT,
+  RECALL_MODE,
   SQLITE_BIN,
   SQLITE_BUSY_TIMEOUT_MS,
   SQLITE_TIMEOUT_MS,
@@ -64,6 +69,8 @@ let lastProjectInfo: ProjectInfo | null = null;
 let sqliteQueue: Promise<unknown> = Promise.resolve();
 let startupInitPromise: Promise<ProjectInfo> | null = null;
 let startupInitError: unknown = null;
+let lastRecalledIds = new Set<number>();
+let memoryBrowserHandle: { close?: () => void; hide?: () => void } | null = null;
 const projectCache = new Map<string, ProjectInfo>();
 
 // ---------------------------------------------------------------------------
@@ -197,6 +204,10 @@ async function ensureDb(pi: ExtensionAPI, signal?: AbortSignal): Promise<void> {
       project TEXT NOT NULL,
       tags TEXT,
       citations TEXT,
+      summary TEXT,
+      aliases TEXT,
+      pinned INTEGER NOT NULL DEFAULT 0,
+      always_include INTEGER NOT NULL DEFAULT 0,
       confidence REAL NOT NULL DEFAULT 0.8,
       status TEXT NOT NULL DEFAULT 'active',
       verified_at TEXT,
@@ -211,6 +222,10 @@ async function ensureDb(pi: ExtensionAPI, signal?: AbortSignal): Promise<void> {
     "ALTER TABLE observations ADD COLUMN priority INTEGER NOT NULL DEFAULT 3;",
     "ALTER TABLE observations ADD COLUMN tags TEXT;",
     "ALTER TABLE observations ADD COLUMN citations TEXT;",
+    "ALTER TABLE observations ADD COLUMN summary TEXT;",
+    "ALTER TABLE observations ADD COLUMN aliases TEXT;",
+    "ALTER TABLE observations ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0;",
+    "ALTER TABLE observations ADD COLUMN always_include INTEGER NOT NULL DEFAULT 0;",
     "ALTER TABLE observations ADD COLUMN confidence REAL NOT NULL DEFAULT 0.8;",
     "ALTER TABLE observations ADD COLUMN status TEXT NOT NULL DEFAULT 'active';",
     "ALTER TABLE observations ADD COLUMN verified_at TEXT;",
@@ -231,6 +246,8 @@ async function ensureDb(pi: ExtensionAPI, signal?: AbortSignal): Promise<void> {
     CREATE INDEX IF NOT EXISTS idx_obs_topic ON observations(project, scope, topic_key);
     CREATE INDEX IF NOT EXISTS idx_obs_hash ON observations(normalized_hash);
     CREATE INDEX IF NOT EXISTS idx_obs_priority ON observations(project, priority);
+    CREATE INDEX IF NOT EXISTS idx_obs_pinned ON observations(project, pinned, priority);
+    CREATE INDEX IF NOT EXISTS idx_obs_always_include ON observations(project, always_include, priority);
     CREATE INDEX IF NOT EXISTS idx_obs_status ON observations(status, updated_at);
     `,
     signal,
@@ -248,9 +265,16 @@ async function ensureFts(pi: ExtensionAPI, signal?: AbortSignal): Promise<void> 
     await sqlite(
       pi,
       `
-      CREATE VIRTUAL TABLE IF NOT EXISTS observations_fts USING fts5(
+      DROP TRIGGER IF EXISTS observations_fts_ai;
+      DROP TRIGGER IF EXISTS observations_fts_ad;
+      DROP TRIGGER IF EXISTS observations_fts_au;
+      DROP TABLE IF EXISTS observations_fts;
+
+      CREATE VIRTUAL TABLE observations_fts USING fts5(
         title,
         topic_key,
+        summary,
+        aliases,
         content,
         type,
         project UNINDEXED,
@@ -262,21 +286,21 @@ async function ensureFts(pi: ExtensionAPI, signal?: AbortSignal): Promise<void> 
         tokenize='unicode61 remove_diacritics 2'
       );
 
-      CREATE TRIGGER IF NOT EXISTS observations_fts_ai AFTER INSERT ON observations BEGIN
-        INSERT INTO observations_fts(rowid, title, topic_key, content, type, project, scope, tags, citations)
-        VALUES (new.id, new.title, COALESCE(new.topic_key, ''), new.content, new.type, new.project, new.scope, COALESCE(new.tags, ''), COALESCE(new.citations, ''));
+      CREATE TRIGGER observations_fts_ai AFTER INSERT ON observations BEGIN
+        INSERT INTO observations_fts(rowid, title, topic_key, summary, aliases, content, type, project, scope, tags, citations)
+        VALUES (new.id, new.title, COALESCE(new.topic_key, ''), COALESCE(new.summary, ''), COALESCE(new.aliases, ''), new.content, new.type, new.project, new.scope, COALESCE(new.tags, ''), COALESCE(new.citations, ''));
       END;
 
-      CREATE TRIGGER IF NOT EXISTS observations_fts_ad AFTER DELETE ON observations BEGIN
-        INSERT INTO observations_fts(observations_fts, rowid, title, topic_key, content, type, project, scope, tags, citations)
-        VALUES ('delete', old.id, old.title, COALESCE(old.topic_key, ''), old.content, old.type, old.project, old.scope, COALESCE(old.tags, ''), COALESCE(old.citations, ''));
+      CREATE TRIGGER observations_fts_ad AFTER DELETE ON observations BEGIN
+        INSERT INTO observations_fts(observations_fts, rowid, title, topic_key, summary, aliases, content, type, project, scope, tags, citations)
+        VALUES ('delete', old.id, old.title, COALESCE(old.topic_key, ''), COALESCE(old.summary, ''), COALESCE(old.aliases, ''), old.content, old.type, old.project, old.scope, COALESCE(old.tags, ''), COALESCE(old.citations, ''));
       END;
 
-      CREATE TRIGGER IF NOT EXISTS observations_fts_au AFTER UPDATE ON observations BEGIN
-        INSERT INTO observations_fts(observations_fts, rowid, title, topic_key, content, type, project, scope, tags, citations)
-        VALUES ('delete', old.id, old.title, COALESCE(old.topic_key, ''), old.content, old.type, old.project, old.scope, COALESCE(old.tags, ''), COALESCE(old.citations, ''));
-        INSERT INTO observations_fts(rowid, title, topic_key, content, type, project, scope, tags, citations)
-        VALUES (new.id, new.title, COALESCE(new.topic_key, ''), new.content, new.type, new.project, new.scope, COALESCE(new.tags, ''), COALESCE(new.citations, ''));
+      CREATE TRIGGER observations_fts_au AFTER UPDATE ON observations BEGIN
+        INSERT INTO observations_fts(observations_fts, rowid, title, topic_key, summary, aliases, content, type, project, scope, tags, citations)
+        VALUES ('delete', old.id, old.title, COALESCE(old.topic_key, ''), COALESCE(old.summary, ''), COALESCE(old.aliases, ''), old.content, old.type, old.project, old.scope, COALESCE(old.tags, ''), COALESCE(old.citations, ''));
+        INSERT INTO observations_fts(rowid, title, topic_key, summary, aliases, content, type, project, scope, tags, citations)
+        VALUES (new.id, new.title, COALESCE(new.topic_key, ''), COALESCE(new.summary, ''), COALESCE(new.aliases, ''), new.content, new.type, new.project, new.scope, COALESCE(new.tags, ''), COALESCE(new.citations, ''));
       END;
 
       INSERT INTO observations_fts(observations_fts) VALUES('rebuild');
@@ -443,6 +467,10 @@ async function handleSave(
   const topic_key = params.topic_key?.trim() || undefined;
   const tags = normalizeStringList(params.tags);
   const citations = normalizeStringList(params.citations);
+  const summary = redactSecrets(cleanInline(String(params.summary ?? ""))).slice(0, 240) || null;
+  const aliases = normalizeStringList(params.aliases);
+  const pinned = params.pinned ? 1 : 0;
+  const alwaysInclude = params.always_include ? 1 : 0;
   const confidence = typeof params.confidence === "number"
     ? Math.max(0, Math.min(1, params.confidence))
     : 0.8;
@@ -475,7 +503,7 @@ async function handleSave(
       const id = existing[0].id;
       await sqlite(
         pi,
-        `UPDATE observations SET type=${sql(type)}, priority=${sql(priority)}, title=${sql(title)}, content=${sql(content)}, normalized_hash=${sql(hash)}, project=${sql(memoryProject)}, tags=${sql(tags)}, citations=${sql(citations)}, confidence=${sql(confidence)}, status=${sql(status)}, verified_at=${sql(verifiedAt)}, revision_count=revision_count+1, last_seen_at=datetime('now'), updated_at=datetime('now') WHERE id=${sql(id)};`,
+        `UPDATE observations SET type=${sql(type)}, priority=${sql(priority)}, title=${sql(title)}, content=${sql(content)}, normalized_hash=${sql(hash)}, project=${sql(memoryProject)}, tags=${sql(tags)}, citations=${sql(citations)}, summary=${sql(summary)}, aliases=${sql(aliases)}, pinned=${sql(pinned)}, always_include=${sql(alwaysInclude)}, confidence=${sql(confidence)}, status=${sql(status)}, verified_at=${sql(verifiedAt)}, revision_count=revision_count+1, last_seen_at=datetime('now'), updated_at=datetime('now') WHERE id=${sql(id)};`,
         signal,
       );
       return { ok: true, project: memoryProject, result: { id, action: "updated", topic_key, priority } };
@@ -500,7 +528,7 @@ async function handleSave(
   // Insert
   const rows = await sqliteJson<{ id: number }>(
     pi,
-    `INSERT INTO observations(session_id, type, title, content, priority, scope, topic_key, normalized_hash, project, tags, citations, confidence, status, verified_at) VALUES (${sql(currentSessionId)}, ${sql(type)}, ${sql(title)}, ${sql(content)}, ${sql(priority)}, ${sql(scope)}, ${sql(topic_key)}, ${sql(hash)}, ${sql(memoryProject)}, ${sql(tags)}, ${sql(citations)}, ${sql(confidence)}, ${sql(status)}, ${sql(verifiedAt)}); SELECT last_insert_rowid() AS id;`,
+    `INSERT INTO observations(session_id, type, title, content, priority, scope, topic_key, normalized_hash, project, tags, citations, summary, aliases, pinned, always_include, confidence, status, verified_at) VALUES (${sql(currentSessionId)}, ${sql(type)}, ${sql(title)}, ${sql(content)}, ${sql(priority)}, ${sql(scope)}, ${sql(topic_key)}, ${sql(hash)}, ${sql(memoryProject)}, ${sql(tags)}, ${sql(citations)}, ${sql(summary)}, ${sql(aliases)}, ${sql(pinned)}, ${sql(alwaysInclude)}, ${sql(confidence)}, ${sql(status)}, ${sql(verifiedAt)}); SELECT last_insert_rowid() AS id;`,
     signal,
   );
 
@@ -561,7 +589,7 @@ async function searchObservationRows(
 ): Promise<SearchRowsResult> {
   const query = String(params.query ?? "").trim();
   const terms = query ? extractTerms(query) : [];
-  const limit = Math.max(1, Math.min(Number(params.limit ?? 5), 50));
+  const limit = Math.max(1, Math.min(Number(params.limit ?? 5), 1000));
   const clauses = buildObservationClauses(info, params, terms);
   const where = clauses.length > 0 ? clauses.join(" AND ") : "1=1";
 
@@ -572,8 +600,8 @@ async function searchObservationRows(
         const rows = await sqliteJson<ObservationRow>(
           pi,
           `SELECT o.*,
-                  snippet(observations_fts, 2, '', '', '...', 18) AS search_snippet,
-                  bm25(observations_fts, 10.0, 6.0, 1.0, 1.0, 1.0, 3.0, 2.0, 2.0) AS fts_score
+                  snippet(observations_fts, 4, '', '', '...', 18) AS search_snippet,
+                  bm25(observations_fts, 10.0, 6.0, 4.0, 5.0, 1.0, 1.0, 1.0, 1.0, 2.0, 2.0) AS fts_score
            FROM observations_fts
            JOIN observations o ON o.id=observations_fts.rowid
            WHERE observations_fts MATCH ${sql(match)} AND ${where}
@@ -639,7 +667,7 @@ function buildObservationClauses(info: ProjectInfo, params: any, terms: string[]
   if (terms.length > 0) {
     const likeClauses = terms.map((term) => {
       const q = sql(term);
-      return `(lower(o.title) LIKE '%' || ${q} || '%' OR lower(COALESCE(o.topic_key, '')) LIKE '%' || ${q} || '%' OR lower(o.content) LIKE '%' || ${q} || '%' OR lower(COALESCE(o.tags, '')) LIKE '%' || ${q} || '%' OR lower(COALESCE(o.citations, '')) LIKE '%' || ${q} || '%')`;
+      return `(lower(o.title) LIKE '%' || ${q} || '%' OR lower(COALESCE(o.topic_key, '')) LIKE '%' || ${q} || '%' OR lower(COALESCE(o.summary, '')) LIKE '%' || ${q} || '%' OR lower(COALESCE(o.aliases, '')) LIKE '%' || ${q} || '%' OR lower(o.content) LIKE '%' || ${q} || '%' OR lower(COALESCE(o.tags, '')) LIKE '%' || ${q} || '%' OR lower(COALESCE(o.citations, '')) LIKE '%' || ${q} || '%')`;
     });
     const minCoverage = terms.length >= 4 ? 2 : 1;
     clauses.push(`(${likeClauses.join(" OR ")})`);
@@ -776,6 +804,10 @@ async function handleAdmin(
       const topic_key = obs?.topic_key?.trim() || undefined;
       const tags = normalizeStringList(obs?.tags);
       const citations = normalizeStringList(obs?.citations);
+      const summary = redactSecrets(cleanInline(String(obs?.summary ?? ""))).slice(0, 240) || null;
+      const aliases = normalizeStringList(obs?.aliases);
+      const pinned = obs?.pinned ? 1 : 0;
+      const alwaysInclude = obs?.always_include ? 1 : 0;
       const confidence = typeof obs?.confidence === "number" ? Math.max(0, Math.min(1, obs.confidence)) : 0.8;
       const status = ACTIVE_STATUSES.has(String(obs?.status ?? "active")) ? String(obs?.status ?? "active") : "active";
       const hash = normalizedHash(title, content, type, scope, memoryProject);
@@ -802,7 +834,7 @@ async function handleAdmin(
 
       await sqlite(
         pi,
-        `INSERT INTO observations(session_id, type, title, content, priority, scope, topic_key, normalized_hash, project, tags, citations, confidence, status, verified_at, revision_count, duplicate_count, last_seen_at, created_at, updated_at) VALUES (${sql(obs?.session_id)}, ${sql(type)}, ${sql(redactSecrets(title))}, ${sql(redactSecrets(content))}, ${sql(priority)}, ${sql(scope)}, ${sql(topic_key)}, ${sql(hash)}, ${sql(memoryProject)}, ${sql(tags)}, ${sql(citations)}, ${sql(confidence)}, ${sql(status)}, ${sql(obs?.verified_at)}, ${sql(Number(obs?.revision_count ?? 0))}, ${sql(Number(obs?.duplicate_count ?? 0))}, COALESCE(${sql(obs?.last_seen_at)}, datetime('now')), COALESCE(${sql(obs?.created_at)}, datetime('now')), COALESCE(${sql(obs?.updated_at)}, datetime('now')));`,
+        `INSERT INTO observations(session_id, type, title, content, priority, scope, topic_key, normalized_hash, project, tags, citations, summary, aliases, pinned, always_include, confidence, status, verified_at, revision_count, duplicate_count, last_seen_at, created_at, updated_at) VALUES (${sql(obs?.session_id)}, ${sql(type)}, ${sql(redactSecrets(title))}, ${sql(redactSecrets(content))}, ${sql(priority)}, ${sql(scope)}, ${sql(topic_key)}, ${sql(hash)}, ${sql(memoryProject)}, ${sql(tags)}, ${sql(citations)}, ${sql(summary)}, ${sql(aliases)}, ${sql(pinned)}, ${sql(alwaysInclude)}, ${sql(confidence)}, ${sql(status)}, ${sql(obs?.verified_at)}, ${sql(Number(obs?.revision_count ?? 0))}, ${sql(Number(obs?.duplicate_count ?? 0))}, COALESCE(${sql(obs?.last_seen_at)}, datetime('now')), COALESCE(${sql(obs?.created_at)}, datetime('now')), COALESCE(${sql(obs?.updated_at)}, datetime('now')));`,
         signal,
       );
       importedObs++;
@@ -883,14 +915,108 @@ async function maybeAutoCapturePreference(
   );
 }
 
-/** Format memories for compact injection into the system prompt. */
+/** Return rows with duplicate IDs removed while preserving rank order. */
+function uniqueRows(rows: ObservationRow[], limit: number): ObservationRow[] {
+  const seen = new Set<number>();
+  const result: ObservationRow[] = [];
+  for (const row of rows) {
+    if (seen.has(row.id)) continue;
+    seen.add(row.id);
+    result.push(row);
+    if (result.length >= limit) break;
+  }
+  return result;
+}
+
+/** Fetch durable memories that should appear in the lightweight turn index. */
+async function buildMemoryIndexRows(
+  pi: ExtensionAPI,
+  info: ProjectInfo,
+  prompt: string,
+  signal?: AbortSignal,
+): Promise<ObservationRow[]> {
+  const promptLimit = Math.max(5, Math.min(MAX_INDEX_ITEMS, 24));
+  const [pinned, personal, matched, important, recent] = await Promise.all([
+    sqliteJson<ObservationRow>(
+      pi,
+      `SELECT * FROM observations o WHERE o.deleted_at IS NULL AND COALESCE(o.status, 'active')!='superseded' AND (o.pinned=1 OR o.always_include=1) AND ((o.scope='project' AND o.project=${sql(info.project)}) OR o.scope='personal') ORDER BY o.always_include DESC, o.pinned DESC, o.priority DESC, o.updated_at DESC LIMIT ${sql(Math.min(12, MAX_INDEX_ITEMS))};`,
+      signal,
+    ),
+    searchObservationRows(pi, info, {
+      query: prompt,
+      scope: "personal",
+      type: "preference",
+      priority_min: 1,
+      limit: Math.min(6, MAX_INDEX_ITEMS),
+    }, signal).then((result) => result.rows),
+    prompt.trim()
+      ? searchObservationRows(pi, info, {
+          query: prompt,
+          scope: "project",
+          priority_min: 2,
+          limit: promptLimit,
+        }, signal).then((result) => result.rows)
+      : Promise.resolve([]),
+    sqliteJson<ObservationRow>(
+      pi,
+      `SELECT * FROM observations o WHERE o.deleted_at IS NULL AND COALESCE(o.status, 'active')!='superseded' AND o.scope='project' AND o.project=${sql(info.project)} AND o.priority>=4 ORDER BY o.priority DESC, o.updated_at DESC LIMIT ${sql(Math.min(20, MAX_INDEX_ITEMS))};`,
+      signal,
+    ),
+    sqliteJson<ObservationRow>(
+      pi,
+      `SELECT * FROM observations o WHERE o.deleted_at IS NULL AND COALESCE(o.status, 'active')!='superseded' AND o.scope='project' AND o.project=${sql(info.project)} AND o.priority>=3 ORDER BY o.updated_at DESC LIMIT ${sql(Math.min(10, MAX_INDEX_ITEMS))};`,
+      signal,
+    ),
+  ]);
+
+  return uniqueRows([...pinned, ...personal, ...matched, ...important, ...recent], MAX_INDEX_ITEMS);
+}
+
+/** Format an index entry for cheap, agent-selectable memory discovery. */
+function formatIndexRow(row: ObservationRow, verbosity: IndexVerbosity): string {
+  const flags = [row.always_include ? "always" : "", row.pinned ? "pinned" : ""].filter(Boolean).join(",");
+  const flagText = flags ? ` ${flags}` : "";
+  const head = `#${row.id} [${row.type} p${row.priority}${flagText}] ${row.title}`;
+  const topic = row.topic_key ? `\n  topic: ${row.topic_key}` : "";
+  const summarySource = row.summary || row.search_snippet || "";
+  const summary = summarySource
+    ? `\n  ${cropPlain(redactSecrets(cleanInline(summarySource)), INDEX_PREVIEW_CHARS)}`
+    : "";
+  if (verbosity === "compact") {
+    return `${head}${topic}${summary}`;
+  }
+  const scope = row.scope === "personal" ? "personal" : row.project;
+  const scopeLine = `\n  scope: ${scope}`;
+  if (verbosity === "standard") {
+    return `${head}${topic}${scopeLine}${summary}`;
+  }
+  const aliases = listSummary(row.aliases, 4);
+  const tags = listSummary(row.tags, 4);
+  const extras = [aliases ? `aliases: ${aliases}` : "", tags ? `tags: ${tags}` : ""].filter(Boolean).join("; ");
+  const extraLine = extras ? `\n  ${extras}` : "";
+  return `${head}${topic}${scopeLine}${extraLine}${summary}`;
+}
+
+/** Format memories as a compact title-first index for selective expansion. */
+function formatMemoryIndexBlock(rows: ObservationRow[], verbosity: IndexVerbosity = resolveVerbosity()): string {
+  const personal = rows.filter((row) => row.scope === "personal");
+  const project = rows.filter((row) => row.scope !== "personal");
+  const groups = [
+    personal.length ? `Personal:\n${personal.map((row) => formatIndexRow(row, verbosity)).join("\n")}` : "",
+    project.length ? `Project:\n${project.map((row) => formatIndexRow(row, verbosity)).join("\n")}` : "",
+  ].filter(Boolean);
+  return groups.join("\n\n");
+}
+
+/** Format memories for compact content injection into the system prompt. */
 function formatRecallBlock(rows: ObservationRow[]): string {
   return rows
     .map((r) => {
       const citationHint = listSummary(r.citations, 2);
       const verify = citationHint ? `\n  verify: ${citationHint}` : "";
       const scope = r.scope === "personal" ? "personal" : r.project;
-      return `[${r.type}] ${r.title} (p${r.priority}, ${scope})\n  topic: ${r.topic_key ?? "-"}${verify}\n  ${snip(r.content ?? "", 110)}`;
+      const summary = r.summary ? `\n  summary: ${r.summary}` : "";
+      return `[${r.type}] ${r.title} (p${r.priority}, ${scope})\n  id: #${r.id}\n  topic: ${r.topic_key ?? "-"}${verify}${summary}\n  ${snip(r.content ?? "", 110)}`;
     })
     .join("\n\n");
 }
@@ -953,11 +1079,25 @@ export default function engram(pi: ExtensionAPI) {
 
       await maybeAutoCapturePreference(pi, ctx, prompt);
 
-      if (!AUTO_RECALL) return;
+      const memoryPolicy =
+        `Memory: scan the index briefly. Pick 1-3 ids whose title or topic matches the task. ` +
+        `Expand only those with mem_search id=<n> include_content=true. ` +
+        `Do not read every entry. Do not echo the index back. Verify any cited file before relying on it. ` +
+        `Save durable findings with mem_save.`;
+
+      if (!AUTO_RECALL || RECALL_MODE === "off") {
+        lastRecalledIds = new Set<number>();
+        return {
+          systemPrompt:
+            event.systemPrompt +
+            `\n\n# Local persistent memory\n` +
+            `${memoryPolicy}\n`,
+        };
+      }
 
       const personalLimit = Math.min(2, MAX_RECALL_ITEMS);
       const taskLimit = Math.max(1, MAX_RECALL_ITEMS - personalLimit);
-      const [personal, task] = await Promise.all([
+      const [personal, task, indexRows] = await Promise.all([
         searchObservationRows(pi, info, {
           query: prompt,
           scope: "personal",
@@ -971,20 +1111,16 @@ export default function engram(pi: ExtensionAPI) {
           priority_min: 3,
           limit: taskLimit,
         }),
+        buildMemoryIndexRows(pi, info, prompt),
       ]);
 
-      const seen = new Set<number>();
-      const rows = [...personal.rows, ...task.rows].filter((row) => {
-        if (seen.has(row.id)) return false;
-        seen.add(row.id);
-        return true;
-      }).slice(0, MAX_RECALL_ITEMS);
+      const recallRows = uniqueRows([...personal.rows, ...task.rows], MAX_RECALL_ITEMS);
+      const alwaysRows = indexRows.filter((row) => row.always_include);
+      const mode = ["index", "hybrid", "recall", "full"].includes(RECALL_MODE) ? RECALL_MODE : "index";
+      const injectedRows = mode === "recall" ? recallRows : indexRows;
+      lastRecalledIds = new Set(injectedRows.map((row) => row.id));
 
-      const memoryPolicy =
-        `Memory policy: use mem_search before exploratory file reads when prior project decisions, bugs, configuration, preferences, or previous session context may matter. ` +
-        `For code-specific memories with citations, verify cited files before relying on them. Save durable findings with mem_save.`;
-
-      if (rows.length === 0) {
+      if (injectedRows.length === 0) {
         return {
           systemPrompt:
             event.systemPrompt +
@@ -993,19 +1129,41 @@ export default function engram(pi: ExtensionAPI) {
         };
       }
 
-      const block = clip(formatRecallBlock(rows), MAX_RECALL_CHARS);
+      const indexBlock = clip(formatMemoryIndexBlock(indexRows), MAX_INDEX_CHARS);
+      const recallBlock = clip(formatRecallBlock(recallRows), MAX_RECALL_CHARS);
+      const alwaysBlock = clip(formatRecallBlock(alwaysRows), MAX_RECALL_CHARS);
+      const contentSections: string[] = [];
+
+      if (mode === "index" || mode === "hybrid" || mode === "full") {
+        contentSections.push(
+          `# Local persistent memory index\n` +
+          `Titles + topics only. Scan, pick 1-3 relevant ids, then mem_search id=<n> include_content=true to expand.\n` +
+          `${memoryPolicy}\n\n` +
+          `\`\`\`text\n${indexBlock}\n\`\`\``,
+        );
+      }
+
+      if (mode === "recall" || mode === "full") {
+        contentSections.push(
+          `# Local persistent memory recall\n` +
+          `Memories whose terms matched the prompt. Cite the id when relying on one. Do not expose secrets.\n` +
+          `${memoryPolicy}\n\n` +
+          `\`\`\`text\n${recallBlock}\n\`\`\``,
+        );
+      } else if (mode === "hybrid" && alwaysRows.length > 0) {
+        contentSections.push(
+          `# Always included memories\n` +
+          `\`\`\`text\n${alwaysBlock}\n\`\`\``,
+        );
+      }
+
       ctx.ui.setStatus(
         "memory",
-        `${ctx.ui.theme.fg("accent", "◆")} ${ctx.ui.theme.fg("muted", "mem")} ${ctx.ui.theme.fg("success", `${rows.length} recalled`)}`,
+        `${ctx.ui.theme.fg("accent", "◆")} ${ctx.ui.theme.fg("muted", "mem")} ${ctx.ui.theme.fg("success", `${injectedRows.length} ${mode}`)}`,
       );
 
       return {
-        systemPrompt:
-          event.systemPrompt +
-          `\n\n# Local persistent memory recall\n` +
-          `These local memories matched the current prompt. Prefer them over redundant exploration when they answer the question. Do not expose secrets.\n` +
-          `${memoryPolicy}\n\n` +
-          `\`\`\`text\n${block}\n\`\`\``,
+        systemPrompt: event.systemPrompt + `\n\n${contentSections.join("\n\n")}`,
       };
     } catch {
       return;
@@ -1022,6 +1180,8 @@ export default function engram(pi: ExtensionAPI) {
       "Use mem_save after learning durable project knowledge: architecture decisions, bug fixes, configuration, debugging findings, user preferences, or decisions that should help future sessions.",
       "Use stable topic_key values with mem_save for knowledge that may evolve, so future saves update the same memory instead of creating duplicates.",
       "Keep memories atomic and explain why the fact matters. Add citations when a memory depends on files or code locations so future agents can verify it.",
+      "Use summary for a one-line index preview and aliases for synonyms that future prompts may use.",
+      "Use pinned sparingly for memories that must stay visible; use always_include only for critical rules in hybrid mode.",
       "Write mem_save content as clean Markdown: use short headings when helpful, bullet lists for facts and decisions, and fenced code blocks for commands, errors, config, SQL, JSON, or code.",
       "Avoid storing large code blobs, secrets, transient logs, or routine edits that are unlikely to help future sessions.",
     ],
@@ -1048,6 +1208,18 @@ export default function engram(pi: ExtensionAPI) {
       ),
       tags: Type.Optional(
         Type.Array(Type.String(), { description: "Optional tags for filtering, e.g. ['auth', '2026-05']." }),
+      ),
+      summary: Type.Optional(
+        Type.String({ description: "One-line summary used in the memory index, max 240 chars." }),
+      ),
+      aliases: Type.Optional(
+        Type.Array(Type.String(), { description: "Search aliases/synonyms, e.g. ['auth', 'login', 'jwt']." }),
+      ),
+      pinned: Type.Optional(
+        Type.Boolean({ description: "Keep this memory visible in the project/personal index." }),
+      ),
+      always_include: Type.Optional(
+        Type.Boolean({ description: "Expand this memory automatically in hybrid mode. Use sparingly." }),
       ),
       citations: Type.Optional(
         Type.Array(Type.String(), { description: "Optional file/code references to verify before relying on the memory, e.g. ['src/auth.ts:42']." }),
@@ -1231,10 +1403,15 @@ export default function engram(pi: ExtensionAPI) {
             `SQLite: ${SQLITE_BIN}`,
             `Project: ${info.project} (${info.project_source})`,
             `Auto recall: ${AUTO_RECALL}`,
+            `Recall mode: ${RECALL_MODE}`,
             `Auto capture: ${AUTO_CAPTURE}`,
             `FTS5: ${ftsAvailable ? "available" : "fallback LIKE"}`,
             `Max recall items: ${MAX_RECALL_ITEMS}`,
             `Max recall chars: ${MAX_RECALL_CHARS}`,
+            `Max index items: ${MAX_INDEX_ITEMS}`,
+            `Max index chars: ${MAX_INDEX_CHARS}`,
+            `Index verbosity: ${INDEX_VERBOSITY}`,
+            `Preview chars: ${INDEX_PREVIEW_CHARS}`,
           ].join("\n"),
           "info",
         );
@@ -1250,64 +1427,100 @@ export default function engram(pi: ExtensionAPI) {
   // -----------------------------------------------------------------------
   // /membrowse — TUI memory browser
   // -----------------------------------------------------------------------
+  const openMemoryBrowser = async (args: string, ctx: any): Promise<void> => {
+    if (memoryBrowserHandle) {
+      memoryBrowserHandle.close?.();
+      memoryBrowserHandle.hide?.();
+      memoryBrowserHandle = null;
+      return;
+    }
+
+    try {
+      await ensureDb(pi);
+      const info = await detectProject(pi, ctx);
+      const query = args.trim();
+      const rows = query
+        ? (await searchObservationRows(pi, info, { query, limit: 1000, priority_min: 0 }, undefined)).rows
+        : await sqliteJson<ObservationRow>(
+            pi,
+            `SELECT * FROM observations WHERE deleted_at IS NULL ORDER BY CASE WHEN project=${sql(info.project)} THEN 0 WHEN scope='personal' THEN 1 ELSE 2 END, project ASC, priority DESC, updated_at DESC LIMIT 1000;`,
+          );
+
+      const deleteMemory = async (row: ObservationRow): Promise<boolean> => {
+        // The browser can show every project, so delete against the row project
+        // instead of the current project used by mem_admin's command/tool scope.
+        const result = await sqliteJson<{ changed: number }>(
+          pi,
+          `DELETE FROM observations WHERE id=${sql(row.id)} AND project=${sql(row.project)}; SELECT changes() AS changed;`,
+        );
+        return Number(result[0]?.changed ?? 0) > 0;
+      };
+
+      await ctx.ui.custom((tui: any, theme: any, _keybindings: any, done: (value?: undefined) => void) => {
+        const browser = new MemoryBrowser(
+          rows,
+          info.project,
+          lastRecalledIds,
+          tui,
+          theme,
+          () => {
+            memoryBrowserHandle = null;
+            done(undefined);
+          },
+          deleteMemory,
+        );
+        return browser;
+      }, {
+        overlay: true,
+        overlayOptions: {
+          anchor: "center",
+          width: "74%",
+          minWidth: 72,
+          maxHeight: "86%",
+          margin: 2,
+        },
+        onHandle: (handle: any) => {
+          memoryBrowserHandle = handle;
+        },
+      });
+    } catch (error) {
+      memoryBrowserHandle = null;
+      ctx.ui.notify(
+        `membrowse error: ${error instanceof Error ? error.message : String(error)}`,
+        "error",
+      );
+    }
+  };
+
   pi.registerCommand("membrowse", {
     description: "Browse memories with an interactive TUI. Usage: /membrowse [query]",
-    handler: async (args, ctx) => {
-      try {
-        await ensureDb(pi);
-        const info = await detectProject(pi, ctx);
-        const query = args.trim();
-        const rows = query
-          ? (await searchObservationRows(pi, info, { query, limit: 1000, priority_min: 0 }, undefined)).rows
-          : await sqliteJson<ObservationRow>(
-              pi,
-              `SELECT * FROM observations WHERE deleted_at IS NULL ORDER BY CASE WHEN project=${sql(info.project)} THEN 0 WHEN scope='personal' THEN 1 ELSE 2 END, project ASC, priority DESC, updated_at DESC LIMIT 1000;`,
-            );
+    handler: async (args, ctx) => openMemoryBrowser(args, ctx),
+  });
 
-        const deleteMemory = async (row: ObservationRow): Promise<boolean> => {
-          // The browser can show every project, so delete against the row project
-          // instead of the current project used by mem_admin's command/tool scope.
-          const result = await sqliteJson<{ changed: number }>(
-            pi,
-            `DELETE FROM observations WHERE id=${sql(row.id)} AND project=${sql(row.project)}; SELECT changes() AS changed;`,
-          );
-          return Number(result[0]?.changed ?? 0) > 0;
-        };
-
-        await ctx.ui.custom((tui, theme, _keybindings, done) => {
-          const browser = new MemoryBrowser(rows, info.project, tui, theme, () => done(undefined), deleteMemory);
-          return browser;
-        }, {
-          overlay: true,
-          overlayOptions: {
-            anchor: "center",
-            width: "74%",
-            minWidth: 72,
-            maxHeight: "86%",
-            margin: 2,
-          },
-        });
-      } catch (error) {
-        ctx.ui.notify(
-          `membrowse error: ${error instanceof Error ? error.message : String(error)}`,
-          "error",
-        );
-      }
-    },
+  pi.registerShortcut("alt+m", {
+    description: "Toggle memory browser",
+    handler: async (ctx) => openMemoryBrowser("", ctx),
   });
 }
 
 // ---------------------------------------------------------------------------
 // MemoryBrowser TUI component
 // Rounded, theme-aware overlay with three-view navigation:
-//   projects -> list (per-project) -> detail (scrollable full memory)
+//   list (current project) -> projects -> list (per-project) -> detail
 // Every rendered line is width-bounded and framed to avoid visual spillover.
 // ---------------------------------------------------------------------------
 
 type MemView = "projects" | "list" | "detail";
 
+/** Effective verbosity level resolved once per turn. */
+type IndexVerbosity = "compact" | "standard" | "verbose";
+
+function resolveVerbosity(): IndexVerbosity {
+  return INDEX_VERBOSITY === "standard" || INDEX_VERBOSITY === "verbose" ? INDEX_VERBOSITY : "compact";
+}
+
 class MemoryBrowser implements Component {
-  private view: MemView = "projects";
+  private view: MemView = "list";
   private selProject: string | null = null;
   private selIdx = 0;
   private scrollOff = 0;
@@ -1329,11 +1542,15 @@ class MemoryBrowser implements Component {
   constructor(
     private all: ObservationRow[],
     private currentProject: string,
+    private recalledIds: Set<number>,
     private tui: any,
     private theme: any,
     private onDone: () => void,
     private onDelete: (row: ObservationRow) => Promise<boolean>,
-  ) {}
+  ) {
+    // Open directly in the current project so the common case avoids a project picker.
+    this.selProject = currentProject;
+  }
 
   /** Clear cached render output when state or theme changes. */
   invalidate(): void {
@@ -1460,13 +1677,32 @@ class MemoryBrowser implements Component {
     return stats;
   }
 
+  /** Return true when a row was injected into the latest memory context. */
+  private isRecalled(row: ObservationRow): boolean {
+    return this.recalledIds.has(row.id);
+  }
+
+  /** Sort the active project list so recalled memories are visible first. */
+  private sortRows(rows: ObservationRow[]): ObservationRow[] {
+    return [...rows].sort((left, right) => {
+      const leftRecalled = this.isRecalled(left) ? 1 : 0;
+      const rightRecalled = this.isRecalled(right) ? 1 : 0;
+      if (leftRecalled !== rightRecalled) return rightRecalled - leftRecalled;
+      if (left.priority !== right.priority) return right.priority - left.priority;
+      return String(right.updated_at ?? "").localeCompare(String(left.updated_at ?? ""));
+    });
+  }
+
   /** Return memories filtered by selected project and search query. */
   private items(): ObservationRow[] {
-    const base = this.selProject ? this.all.filter((row) => row.project === this.selProject) : this.all;
-    if (!this.searchBuf.trim()) return base;
+    const base = this.selProject
+      ? this.all.filter((row) => row.project === this.selProject || (this.selProject === this.currentProject && row.scope === "personal"))
+      : this.all;
+    const sorted = this.sortRows(base);
+    if (!this.searchBuf.trim()) return sorted;
 
     const tokens = this.searchBuf.toLowerCase().split(/\s+/).filter(Boolean);
-    return base.filter((row) => {
+    return sorted.filter((row) => {
       for (const token of tokens) {
         if (token.startsWith("type:")) {
           if (row.type !== token.slice(5)) return false;
@@ -1694,7 +1930,8 @@ class MemoryBrowser implements Component {
       const row = slice[i];
       const selected = this.scrollOff + i === this.selIdx;
       const marker = selected ? this.a("▸") : this.d(" ");
-      const titleLeft = `${marker} ${this.fmtType(row.type)} ${this.bold(row.title)}`;
+      const recalled = this.isRecalled(row) ? `${this.a("◆")} ` : this.d("  ");
+      const titleLeft = `${marker} ${recalled}${this.fmtType(row.type)} ${this.bold(row.title)}`;
       const meta = `${this.fmtPriority(row.priority)} ${this.d(`#${row.id}`)} ${this.m((row.updated_at ?? "").slice(0, 10))}`;
       const titleGap = Math.max(1, inner - 2 - visibleWidth(titleLeft) - visibleWidth(meta));
       lines.push(this.row(titleLeft + " ".repeat(titleGap) + meta, inner));
@@ -1705,9 +1942,11 @@ class MemoryBrowser implements Component {
 
     lines.push(...this.statusRows(inner));
     const position = rows.length > 0 ? `${this.selIdx + 1}/${rows.length}` : "";
+    const recalledCount = rows.filter((row) => this.isRecalled(row)).length;
+    const recallHint = recalledCount > 0 ? `◆ recalled ${recalledCount} • ` : "";
     const baseHints = this.searchMode
       ? "enter apply • backspace delete • esc cancel"
-      : "j/k navigate • l/enter detail • d delete • h projects • / search • q close";
+      : `${recallHint}j/k navigate • l/enter detail • d delete • h projects • / search • q close`;
     const hints = position ? `${baseHints} • ${position}` : baseHints;
     lines.push(...this.bottom(this.footerHints(hints), inner));
     return lines;
@@ -1766,7 +2005,8 @@ class MemoryBrowser implements Component {
 
     const inner = width - 2;
     const contentWidth = Math.max(24, inner - 4);
-    const title = `${this.fmtType(row.type)} ${this.bold(row.title)} ${this.m(`#${row.id}`)}`;
+    const recalled = this.isRecalled(row) ? `${this.a("◆ recalled")} ` : "";
+    const title = `${recalled}${this.fmtType(row.type)} ${this.bold(row.title)} ${this.m(`#${row.id}`)}`;
     const lines = [this.top(title, inner)];
 
     const metaPairs = [

@@ -30,6 +30,12 @@ export function formatRowMetadata(row: ObservationRow): string {
   if (row.topic_key) lines.push(`topic: ${row.topic_key}`);
   const tags = listSummary(row.tags);
   if (tags) lines.push(`tags: ${tags}`);
+  const aliases = listSummary(row.aliases);
+  if (aliases) lines.push(`aliases: ${aliases}`);
+  const summary = cropPlain(row.summary ?? "", 180);
+  if (summary) lines.push(`summary: ${summary}`);
+  if (row.pinned) lines.push("pinned: true");
+  if (row.always_include) lines.push("always_include: true");
   const citations = listSummary(row.citations);
   if (citations) lines.push(`citations: ${citations}`);
   if (typeof row.confidence === "number") lines.push(`confidence: ${row.confidence.toFixed(2)}`);
@@ -44,9 +50,10 @@ export function formatRowMinimal(row: ObservationRow, includeContent: boolean): 
   const meta = `${typeAbbr(row.type)} p${row.priority} ${scope}`;
   const title = cropPlain(row.title, includeContent ? 44 : 54);
   const head = `${id} ${meta}${topic} ${title}`;
+  const snippetSource = row.summary || row.search_snippet || row.content;
   const snippet = includeContent
     ? snip(row.content ?? "", 72)
-    : (cleanSnippet(row.search_snippet) || snip(row.content ?? "", 52));
+    : (cleanSnippet(row.search_snippet) || snip(snippetSource ?? "", 52));
   const line = snippet ? `${head} -- ${snippet}` : head;
   return cropPlain(line, includeContent ? 140 : 128);
 }

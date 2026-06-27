@@ -10,6 +10,9 @@ export const DB_PATH = process.env.PI_MEMORY_DB ?? join(homedir(), ".pi", "agent
 /** Whether matching memories are injected before agent turns. */
 export const AUTO_RECALL = process.env.PI_MEMORY_AUTO_RECALL !== "0";
 
+/** Memory injection strategy used before agent turns. */
+export const RECALL_MODE = String(process.env.PI_MEMORY_RECALL_MODE ?? "index").toLowerCase();
+
 /** Whether explicit durable user preferences are auto-captured. */
 export const AUTO_CAPTURE = process.env.PI_MEMORY_AUTO_CAPTURE !== "0";
 
@@ -18,6 +21,18 @@ export const MAX_RECALL_CHARS = Number(process.env.PI_MEMORY_MAX_RECALL_CHARS ??
 
 /** Maximum number of memories injected before a turn. */
 export const MAX_RECALL_ITEMS = Math.max(1, Math.min(Number(process.env.PI_MEMORY_MAX_RECALL_ITEMS ?? "5"), 10));
+
+/** Maximum character budget for the injected memory index. */
+export const MAX_INDEX_CHARS = Number(process.env.PI_MEMORY_MAX_INDEX_CHARS ?? "4000");
+
+/** Maximum number of memory index entries injected before a turn. */
+export const MAX_INDEX_ITEMS = Math.max(5, Math.min(Number(process.env.PI_MEMORY_MAX_INDEX_ITEMS ?? "40"), 100));
+
+/** How much detail to show per memory in the injected index. */
+export const INDEX_VERBOSITY = String(process.env.PI_MEMORY_INDEX_VERBOSITY ?? "compact").toLowerCase();
+
+/** Maximum length of the one-line preview shown per index entry. */
+export const INDEX_PREVIEW_CHARS = Math.max(40, Math.min(Number(process.env.PI_MEMORY_INDEX_PREVIEW_CHARS ?? "90"), 240));
 
 /** Timeout for sqlite subprocess execution. */
 export const SQLITE_TIMEOUT_MS = Number(process.env.PI_MEMORY_SQLITE_TIMEOUT_MS ?? "8000");
