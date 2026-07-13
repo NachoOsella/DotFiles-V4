@@ -1,18 +1,22 @@
 {
-  "lastChangelogVersion": "0.80.2",
+  "lastChangelogVersion": "0.80.6",
   "theme": "gruvbox-material-dark-hard",
-  "defaultThinkingLevel": "high",
+  "defaultThinkingLevel": "xhigh",
   "hideThinkingBlock": false,
   "quietStartup": true,
   "packages": [
-    "git:github.com/nicobailon/pi-web-access"
+    "git:github.com/nicobailon/pi-web-access",
+    "git:https://github.com/capyup/pi-goal",
+    "git:https://github.com/kenryu42/pi-grok-cli"
   ],
   "enableSkillCommands": true,
   "extensions": [],
-  "defaultProvider": "opencode-go",
-  "defaultModel": "minimax-m3",
+  "defaultProvider": "zen-free",
+  "defaultModel": "deepseek-v4-flash-free",
   "steeringMode": "one-at-a-time",
   "terminal": {
     "showTerminalProgress": false
-  }
+  },
+  "showCacheMissNotices": true,
+  "defaultProjectTrust": "always"
 }
