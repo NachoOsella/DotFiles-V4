@@ -4,12 +4,23 @@
 #  CLEAN ARCH - Deep System Cleanup for Arch Linux
 # ============================================================================
 
-set -g JOURNAL_RETENTION "7d"
+set -g JOURNAL_RETENTION 7d
 set -g TEMP_FILE_AGE 7
 set -g PACMAN_VERSIONS_KEEP 1
 set -g ZED_NODE_VERSIONS_KEEP 1
 set -g DOCKER_PRUNE_ALL 0
-set -g PROFILE "balanced"
+set -g PROFILE aggressive
+
+# Top-level entries under ~/.cache that may contain user state rather than
+# disposable performance data. Additional names can be supplied on the CLI.
+set -g PRESERVE_USER_CACHE \
+    cliphist \
+    github-copilot \
+    Microsoft \
+    keepassxc \
+    rofi-entry-history.txt \
+    rofi3.druncache \
+    spotify
 
 # Colors
 set -g R (set_color normal)
@@ -28,10 +39,12 @@ set -g DRY_RUN 0
 set -g FORCE_YES 0
 set -g NO_SPINNER 0
 set -g NO_NOTIFY 0
+set -g USER_ONLY 0
+set -g ROOT_TASKS_ENABLED 1
 set -g CURRENT_TASK ""
 set -g CURRENT_TASK_PREFIX ""
 set -g TASK_INDEX 0
-set -g TASK_TOTAL 16
+set -g TASK_TOTAL 19
 set -g SPINNER_PID 0
 set -g SUDO_KEEPALIVE_PID 0
 set -g LOCK_DIR "/tmp/clean_arch.lock"
@@ -160,19 +173,21 @@ end
 function ui_settings_panel
     set -l w (ui_width)
     set -l inner (math "$w - 2")
-    set -l mode "LIVE"
+    set -l mode LIVE
     if test $DRY_RUN -eq 1
         set mode "DRY RUN"
+    else if test $USER_ONLY -eq 1
+        set mode "LIVE USER ONLY"
     end
-    set -l docker "safe"
+    set -l docker safe
     if test $DOCKER_PRUNE_ALL -eq 1
         set docker "all unused"
     end
-    set -l budget "none"
+    set -l budget none
     if test $MAX_DELETE_BYTES -gt 0
         set budget (format_bytes $MAX_DELETE_BYTES)
     end
-    set -l report "disabled"
+    set -l report disabled
     if test -n "$REPORT_JSON_PATH"
         set report "$REPORT_JSON_PATH"
     end
@@ -180,6 +195,7 @@ function ui_settings_panel
     printf "  %s│%s %s%s│%s\n" $D $R (pad_plain "Mode: $mode" (math "$inner - 1")) $D $R
     printf "  %s│%s %s%s│%s\n" $D $R (pad_plain "Profile: $PROFILE   Journal: $JOURNAL_RETENTION   Temp age: $TEMP_FILE_AGE days" (math "$inner - 1")) $D $R
     printf "  %s│%s %s%s│%s\n" $D $R (pad_plain "Pacman keep: $PACMAN_VERSIONS_KEEP   Zed node keep: $ZED_NODE_VERSIONS_KEEP   Docker: $docker" (math "$inner - 1")) $D $R
+    printf "  %s│%s %s%s│%s\n" $D $R (pad_plain "Protected ~/.cache entries: "(string join ", " $PRESERVE_USER_CACHE) (math "$inner - 1")) $D $R
     printf "  %s│%s %s%s│%s\n" $D $R (pad_plain "Budget: $budget   Report: $report" (math "$inner - 1")) $D $R
     printf "  %s╰%s╯%s\n" $D (string repeat -n $inner "─") $R
 end
@@ -188,8 +204,8 @@ function ui_safety_panel
     set -l w (ui_width)
     set -l inner (math "$w - 2")
     printf "  %s╭─%s%s╮%s\n" $D " Safety boundaries " (string repeat -n (math "$inner - 19") "─") $R
-    printf "  %s│%s %s%s│%s\n" $D $R (pad_plain "Deletes cache, package-manager artifacts, old temp files and logs." (math "$inner - 1")) $D $R
-    printf "  %s│%s %s%s│%s\n" $D $R (pad_plain "Keeps logins, cookies, app profiles, IndexedDB, configs, Steam games and compatdata." (math "$inner - 1")) $D $R
+    printf "  %s│%s %s%s│%s\n" $D $R (pad_plain "Deletes disposable caches, build artifacts, old temp files and logs." (math "$inner - 1")) $D $R
+    printf "  %s│%s %s%s│%s\n" $D $R (pad_plain "Keeps logins, cookies, app profiles, storage, preferences, Steam games and Docker volumes." (math "$inner - 1")) $D $R
     printf "  %s╰%s╯%s\n" $D (string repeat -n $inner "─") $R
 end
 
@@ -236,7 +252,7 @@ function acquire_lock
         echo $fish_pid >"$LOCK_DIR/pid" 2>/dev/null
         return 0
     end
-    set -l holder "unknown"
+    set -l holder unknown
     if test -f "$LOCK_DIR/pid"
         set holder (string trim (cat "$LOCK_DIR/pid" 2>/dev/null))
         if string match -qr '^[0-9]+$' -- "$holder"
@@ -373,10 +389,12 @@ function show_help
     echo "      --config=PATH               Load config file"
     echo "      --report-json=PATH          Write JSON report"
     echo "      --max-delete-gb=N           Stop after freeing N GB"
+    echo "      --preserve-cache=NAME       Protect another top-level ~/.cache entry"
     echo "      --include-task=TASK         Run only selected task(s)"
     echo "      --exclude-task=TASK         Skip selected task(s)"
     echo "      --no-spinner                Disable spinner UI"
     echo "      --no-notify                 Disable desktop notification"
+    echo "      --user-only                 Run only tasks that never require sudo"
     echo
     echo "  $B SKIP OPTIONS$R"
     echo "      --no-orphans                Skip orphan packages"
@@ -388,8 +406,9 @@ function show_help
     echo "      --no-extras                 Skip app-specific extras"
     echo
     echo "  $B TASK NAMES$R"
-    echo "      orphans pacman yay package_managers docker user_cache app_caches steam_cache"
-    echo "      flatpak journal coredumps var_log temps trash zed_node vesktop"
+    echo "      orphans pacman yay package_managers docker system_cache user_cache"
+    echo "      sandbox_caches app_caches steam_cache flatpak journal coredumps var_log"
+    echo "      user_logs temps trash zed_node vesktop"
     echo
 end
 
@@ -418,19 +437,19 @@ end
 function apply_profile
     switch $PROFILE
         case conservative
-            set -g JOURNAL_RETENTION "14d"
+            set -g JOURNAL_RETENTION 14d
             set -g TEMP_FILE_AGE 14
             set -g PACMAN_VERSIONS_KEEP 2
             set -g ZED_NODE_VERSIONS_KEEP 2
             set -g DOCKER_PRUNE_ALL 0
         case balanced
-            set -g JOURNAL_RETENTION "7d"
+            set -g JOURNAL_RETENTION 7d
             set -g TEMP_FILE_AGE 7
             set -g PACMAN_VERSIONS_KEEP 1
             set -g ZED_NODE_VERSIONS_KEEP 1
             set -g DOCKER_PRUNE_ALL 0
         case aggressive
-            set -g JOURNAL_RETENTION "3d"
+            set -g JOURNAL_RETENTION 3d
             set -g TEMP_FILE_AGE 3
             set -g PACMAN_VERSIONS_KEEP 1
             set -g ZED_NODE_VERSIONS_KEEP 1
@@ -469,7 +488,12 @@ function load_config
                 set -g PROFILE "$value"
             case JOURNAL_RETENTION TEMP_FILE_AGE PACMAN_VERSIONS_KEEP ZED_NODE_VERSIONS_KEEP DOCKER_PRUNE_ALL MAX_DELETE_GB
                 set -g $key "$value"
-            case NO_SPINNER FORCE_YES DRY_RUN
+            case PRESERVE_USER_CACHE
+                for cache_name in (string split ',' -- "$value")
+                    set cache_name (string trim -- "$cache_name")
+                    test -n "$cache_name"; and set -ga PRESERVE_USER_CACHE "$cache_name"
+                end
+            case NO_SPINNER FORCE_YES DRY_RUN USER_ONLY
                 set -g $key "$value"
             case DO_ORPHANS DO_CACHES DO_DOCKER DO_LOGS DO_TEMPS DO_TRASH DO_EXTRAS
                 set -g (string lower $key) "$value"
@@ -534,21 +558,21 @@ function run_task
     if not should_run_task "$key"
         set -g CURRENT_TASK "$title"
         end_task_skip
-        append_task_result "$key" "skip" 0 "filtered by include/exclude" 0
+        append_task_result "$key" skip 0 "filtered by include/exclude" 0
         return
     end
 
     if test $enabled -eq 0
         set -g CURRENT_TASK "$title"
         end_task_skip
-        append_task_result "$key" "skip" 0 "disabled by flags/config" 0
+        append_task_result "$key" skip 0 "disabled by flags/config" 0
         return
     end
 
     if test $STOP_FOR_BUDGET -eq 1
         set -g CURRENT_TASK "$title"
         end_task_skip
-        append_task_result "$key" "skip" 0 "stopped by max-delete budget" 0
+        append_task_result "$key" skip 0 "stopped by max-delete budget" 0
         return
     end
 
@@ -570,14 +594,14 @@ function run_task
         case 0
             set -l meta (fmt_duration_ms $duration_ms)
             end_task_ok "$meta"
-            append_task_result "$key" "ok" $duration_ms "" $freed_bytes
+            append_task_result "$key" ok $duration_ms "" $freed_bytes
             set -g TOTAL_FREED_BYTES (math "$TOTAL_FREED_BYTES + $freed_bytes")
         case 10
             end_task_skip (fmt_duration_ms $duration_ms)
-            append_task_result "$key" "skip" $duration_ms "not applicable on this system" 0
+            append_task_result "$key" skip $duration_ms "not applicable on this system" 0
         case '*'
             end_task_fail (fmt_duration_ms $duration_ms)
-            append_task_result "$key" "fail" $duration_ms "command failed" 0
+            append_task_result "$key" fail $duration_ms "command failed" 0
     end
 
     if budget_exceeded
@@ -797,6 +821,32 @@ function clean_package_managers
         set touched 1
         run_quiet composer clear-cache; or true
     end
+    if type -q dotnet
+        set touched 1
+        run_quiet dotnet nuget locals all --clear; or true
+    end
+
+    # Aggressive mode also removes dependency and build caches outside
+    # ~/.cache. It intentionally leaves installed runtimes and global tools.
+    if test "$PROFILE" = aggressive
+        for cache_path in \
+            "$HOME/.gradle/caches" \
+            "$HOME/.gradle/daemon" \
+            "$HOME/.gradle/native" \
+            "$HOME/.gradle/notifications" \
+            "$HOME/.m2/repository" \
+            "$HOME/.ivy2/cache" \
+            "$HOME/.sbt/boot" \
+            "$HOME/.sbt/launchers" \
+            "$HOME/.coursier/cache" \
+            "$HOME/.nuget/packages" \
+            "$HOME/.config/nvm/.cache"
+            if test -e "$cache_path"
+                set touched 1
+                delete_path "$cache_path"; or set ok 0
+            end
+        end
+    end
 
     if test $touched -eq 0
         return 10
@@ -814,12 +864,15 @@ function clean_docker
     if not sudo docker info &>/dev/null
         return 10
     end
+    set -l ok 1
     if test $DOCKER_PRUNE_ALL -eq 1
-        sudo_quiet docker system prune -a -f
+        sudo_quiet docker system prune -a -f; or set ok 0
+        sudo_quiet docker builder prune -a -f; or set ok 0
     else
-        sudo_quiet docker system prune -f
+        sudo_quiet docker system prune -f; or set ok 0
+        sudo_quiet docker builder prune -f; or set ok 0
     end
-    return $status
+    test $ok -eq 1; and return 0; or return 1
 end
 
 function delete_path
@@ -836,78 +889,99 @@ function delete_path
     return 0
 end
 
+function delete_path_as_root
+    set -l path "$argv[1]"
+    if test -z "$path"
+        return 0
+    end
+    if test -e "$path"
+        if test $DRY_RUN -eq 0
+            sudo rm -rf -- "$path" &>/dev/null
+            return $status
+        end
+    end
+    return 0
+end
+
+function clean_system_cache
+    set -l touched 0
+    set -l ok 1
+
+    if test -d /var/cache
+        for entry in (find /var/cache -mindepth 1 -maxdepth 1 -printf '%f\n' 2>/dev/null)
+            # Pacman has retention-aware cleanup in its own task.
+            if test "$entry" = pacman
+                continue
+            end
+            set touched 1
+            delete_path_as_root "/var/cache/$entry"; or set ok 0
+        end
+    end
+
+    if test $DRY_RUN -eq 0; and sudo test -d /root/.cache
+        set touched 1
+        sudo find /root/.cache -mindepth 1 -maxdepth 1 -exec rm -rf -- {} + &>/dev/null; or set ok 0
+    end
+
+    if test $touched -eq 0
+        return 10
+    end
+    test $ok -eq 1; and return 0; or return 1
+end
+
+# Remove Spotify's disposable cache while retaining its user-state subtree.
+function clean_spotify_user_cache
+    set -l root "$HOME/.cache/spotify"
+    if not test -d "$root"
+        return 0
+    end
+
+    set -l ok 1
+    for entry in (find "$root" -mindepth 1 -maxdepth 1 -printf '%f\n' 2>/dev/null)
+        if test "$entry" = Users
+            continue
+        end
+        delete_path "$root/$entry"; or set ok 0
+    end
+    test $ok -eq 1; and return 0; or return 1
+end
+
 function clean_user_cache
     if not test -d "$HOME/.cache"
         return 10
     end
 
     set -l ok 1
-    set -l safe_to_delete \
-        thumbnails \
-        yay \
-        paru \
-        pip \
-        yarn \
-        pnpm-store \
-        electron \
-        '@aspect_rules_js' \
-        node \
-        node-gyp \
-        deno \
-        go-build \
-        mesa_shader_cache \
-        mesa_shader_cache_db \
-        fontconfig \
-        bazel \
-        typescript \
-        pre-commit \
-        pypoetry \
-        uv \
-        vite \
-        eslint \
-        prettier \
-        nvim/luac \
-        jdtls \
-        jdtls-workspace
-
-    for dir in $safe_to_delete
-        delete_path "$HOME/.cache/$dir"; or set ok 0
-    end
-
-    # Browser cache directories only. This intentionally avoids Cookies,
-    # Local Storage, IndexedDB, Login Data, Preferences, extensions and profiles.
-    set -l browser_cache_dirs \
-        'Google/Chrome/*/Cache' \
-        'Google/Chrome/*/Code Cache' \
-        'Google/Chrome/*/GPUCache' \
-        'BraveSoftware/Brave-Browser/*/Cache' \
-        'BraveSoftware/Brave-Browser/*/Code Cache' \
-        'BraveSoftware/Brave-Browser/*/GPUCache' \
-        'chromium/*/Cache' \
-        'chromium/*/Code Cache' \
-        'chromium/*/GPUCache' \
-        'mozilla/firefox/*/cache2' \
-        'mozilla/firefox/*/startupCache'
-
-    if test $DRY_RUN -eq 0
-        for pattern in $browser_cache_dirs
-            for match in $HOME/.cache/$pattern
-                if test -e "$match"
-                    command rm -rf -- "$match" 2>/dev/null; or set ok 0
-                end
+    for entry in (find "$HOME/.cache" -mindepth 1 -maxdepth 1 -printf '%f\n' 2>/dev/null)
+        if contains -- "$entry" $PRESERVE_USER_CACHE
+            if test "$entry" = spotify
+                clean_spotify_user_cache; or set ok 0
             end
+            continue
         end
+        delete_path "$HOME/.cache/$entry"; or set ok 0
     end
 
     test $ok -eq 1; and return 0; or return 1
 end
 
+# Clean Chromium/Electron performance caches without touching profile state.
+# Cookies, preferences, extensions, Local Storage, Session Storage, IndexedDB,
+# WebStorage, login databases and network state are intentionally preserved.
 function clean_electron_cache_root
     set -l root "$argv[1]"
     if not test -d "$root"
         return 10
     end
+
     set -l ok 1
+    set -l profile_roots "$root"
+    for profile_root in (find "$root" -mindepth 1 -maxdepth 1 -type d \( \
+            -name Default -o -name 'Profile *' -o -name 'System Profile' \
+            -o -name 'Guest Profile' -o -name sessionData \) -print 2>/dev/null)
+        set -a profile_roots "$profile_root"
+    end
+
     set -l cache_names \
         Cache \
         'Code Cache' \
@@ -917,14 +991,22 @@ function clean_electron_cache_root
         DawnCache \
         DawnWebGPUCache \
         DawnGraphiteCache \
+        GraphiteDawnCache \
+        GPUPersistentCache \
         component_crx_cache \
+        extensions_crx_cache \
         Crashpad \
-        'Crash Reports'
+        'Crash Reports' \
+        'Service Worker/CacheStorage' \
+        'Service Worker/ScriptCache' \
+        'Shared Dictionary/cache' \
+        AutofillAiModelCache \
+        optimization_guide_hint_cache_store
 
-    for name in $cache_names
-        delete_path "$root/$name"; or set ok 0
-        delete_path "$root/Default/$name"; or set ok 0
-        delete_path "$root/sessionData/$name"; or set ok 0
+    for profile_root in $profile_roots
+        for name in $cache_names
+            delete_path "$profile_root/$name"; or set ok 0
+        end
     end
     test $ok -eq 1; and return 0; or return 1
 end
@@ -933,23 +1015,12 @@ function clean_app_caches
     set -l touched 0
     set -l ok 1
 
-    # Big user caches observed on this machine. Removing these does not remove
-    # app configs/logins because they live outside ~/.cache or in non-cache DBs.
-    for p in \
-        "$HOME/.cache/spotify" \
-        "$HOME/.cache/net.imput.helium" \
-        "$HOME/.cache/discord" \
-        "$HOME/.cache/vesktop" \
-        "$HOME/.cache/obsidian" \
-        "$HOME/.cache/zed"
-        if test -e "$p"
-            set touched 1
-            delete_path "$p"; or set ok 0
-        end
-    end
-
     for root in \
         "$HOME/.config/net.imput.helium" \
+        "$HOME/.config/google-chrome" \
+        "$HOME/.config/google-chrome-for-testing" \
+        "$HOME/.config/chromium" \
+        "$HOME/.config/BraveSoftware/Brave-Browser" \
         "$HOME/.config/obsidian" \
         "$HOME/.config/vesktop" \
         "$HOME/.config/discord" \
@@ -979,10 +1050,44 @@ function clean_steam_cache
     for p in \
         "$steam/appcache/httpcache" \
         "$steam/appcache/librarycache" \
+        "$steam/config/avatarcache" \
         "$steam/config/htmlcache" \
+        "$steam/depotcache" \
+        "$steam/dumps" \
+        "$steam/logs" \
+        "$steam/package" \
+        "$steam/steam/cached" \
         "$steam/steamui/cache" \
         "$steam/steamapps/shadercache"
         delete_path "$p"; or set ok 0
+    end
+    test $ok -eq 1; and return 0; or return 1
+end
+
+function clean_sandbox_caches
+    set -l touched 0
+    set -l ok 1
+
+    if test -d "$HOME/.var/app"
+        for cache_dir in (find "$HOME/.var/app" -mindepth 2 -maxdepth 2 -type d -name cache -print 2>/dev/null)
+            set touched 1
+            if test $DRY_RUN -eq 0
+                find "$cache_dir" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} + 2>/dev/null; or set ok 0
+            end
+        end
+    end
+
+    for cache_path in \
+        "$HOME/.local/share/flatpak/repo/tmp" \
+        "$HOME/.local/share/containers/cache"
+        if test -e "$cache_path"
+            set touched 1
+            delete_path "$cache_path"; or set ok 0
+        end
+    end
+
+    if test $touched -eq 0
+        return 10
     end
     test $ok -eq 1; and return 0; or return 1
 end
@@ -1027,18 +1132,46 @@ function clean_var_log
     if test $DRY_RUN -eq 0
         sudo find /var/log -type f -size +1M \
             ! -path "/var/log/journal/*" \
-            ! -name "wtmp" ! -name "btmp" ! -name "lastlog" \
+            ! -name wtmp ! -name btmp ! -name lastlog \
             -exec truncate -s 0 {} + 2>/dev/null
         return $status
     end
     return 0
 end
 
+function clean_user_logs
+    set -l touched 0
+    set -l ok 1
+
+    if test -d "$HOME/.local/state"
+        set touched 1
+        if test $DRY_RUN -eq 0
+            find "$HOME/.local/state" -type f \
+                \( -name '*.log' -o -name '*.log.*' \) \
+                -delete 2>/dev/null; or set ok 0
+        end
+    end
+
+    for logs_dir in (find "$HOME/.config" -mindepth 2 -maxdepth 3 -type d \
+            \( -iname logs -o -iname 'crash reports' \) -print 2>/dev/null)
+        set touched 1
+        delete_path "$logs_dir"; or set ok 0
+    end
+
+    if test $touched -eq 0
+        return 10
+    end
+    test $ok -eq 1; and return 0; or return 1
+end
+
 function clean_temps
     if test $DRY_RUN -eq 0
         set -l ok 1
-        sudo find /tmp -mindepth 1 -mtime +$TEMP_FILE_AGE -exec rm -rf {} + 2>/dev/null; or set ok 0
-        sudo find /var/tmp -mindepth 1 -mtime +$TEMP_FILE_AGE -exec rm -rf {} + 2>/dev/null; or set ok 0
+        if type -q systemd-tmpfiles
+            sudo_quiet systemd-tmpfiles --clean; or set ok 0
+        end
+        sudo find /tmp -xdev -mindepth 1 -mtime +$TEMP_FILE_AGE -exec rm -rf -- {} + 2>/dev/null; or set ok 0
+        sudo find /var/tmp -xdev -mindepth 1 -mtime +$TEMP_FILE_AGE -exec rm -rf -- {} + 2>/dev/null; or set ok 0
         test $ok -eq 1; and return 0; or return 1
     end
     return 0
@@ -1088,11 +1221,11 @@ end
 # MAIN
 # ─────────────────────────────────────────────────────────────────────────────
 
-argparse 'h/help' 'n/dry-run' 'y/yes' \
-    'profile=' 'config=' 'report-json=' 'max-delete-gb=' \
+argparse h/help n/dry-run y/yes \
+    'profile=' 'config=' 'report-json=' 'max-delete-gb=' 'preserve-cache=+' \
     'include-task=+' 'exclude-task=+' \
-    'no-spinner' 'no-notify' \
-    'no-orphans' 'no-caches' 'no-docker' 'no-logs' 'no-temps' 'no-trash' 'no-extras' \
+    no-spinner no-notify user-only \
+    no-orphans no-caches no-docker no-logs no-temps no-trash no-extras \
     -- $argv
 or begin
     show_help
@@ -1108,10 +1241,20 @@ set -q _flag_dry_run; and set -g DRY_RUN 1
 set -q _flag_yes; and set -g FORCE_YES 1
 set -q _flag_no_spinner; and set -g NO_SPINNER 1
 set -q _flag_no_notify; and set -g NO_NOTIFY 1
+set -q _flag_user_only; and set -g USER_ONLY 1
 set -q _flag_profile; and set -g PROFILE "$_flag_profile"
 set -q _flag_report_json; and set -g REPORT_JSON_PATH "$_flag_report_json"
 set -q _flag_include_task; and set -g INCLUDE_TASKS $_flag_include_task
 set -q _flag_exclude_task; and set -g EXCLUDE_TASKS $_flag_exclude_task
+if set -q _flag_preserve_cache
+    for cache_name in $_flag_preserve_cache
+        if test -z "$cache_name"; or test "$cache_name" = .; or test "$cache_name" = ..; or string match -q '*/*' -- "$cache_name"
+            printf "  $RED✗$R Invalid top-level cache name: %s\n\n" "$cache_name"
+            exit 1
+        end
+        contains -- "$cache_name" $PRESERVE_USER_CACHE; or set -ga PRESERVE_USER_CACHE "$cache_name"
+    end
+end
 
 set -q _flag_no_orphans; and set do_orphans 0
 set -q _flag_no_caches; and set do_caches 0
@@ -1123,6 +1266,10 @@ set -q _flag_no_extras; and set do_extras 0
 
 set -q _flag_config; and load_config "$_flag_config"
 apply_profile
+
+if test $USER_ONLY -eq 1
+    set -g ROOT_TASKS_ENABLED 0
+end
 
 if set -q _flag_max_delete_gb
     set -g MAX_DELETE_GB "$_flag_max_delete_gb"
@@ -1143,7 +1290,7 @@ if not confirm
     exit 0
 end
 
-if test $DRY_RUN -eq 0
+if test $DRY_RUN -eq 0; and test $ROOT_TASKS_ENABLED -eq 1
     printf "  %s Authenticating..." $D
     if not sudo -v 2>/dev/null
         clear_line
@@ -1160,19 +1307,28 @@ end
 set -l start_time (date +%s)
 set -g START_FREE_KB (get_total_free_kb)
 
-run_task orphans "Removing orphan packages" clean_orphans $do_orphans
-run_task pacman "Cleaning pacman cache" clean_pacman $do_caches
-run_task yay "Cleaning AUR cache" clean_yay $do_caches
-run_task package_managers "Cleaning package managers" clean_package_managers $do_caches
-run_task docker "Pruning Docker" clean_docker $do_docker
-run_task user_cache "Cleaning generic ~/.cache" clean_user_cache $do_caches
+set -l do_privileged_orphans (math "$do_orphans * $ROOT_TASKS_ENABLED")
+set -l do_privileged_caches (math "$do_caches * $ROOT_TASKS_ENABLED")
+set -l do_privileged_docker (math "$do_docker * $ROOT_TASKS_ENABLED")
+set -l do_privileged_logs (math "$do_logs * $ROOT_TASKS_ENABLED")
+set -l do_privileged_temps (math "$do_temps * $ROOT_TASKS_ENABLED")
+
+run_task orphans "Removing orphan packages" clean_orphans $do_privileged_orphans
+run_task pacman "Cleaning pacman cache" clean_pacman $do_privileged_caches
+run_task yay "Cleaning AUR cache" clean_yay $do_privileged_caches
+run_task package_managers "Cleaning package managers and build caches" clean_package_managers $do_caches
+run_task docker "Pruning Docker images and build cache" clean_docker $do_privileged_docker
+run_task system_cache "Cleaning system and root caches" clean_system_cache $do_privileged_caches
+run_task user_cache "Cleaning ~/.cache with state safeguards" clean_user_cache $do_caches
+run_task sandbox_caches "Cleaning sandboxed app caches" clean_sandbox_caches $do_caches
 run_task app_caches "Cleaning app/browser caches" clean_app_caches $do_caches
 run_task steam_cache "Cleaning Steam caches" clean_steam_cache $do_caches
-run_task flatpak "Removing unused Flatpak runtimes" clean_flatpak $do_caches
-run_task journal "Vacuuming journal logs" clean_journal $do_logs
-run_task coredumps "Cleaning system coredumps" clean_coredumps $do_logs
-run_task var_log "Truncating /var/log" clean_var_log $do_logs
-run_task temps "Cleaning temp files" clean_temps $do_temps
+run_task flatpak "Removing unused Flatpak runtimes" clean_flatpak $do_privileged_caches
+run_task journal "Vacuuming journal logs" clean_journal $do_privileged_logs
+run_task coredumps "Cleaning system coredumps" clean_coredumps $do_privileged_logs
+run_task var_log "Truncating /var/log" clean_var_log $do_privileged_logs
+run_task user_logs "Cleaning user application logs" clean_user_logs $do_logs
+run_task temps "Cleaning temp files" clean_temps $do_privileged_temps
 run_task trash "Emptying trash" clean_trash $do_trash
 run_task zed_node "Cleaning Zed old node versions" clean_zed_node $do_extras
 run_task vesktop "Cleaning Vesktop cache" clean_vesktop $do_extras

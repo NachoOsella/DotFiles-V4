@@ -1,18 +1,17 @@
 {
-  "lastChangelogVersion": "0.80.6",
+  "lastChangelogVersion": "0.80.8",
   "theme": "gruvbox-material-dark-hard",
-  "defaultThinkingLevel": "xhigh",
+  "defaultThinkingLevel": "off",
   "hideThinkingBlock": false,
   "quietStartup": true,
   "packages": [
     "git:github.com/nicobailon/pi-web-access",
-    "git:https://github.com/capyup/pi-goal",
-    "git:https://github.com/kenryu42/pi-grok-cli"
+    "git:https://github.com/capyup/pi-goal"
   ],
   "enableSkillCommands": true,
   "extensions": [],
-  "defaultProvider": "zen-free",
-  "defaultModel": "deepseek-v4-flash-free",
+  "defaultProvider": "openai-codex",
+  "defaultModel": "gpt-5.6-sol",
   "steeringMode": "one-at-a-time",
   "terminal": {
     "showTerminalProgress": false

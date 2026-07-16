@@ -43,7 +43,7 @@ bind("SUPER + J", hl.dsp.window.move({ direction = "d" }))
 bind(mod .. " + SHIFT + h", hl.dsp.window.resize({ x = -100, y = 0, relative = true }))
 bind(mod .. " + SHIFT + l", hl.dsp.window.resize({ x = 100, y = 0, relative = true }))
 bind(mod .. " + SHIFT + k", hl.dsp.window.resize({ x = 0, y = -100, relative = true }))
-bind(mod .. " + SHIFT + j", hl.dsp.window.resize({ x = 0, y = 40, relative = true }))
+bind(mod .. " + SHIFT + j", hl.dsp.window.resize({ x = 0, y = 100, relative = true }))
 
 -- Move focus with arrow keys.
 bind(mod .. " + left", hl.dsp.focus({ direction = "l" }))
@@ -80,5 +80,5 @@ end)
 -- Spotify controls.
 exec(mod .. " + U", "playerctl -p spotify volume 0.1-")
 exec(mod .. " + I", "playerctl -p spotify volume 0.1+")
-exec(mod .. " + Right", "playerctl -p spotify next")
-exec(mod .. " + Left", "playerctl -p spotify previous")
+exec(mod .. " + CTRL + Right", "playerctl -p spotify next")
+exec(mod .. " + CTRL + Left", "playerctl -p spotify previous")

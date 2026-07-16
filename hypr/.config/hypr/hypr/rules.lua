@@ -10,19 +10,13 @@ hl.window_rule({
 hl.window_rule({ name = "spotify-workspace", match = { class = "^(Spotify)$" }, workspace = "6" })
 hl.window_rule({ name = "vesktop-workspace", match = { class = "^(vesktop)$" }, workspace = "7" })
 
--- KeePassXC opens centered, floating, and fixed-size on workspace 1.
 hl.window_rule({
-    name = "keepassxc-dialog",
-    match = { class = "^(org\\.keepassxc\\.KeePassXC)$" },
-    workspace = "1",
+    name = "feh-dialog",
+    match = { class = "^(feh)$" },
     float = true,
-    size = "1100 650",
+    size = "960 540",
     center = true,
 })
-
-hl.window_rule({ name = "feh-float", match = { class = "^(feh)$" }, float = true })
-hl.window_rule({ name = "feh-size", match = { class = "^(feh)$" }, size = "960 540" })
-hl.window_rule({ name = "feh-center", match = { class = "^(feh)$" }, center = true })
 hl.window_rule({ name = "vlc-float", match = { class = "^(vlc)$" }, float = true })
 
 -- Steam window sizing.
