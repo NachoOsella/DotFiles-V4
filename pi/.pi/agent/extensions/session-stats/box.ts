@@ -1,39 +1,72 @@
+import type { Theme } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-import { bold, color, fitToWidth, padRightVisible } from "./format.js";
+import { bold, color, padRightVisible } from "./format.ts";
 
-const TL = "╭", TR = "╮", BL = "╰", BR = "╯";
-const HL = "─", VL = "│", LX = "├", RX = "┤";
-
-/** Create a small rounded-box renderer for width-adaptive stat panels. */
-export function mkBox(width: number, theme?: any) {
+/** Width-safe primitives for one cohesive rounded dashboard. */
+export function createDashboardFrame(outerWidth: number, theme?: Theme) {
+  const width = Math.max(32, outerWidth);
+  const innerWidth = width - 2;
   const border = (text: string) => color(theme, "border", text);
-  const borderAccent = (text: string) => color(theme, "borderAccent", text);
+  const mutedBorder = (text: string) => color(theme, "borderMuted", text);
+
+  const fit = (text: string, available = innerWidth - 2) =>
+    truncateToWidth(text, Math.max(0, available), "…", false);
+
+  const row = (content = "") => {
+    const fitted = fit(content);
+    return border("│") + " " + padRightVisible(fitted, innerWidth - 2) + " " + border("│");
+  };
 
   return {
-    hline: () => borderAccent(TL + HL.repeat(width) + TR),
-    hlineEnd: () => border(BL + HL.repeat(width) + BR),
-    divider: () => border(LX + HL.repeat(width) + RX),
-    sectionCentered: (title: string) => {
-      const rawTitle = truncateToWidth(title, width - 2, "", false);
-      const cleanTitle = " " + rawTitle + " ";
-      const titleWidth = visibleWidth(cleanTitle);
-      const leftPad = Math.floor((width - titleWidth) / 2);
-      const rightPad = width - titleWidth - leftPad;
-      return border(VL)
-        + color(theme, "dim", " ".repeat(Math.max(0, leftPad)))
-        + color(theme, "accent", bold(theme, cleanTitle))
-        + color(theme, "dim", " ".repeat(Math.max(0, rightPad)))
-        + border(VL);
+    width,
+    innerWidth,
+    top(title: string, scope: string): string {
+      const left = color(theme, "accent", bold(theme, `◆ ${title}`));
+      const right = color(theme, "muted", scope);
+      const gap = Math.max(1, innerWidth - visibleWidth(left) - visibleWidth(right) - 2);
+      return [
+        color(theme, "borderAccent", `╭${"━".repeat(innerWidth)}╮`),
+        border("│") + " " + padRightVisible(`${left}${" ".repeat(gap)}${right}`, innerWidth - 2) + " " + border("│"),
+      ].join("\n");
     },
-    row: (label: string, value: string) => {
-      const cleanLabel = truncateToWidth(label, Math.max(1, width - 2), "", false);
-      const labelWidth = visibleWidth(cleanLabel);
-      const cleanValue = truncateToWidth(value, Math.max(0, width - labelWidth - 2), "", false);
-      const valueWidth = visibleWidth(cleanValue);
-      const gap = Math.max(1, width - labelWidth - valueWidth - 1);
-      return border(VL) + color(theme, "muted", cleanLabel) + " ".repeat(gap) + color(theme, "text", cleanValue) + " " + border(VL);
+    section(title: string): string {
+      const label = color(theme, "accent", bold(theme, ` ${title.toUpperCase()} `));
+      const remainder = Math.max(0, innerWidth - visibleWidth(label) - 1);
+      return mutedBorder("├─") + label + mutedBorder(`${"─".repeat(remainder)}┤`);
     },
-    content: (text: string) => border(VL) + padRightVisible(fitToWidth(text, width), width) + border(VL),
-    note: (text: string) => border(VL) + color(theme, "dim", padRightVisible(fitToWidth(text, width), width)) + border(VL),
+    row,
+    blank(): string {
+      return row();
+    },
+    metric(label: string, value: string): string {
+      const styledLabel = color(theme, "muted", label);
+      const styledValue = color(theme, "text", bold(theme, value));
+      const gap = Math.max(1, innerWidth - visibleWidth(label) - visibleWidth(value) - 2);
+      return row(`${styledLabel}${" ".repeat(gap)}${styledValue}`);
+    },
+    metricPair(
+      leftLabel: string,
+      leftValue: string,
+      rightLabel: string,
+      rightValue: string,
+    ): string {
+      const columnWidth = Math.floor((innerWidth - 5) / 2);
+      const cell = (label: string, value: string) => {
+        const cleanLabel = fit(label, Math.max(6, columnWidth - 4));
+        const cleanValue = fit(value, Math.max(4, columnWidth - visibleWidth(cleanLabel) - 1));
+        const gap = Math.max(1, columnWidth - visibleWidth(cleanLabel) - visibleWidth(cleanValue));
+        return color(theme, "muted", cleanLabel) + " ".repeat(gap) + color(theme, "text", bold(theme, cleanValue));
+      };
+      return row(
+        `${cell(leftLabel, leftValue)} ${color(theme, "borderMuted", "│")} ${cell(rightLabel, rightValue)}`,
+      );
+    },
+    footer(hint: string): string {
+      return [
+        mutedBorder(`├${"─".repeat(innerWidth)}┤`),
+        row(color(theme, "dim", hint)),
+        color(theme, "borderAccent", `╰${"━".repeat(innerWidth)}╯`),
+      ].join("\n");
+    },
   };
 }

@@ -1,83 +1,74 @@
-import { buildModelStats, buildToolUsage } from "./aggregate.js";
-import { mkBox } from "./box.js";
-import { fmtCost, fmtDuration, formatCacheHit, formatNumber } from "./format.js";
-import { buildModelBox, buildToolBox } from "./panels.js";
-import type { AggregatedModelUsage, SessionStats } from "./types.js";
+import type { Theme } from "@earendil-works/pi-coding-agent";
+import { buildModelStats, buildToolUsage } from "./aggregate.ts";
+import { createDashboardFrame } from "./box.ts";
+import {
+  fmtCost,
+  fmtDuration,
+  formatCacheHit,
+  formatNumber,
+  formatPercent,
+  progressBar,
+  readCacheHitRate,
+} from "./format.ts";
+import { buildModelRows, buildToolRows } from "./panels.ts";
+import type { AggregatedModelUsage, SessionStats } from "./types.ts";
 
 const MS_DAY = 24 * 60 * 60 * 1000;
 
-/** Build rendered output for `/stats all [days]`. */
-export function buildAllStatsOutput(sessions: SessionStats[], daysFilter: number | undefined, width: number, theme?: any): string {
-  const box = mkBox(width, theme);
+/** Build the aggregate `/stats all [days]` dashboard. */
+export function buildAllStatsOutput(
+  sessions: readonly SessionStats[],
+  daysFilter: number | undefined,
+  width: number,
+  theme?: Theme,
+): string {
   const filtered = filterByDays(sessions, daysFilter);
   if (filtered.length === 0) return "No sessions found for the given period.";
 
-  const totals = calculateAllSessionTotals(filtered, daysFilter);
-  const parts: string[] = [];
+  const frame = createDashboardFrame(width, theme);
+  const contentWidth = frame.innerWidth - 2;
+  const totals = calculateAllSessionTotals(filtered);
+  const models = buildModelStats(filtered);
+  const tools = buildToolUsage(filtered);
+  const scope = daysFilter ? `${daysFilter}d window` : "all sessions";
+  const lines: string[] = [frame.top("SESSION STATS", scope)];
 
-  parts.push([box.hline(), box.sectionCentered("PI SESSION STATS"), box.divider(),
-    box.note(" Scope  " + (daysFilter ? "last " + daysFilter + " days" : "all sessions")),
-    box.note(" Close  q / enter / esc"),
-    box.hlineEnd()].join("\n"));
+  lines.push(frame.section("Activity"));
+  lines.push(
+    frame.metricPair("Sessions", formatNumber(filtered.length), "Active days", formatNumber(totals.activeDays)),
+    frame.metricPair("Messages", formatNumber(totals.conversationMessages), "Tool calls", formatNumber(totals.toolCalls)),
+    frame.metricPair("Avg session", fmtDuration(totals.averageDurationMs), "Avg messages", formatNumber(totals.averageMessagesPerSession)),
+  );
 
-  parts.push([box.hline(), box.sectionCentered("OVERVIEW"), box.divider(),
-    box.row("Sessions", formatNumber(filtered.length)),
-    box.row("Messages", formatNumber(totals.totalMessages)),
-    box.row("Days", String(totals.effectiveDays)),
-    box.hlineEnd()].join("\n"));
+  lines.push(frame.section("Usage"));
+  lines.push(
+    frame.metricPair("Tokens", formatNumber(totals.totalTokens), "Cost", fmtCost(totals.totalCost)),
+    frame.metricPair("Avg tokens", formatNumber(totals.averageTokensPerSession), "Median", formatNumber(totals.medianTokens)),
+    frame.metricPair("Input", formatNumber(totals.input), "Output", formatNumber(totals.output)),
+    frame.metricPair("Cache read", formatNumber(totals.cacheRead), "Cache write", formatNumber(totals.cacheWrite)),
+    frame.metric("Cache hit", `${formatPercent(totals.cacheHitRate)}  ${progressBar(totals.cacheHitRate, 100, 10, theme, "success")}`),
+  );
 
-  parts.push([box.hline(), box.sectionCentered("COST & TOKENS"), box.divider(),
-    box.row("Total Cost", fmtCost(totals.totalCost)),
-    box.row("Avg Cost/Day", fmtCost(totals.costPerDay)),
-    box.row("Avg Tokens/Session", formatNumber(totals.avgTokensPerSession)),
-    box.row("Median Tokens/Session", formatNumber(totals.medianTokens)),
-    box.row("Total", formatNumber(totals.totalTokensWithCache)),
-    box.row("Input", formatNumber(totals.totalInput)),
-    box.row("Output", formatNumber(totals.totalOutput)),
-    box.row("Cache Read", formatNumber(totals.totalCacheRead)),
-    box.row("Read Cache Hit", formatCacheHit(totals.totalInput, totals.totalCacheRead, theme)),
-    box.hlineEnd()].join("\n"));
+  lines.push(frame.section("Models"));
+  lines.push(...buildModelRows(models, contentWidth, theme).map(frame.row));
 
-  const modelBox = buildModelBox(buildModelStats(filtered).slice(0, 3), width, theme);
-  if (modelBox) parts.push(modelBox);
-
-  const toolBox = buildToolBox(buildToolUsage(filtered), width, theme);
-  if (toolBox) parts.push(toolBox);
-
-  return parts.join("\n\n");
+  lines.push(frame.section("Top tools"));
+  lines.push(...buildToolRows(tools, contentWidth, theme).map(frame.row));
+  lines.push(frame.footer("enter / esc / q  close"));
+  return lines.join("\n");
 }
 
-/** Build rendered output for current-session `/stats`. */
-export function buildCurrentSessionOutput(stats: SessionStats, width: number, theme?: any): string {
-  const box = mkBox(width, theme);
-  const parts: string[] = [];
-
-  parts.push([box.hline(), box.sectionCentered("PI SESSION STATS"), box.divider(),
-    box.note(" Scope  current session"),
-    box.note(" Close  q / enter / esc"),
-    box.hlineEnd()].join("\n"));
-
-  parts.push([box.hline(), box.sectionCentered("CURRENT SESSION"), box.divider(),
-    box.row("Messages", formatNumber(stats.userMessages + stats.assistantMessages + stats.toolResults + stats.customMessages)),
-    box.row("User", formatNumber(stats.userMessages)),
-    box.row("Assistant", formatNumber(stats.assistantMessages)),
-    box.row("Tool results", formatNumber(stats.toolResults)),
-    box.row("Duration", fmtDuration(stats.durationMs ?? -1)),
-    box.hlineEnd()].join("\n"));
-
-  parts.push([box.hline(), box.sectionCentered("COST & TOKENS"), box.divider(),
-    box.row("Total", formatNumber(stats.totalTokens.totalTokens)),
-    box.row("Input", formatNumber(stats.totalTokens.input)),
-    box.row("Output", formatNumber(stats.totalTokens.output)),
-    box.row("Cache Read", formatNumber(stats.totalTokens.cacheRead)),
-    box.row("Read Cache Hit", formatCacheHit(stats.totalTokens.input, stats.totalTokens.cacheRead, theme)),
-    box.row("Cost", fmtCost(stats.totalTokens.cost.total)),
-    box.hlineEnd()].join("\n"));
-
-  const toolBox = buildToolBox(stats.toolCalls, width, theme);
-  if (toolBox) parts.push(toolBox);
-
-  const models: AggregatedModelUsage[] = stats.models.slice(0, 3).map((model) => ({
+/** Build the current-session `/stats` dashboard. */
+export function buildCurrentSessionOutput(
+  stats: SessionStats,
+  width: number,
+  theme?: Theme,
+): string {
+  const frame = createDashboardFrame(width, theme);
+  const contentWidth = frame.innerWidth - 2;
+  const conversationMessages = stats.userMessages + stats.assistantMessages;
+  const toolCalls = stats.toolCalls.reduce((sum, tool) => sum + tool.count, 0);
+  const models: AggregatedModelUsage[] = stats.models.map((model) => ({
     provider: model.provider,
     modelId: model.modelId,
     messages: model.count,
@@ -87,72 +78,114 @@ export function buildCurrentSessionOutput(stats: SessionStats, width: number, th
     cacheWrite: model.cacheWrite,
     cost: model.cost,
   }));
-  const modelBox = buildModelBox(models, width, theme);
-  if (modelBox) parts.push(modelBox);
+  const lines: string[] = [frame.top("SESSION STATS", "current")];
 
-  return parts.join("\n\n");
+  lines.push(frame.section("Activity"));
+  lines.push(
+    frame.metricPair("Duration", fmtDuration(stats.durationMs ?? -1), "Messages", formatNumber(conversationMessages)),
+    frame.metricPair("User", formatNumber(stats.userMessages), "Assistant", formatNumber(stats.assistantMessages)),
+    frame.metricPair("Tool calls", formatNumber(toolCalls), "Results", formatNumber(stats.toolResults)),
+  );
+
+  lines.push(frame.section("Usage"));
+  lines.push(
+    frame.metricPair("Tokens", formatNumber(stats.totalTokens.totalTokens), "Cost", fmtCost(stats.totalTokens.cost.total)),
+    frame.metricPair("Input", formatNumber(stats.totalTokens.input), "Output", formatNumber(stats.totalTokens.output)),
+    frame.metricPair("Cache read", formatNumber(stats.totalTokens.cacheRead), "Cache write", formatNumber(stats.totalTokens.cacheWrite)),
+    frame.metric("Cache hit", formatCacheHit(stats.totalTokens.input, stats.totalTokens.cacheRead, theme)),
+  );
+
+  lines.push(frame.section("Models"));
+  lines.push(...buildModelRows(models, contentWidth, theme).map(frame.row));
+
+  lines.push(frame.section("Top tools"));
+  lines.push(...buildToolRows(stats.toolCalls, contentWidth, theme).map(frame.row));
+  lines.push(frame.footer("enter / esc / q  close"));
+  return lines.join("\n");
 }
 
-/** Filter sessions by optional day range. */
-function filterByDays(sessions: SessionStats[], daysFilter: number | undefined): SessionStats[] {
-  if (!daysFilter) return sessions;
-  const cutoff = Date.now() - daysFilter * MS_DAY;
-  return sessions.filter((session) => session.startTime && new Date(session.startTime).getTime() >= cutoff);
-}
-
-/** Calculate aggregate totals for the all-sessions view. */
-function calculateAllSessionTotals(filtered: SessionStats[], daysFilter: number | undefined) {
-  const now = Date.now();
-  let totalMessages = 0;
+/** Aggregate values used by the all-session dashboard. */
+export function calculateAllSessionTotals(sessions: readonly SessionStats[]) {
+  let conversationMessages = 0;
+  let toolCalls = 0;
   let totalCost = 0;
-  let totalInput = 0;
-  let totalOutput = 0;
-  let totalCacheRead = 0;
-  let totalTokensWithCache = 0;
-  let earliest = Date.now();
-  let latest = 0;
+  let input = 0;
+  let output = 0;
+  let cacheRead = 0;
+  let cacheWrite = 0;
+  let totalTokens = 0;
+  let durationTotal = 0;
+  let durationCount = 0;
+  const activeDates = new Set<string>();
   const sessionTokenTotals: number[] = [];
 
-  for (const session of filtered) {
-    const startedAt = session.startTime ? new Date(session.startTime).getTime() : now;
-    if (startedAt < earliest) earliest = startedAt;
-    if (startedAt > latest) latest = startedAt;
+  for (const session of sessions) {
+    conversationMessages += session.userMessages + session.assistantMessages;
+    toolCalls += session.toolCalls.reduce((sum, tool) => sum + tool.count, 0);
+    totalCost += session.totalTokens.cost.total;
+    input += session.totalTokens.input;
+    output += session.totalTokens.output;
+    cacheRead += session.totalTokens.cacheRead;
+    cacheWrite += session.totalTokens.cacheWrite;
 
     const sessionTokens = Math.max(
       session.totalTokens.totalTokens,
       session.totalTokens.input + session.totalTokens.output + session.totalTokens.cacheRead,
     );
+    totalTokens += sessionTokens;
     sessionTokenTotals.push(sessionTokens);
-    totalMessages += session.userMessages + session.assistantMessages + session.toolResults + session.customMessages;
-    totalCost += session.totalTokens.cost.total;
-    totalInput += session.totalTokens.input;
-    totalOutput += session.totalTokens.output;
-    totalCacheRead += session.totalTokens.cacheRead;
-    totalTokensWithCache += sessionTokens;
+
+    if (session.durationMs !== undefined) {
+      durationTotal += session.durationMs;
+      durationCount += 1;
+    }
+    const startedAt = parseDate(session.startTime);
+    if (startedAt) activeDates.add(startedAt.toISOString().slice(0, 10));
   }
 
-  const rangeDays = Math.max(1, Math.ceil((latest - earliest) / MS_DAY));
-  const effectiveDays = daysFilter ?? rangeDays;
-  const avgTokensPerSession = filtered.length > 0 ? Math.round(totalTokensWithCache / filtered.length) : 0;
   return {
-    totalMessages,
+    activeDays: activeDates.size,
+    conversationMessages,
+    toolCalls,
     totalCost,
-    totalInput,
-    totalOutput,
-    totalCacheRead,
-    totalTokensWithCache,
-    effectiveDays,
-    costPerDay: totalCost / effectiveDays,
-    avgTokensPerSession,
+    input,
+    output,
+    cacheRead,
+    cacheWrite,
+    totalTokens,
+    cacheHitRate: readCacheHitRate(input, cacheRead),
+    averageDurationMs: durationCount > 0 ? Math.round(durationTotal / durationCount) : -1,
+    averageMessagesPerSession: Math.round(conversationMessages / Math.max(1, sessions.length)),
+    averageTokensPerSession: Math.round(totalTokens / Math.max(1, sessions.length)),
     medianTokens: median(sessionTokenTotals),
   };
 }
 
-/** Calculate median token count. */
-function median(values: number[]): number {
-  values.sort((a, b) => a - b);
-  const mid = Math.floor(values.length / 2);
-  if (values.length === 0) return 0;
-  if (values.length % 2 === 0) return Math.round((values[mid - 1] + values[mid]) / 2);
-  return values[mid];
+/** Filter sessions using their valid start timestamp. */
+export function filterByDays(
+  sessions: readonly SessionStats[],
+  daysFilter: number | undefined,
+  now = Date.now(),
+): SessionStats[] {
+  if (!daysFilter) return [...sessions];
+  const cutoff = now - daysFilter * MS_DAY;
+  return sessions.filter((session) => {
+    const startedAt = parseDate(session.startTime);
+    return startedAt !== undefined && startedAt.getTime() >= cutoff;
+  });
+}
+
+function median(values: readonly number[]): number {
+  const sorted = [...values].sort((left, right) => left - right);
+  if (sorted.length === 0) return 0;
+  const middle = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 0
+    ? Math.round(((sorted[middle - 1] ?? 0) + (sorted[middle] ?? 0)) / 2)
+    : (sorted[middle] ?? 0);
+}
+
+function parseDate(value: string | undefined): Date | undefined {
+  if (!value) return undefined;
+  const date = new Date(value);
+  return Number.isFinite(date.getTime()) ? date : undefined;
 }

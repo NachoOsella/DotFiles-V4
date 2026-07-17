@@ -11,15 +11,8 @@ export interface ModelUsage {
 }
 
 /** Aggregated model usage across one or more sessions. */
-export interface AggregatedModelUsage {
-  provider: string;
-  modelId: string;
+export interface AggregatedModelUsage extends Omit<ModelUsage, "count"> {
   messages: number;
-  input: number;
-  output: number;
-  cacheRead: number;
-  cacheWrite: number;
-  cost: number;
 }
 
 /** Aggregated tool-call usage. */
@@ -53,5 +46,10 @@ export interface SessionStats {
   customMessages: number;
 }
 
-/** Minimal shape for session branch entries returned by Pi. */
-export type SessionEntryLike = Record<string, any>;
+/** Minimal safe shape accepted by the session parser. */
+export interface SessionEntryLike {
+  type?: unknown;
+  timestamp?: unknown;
+  name?: unknown;
+  message?: unknown;
+}

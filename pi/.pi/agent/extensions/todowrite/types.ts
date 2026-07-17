@@ -1,15 +1,18 @@
+/** Supported lifecycle states for a todo item. */
+export type TodoStatus = "pending" | "in_progress" | "completed";
+
 /** A single session-local todo item. */
 export interface Todo {
-  content: string;
-  status: "pending" | "in_progress" | "completed";
+  readonly content: string;
+  readonly status: TodoStatus;
 }
 
 /** Aggregated todo data stored in tool result details. */
 export interface TodoDetails {
-  total: number;
-  pending: number;
-  in_progress: number;
-  completed: number;
-  current: string | null;
-  items: Todo[];
+  readonly total: number;
+  readonly pending: number;
+  readonly in_progress: number;
+  readonly completed: number;
+  readonly current: string | null;
+  readonly items: readonly Todo[];
 }

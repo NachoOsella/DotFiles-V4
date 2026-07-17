@@ -1,0 +1,16 @@
+{
+  "name": "ask-user",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "tsc --noEmit -p .",
+    "prepare": "effect-tsgo patch"
+  },
+  "peerDependencies": {
+    "effect": "*"
+  },
+  "devDependencies": {
+    "@effect/tsgo": "^0.19.0",
+    "typescript": "^7.0.2"
+  }
+}

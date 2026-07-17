@@ -1,19 +1,19 @@
-import type { Todo, TodoDetails } from "./types.js";
+import type { Todo, TodoDetails } from "./types.ts";
 
-let todos: Todo[] = [];
+let todos: readonly Todo[] = [];
 let widgetVisible = false;
 
-/** Return the current session-local todo list. */
-export function getTodos(): ReadonlyArray<Todo> {
+/** Return an immutable snapshot of the current session todo list. */
+export function getTodos(): readonly Todo[] {
   return todos;
 }
 
-/** Replace the current session-local todo list. */
-export function setTodos(list: Todo[]): void {
-  todos = list;
+/** Replace the current todo list with an immutable defensive copy. */
+export function setTodos(list: readonly Todo[]): void {
+  todos = list.map((todo) => ({ ...todo }));
 }
 
-/** Reset todos and widget visibility for a new session. */
+/** Reset runtime state before restoring a session branch. */
 export function resetTodoState(): void {
   todos = [];
   widgetVisible = false;
@@ -24,34 +24,39 @@ export function isWidgetVisible(): boolean {
   return widgetVisible;
 }
 
-/** Set whether the widget is enabled by the user. */
-export function setWidgetVisible(visible: boolean): void {
-  widgetVisible = visible;
-}
-
 /** Toggle widget visibility and return the new value. */
 export function toggleWidgetVisible(): boolean {
   widgetVisible = !widgetVisible;
   return widgetVisible;
 }
 
-/** Return true when there are active todos worth showing. */
+/** Return true when there are incomplete todos worth showing. */
 export function hasVisibleTodos(): boolean {
   return todos.some((todo) => todo.status !== "completed");
 }
 
-/** Build aggregate details for tool result rendering and session history. */
-export function buildDetails(list: Todo[]): TodoDetails {
-  const pending = list.filter((todo) => todo.status === "pending").length;
-  const inProgress = list.filter((todo) => todo.status === "in_progress").length;
-  const completed = list.filter((todo) => todo.status === "completed").length;
-  const current = list.find((todo) => todo.status === "in_progress")?.content ?? null;
+/** Build aggregate details for rendering and branch-aware state restoration. */
+export function buildDetails(list: readonly Todo[]): TodoDetails {
+  let pending = 0;
+  let inProgress = 0;
+  let completed = 0;
+  let current: string | null = null;
+
+  for (const todo of list) {
+    if (todo.status === "pending") pending += 1;
+    if (todo.status === "completed") completed += 1;
+    if (todo.status === "in_progress") {
+      inProgress += 1;
+      current = todo.content;
+    }
+  }
+
   return {
     total: list.length,
     pending,
     in_progress: inProgress,
     completed,
     current,
-    items: list,
+    items: list.map((todo) => ({ ...todo })),
   };
 }

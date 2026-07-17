@@ -1,6 +1,6 @@
 import type { ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-import { getTodos, hasVisibleTodos, isWidgetVisible, toggleWidgetVisible } from "./state.js";
+import { getTodos, hasVisibleTodos, isWidgetVisible, toggleWidgetVisible } from "./state.ts";
 
 /** Return true when the widget should currently be rendered. */
 function shouldShowWidget(): boolean {

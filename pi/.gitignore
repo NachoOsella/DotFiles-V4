@@ -1,9 +1,11 @@
 # Sensitive
 auth.json
+.env
 
 # Runtime
 pi-crash.log
 sessions/
+node_modules/
 
 # Cached git repos
 git/

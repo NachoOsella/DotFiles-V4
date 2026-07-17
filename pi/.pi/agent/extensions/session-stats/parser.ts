@@ -1,14 +1,27 @@
 import { readFile } from "node:fs/promises";
-import { finalizeTotalTokens } from "./format.js";
-import type { ModelUsage, SessionEntryLike, SessionStats, ToolUsage } from "./types.js";
+import { Data, Effect } from "effect";
+import { finalizeTotalTokens } from "./format.ts";
+import type { ModelUsage, SessionEntryLike, SessionStats, ToolUsage } from "./types.ts";
+
+/** Identifies a session file that could not be read. */
+export class SessionReadError extends Data.TaggedError("SessionReadError")<{
+  readonly path: string;
+  readonly cause: unknown;
+}> {}
 
 /** Create an empty stats object for a session source. */
 export function createEmptyStats(file: string, name?: string): SessionStats {
   return {
     file,
     name,
-    startTime: undefined,
-    totalTokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { total: 0 } },
+    totalTokens: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { total: 0 },
+    },
     userMessages: 0,
     assistantMessages: 0,
     toolResults: 0,
@@ -18,132 +31,162 @@ export function createEmptyStats(file: string, name?: string): SessionStats {
   };
 }
 
-/** Parse a persisted Pi JSONL session file into aggregate stats. */
-export async function parseSessionFile(filePath: string): Promise<SessionStats> {
-  const content = await readFile(filePath, "utf-8");
-  const lines = content.trim().split("\n");
-  const stats = createEmptyStats(filePath);
+/** Parse a persisted JSONL session as a composable Effect. */
+export function parseSessionFileEffect(
+  filePath: string,
+): Effect.Effect<SessionStats, SessionReadError> {
+  return Effect.tryPromise({
+    try: () => readFile(filePath, "utf8"),
+    catch: (cause) => new SessionReadError({ path: filePath, cause }),
+  }).pipe(Effect.map((content) => parseSessionText(content, filePath)));
+}
+
+/** Promise adapter retained for callers outside an Effect pipeline. */
+export function parseSessionFile(filePath: string): Promise<SessionStats> {
+  return Effect.runPromise(parseSessionFileEffect(filePath));
+}
+
+/** Parse the current in-memory branch from Pi's session manager. */
+export function parseCurrentBranch(
+  entries: readonly SessionEntryLike[],
+  file: string,
+  name?: string,
+): SessionStats {
+  const stats = createEmptyStats(file, name);
   const collectors = createCollectors();
-  let firstTimestamp: string | undefined;
+  let firstTimestamp: number | undefined;
+  let lastTimestamp: number | undefined;
 
-  for (const rawLine of lines) {
-    if (!rawLine.trim()) continue;
-    let entry: SessionEntryLike;
-    try {
-      entry = JSON.parse(rawLine) as SessionEntryLike;
-    } catch {
-      continue;
-    }
-
-    if (entry.timestamp && !firstTimestamp) firstTimestamp = entry.timestamp;
-    if (entry.type === "session") continue;
-    collectEntry(stats, collectors, entry);
-    if (entry.type === "session_info" && entry.name) stats.name = entry.name;
+  for (const entry of entries) {
+    const timestamp = parseTimestamp(entry.timestamp);
+    firstTimestamp ??= timestamp;
+    if (timestamp !== undefined) lastTimestamp = timestamp;
+    if (entry.type !== "session") collectEntry(stats, collectors, entry);
   }
 
-  stats.startTime = firstTimestamp;
+  if (firstTimestamp !== undefined) stats.startTime = new Date(firstTimestamp).toISOString();
+  if (firstTimestamp !== undefined && lastTimestamp !== undefined) {
+    stats.durationMs = Math.max(0, lastTimestamp - firstTimestamp);
+  }
   finishCollectors(stats, collectors);
   return stats;
 }
 
-/** Parse the current in-memory branch from Pi's session manager. */
-export function parseCurrentBranch(entries: SessionEntryLike[], file: string, name?: string): SessionStats {
-  const stats = createEmptyStats(file, name);
+function parseSessionText(content: string, filePath: string): SessionStats {
+  const stats = createEmptyStats(filePath);
   const collectors = createCollectors();
-  let firstTs: number | undefined;
-  let lastTs: number | undefined;
+  let firstTimestamp: number | undefined;
+  let lastTimestamp: number | undefined;
 
-  for (const entry of entries) {
-    if (entry.type === "session") {
-      if (entry.timestamp) firstTs = new Date(entry.timestamp).getTime();
-      continue;
+  for (const line of content.split(/\r?\n/)) {
+    const entry = parseEntry(line);
+    if (!entry) continue;
+
+    const timestamp = parseTimestamp(entry.timestamp);
+    firstTimestamp ??= timestamp;
+    if (timestamp !== undefined) lastTimestamp = timestamp;
+    if (entry.type === "session_info" && typeof entry.name === "string") {
+      stats.name = entry.name;
     }
-    if (!firstTs && entry.timestamp) firstTs = new Date(entry.timestamp).getTime();
-    if (entry.timestamp) lastTs = new Date(entry.timestamp).getTime();
-    collectEntry(stats, collectors, entry);
+    if (entry.type !== "session") collectEntry(stats, collectors, entry);
   }
 
-  if (firstTs && lastTs) stats.durationMs = lastTs - firstTs;
+  if (firstTimestamp !== undefined) stats.startTime = new Date(firstTimestamp).toISOString();
+  if (firstTimestamp !== undefined && lastTimestamp !== undefined) {
+    stats.durationMs = Math.max(0, lastTimestamp - firstTimestamp);
+  }
   finishCollectors(stats, collectors);
   return stats;
 }
 
 interface Collectors {
-  toolCallMap: Map<string, number>;
-  modelMap: Map<string, ModelUsage>;
+  readonly toolCalls: Map<string, number>;
+  readonly models: Map<string, ModelUsage>;
   reportedTotalTokens: number;
 }
 
-/** Create mutable maps used while parsing entries. */
 function createCollectors(): Collectors {
-  return {
-    toolCallMap: new Map(),
-    modelMap: new Map(),
-    reportedTotalTokens: 0,
-  };
+  return { toolCalls: new Map(), models: new Map(), reportedTotalTokens: 0 };
 }
 
-/** Collect stats from one session entry. */
-function collectEntry(stats: SessionStats, collectors: Collectors, entry: SessionEntryLike): void {
-  if (entry.type !== "message" || !entry.message) return;
-  const msg = entry.message;
+function collectEntry(
+  stats: SessionStats,
+  collectors: Collectors,
+  entry: SessionEntryLike,
+): void {
+  if (entry.type !== "message" || !isRecord(entry.message)) return;
+  const message = entry.message;
 
-  if (msg.role === "user") {
-    stats.userMessages += 1;
-  } else if (msg.role === "assistant") {
-    collectAssistantMessage(stats, collectors, msg);
-  } else if (msg.role === "toolResult") {
-    stats.toolResults += 1;
-  } else if (msg.role === "custom") {
-    stats.customMessages += 1;
+  switch (message.role) {
+    case "user":
+      stats.userMessages += 1;
+      break;
+    case "assistant":
+      collectAssistantMessage(stats, collectors, message);
+      break;
+    case "toolResult":
+      stats.toolResults += 1;
+      break;
+    case "custom":
+      stats.customMessages += 1;
+      break;
   }
 }
 
-/** Collect model, usage, and tool-call stats from one assistant message. */
-function collectAssistantMessage(stats: SessionStats, collectors: Collectors, msg: any): void {
+function collectAssistantMessage(
+  stats: SessionStats,
+  collectors: Collectors,
+  message: Record<string, unknown>,
+): void {
   stats.assistantMessages += 1;
-  const model = ensureMessageModel(collectors.modelMap, msg);
+  const model = ensureMessageModel(collectors.models, message);
+  const usage = isRecord(message.usage) ? message.usage : undefined;
 
-  if (msg.usage) {
-    const usage = msg.usage;
-    stats.totalTokens.input += usage.input ?? 0;
-    stats.totalTokens.output += usage.output ?? 0;
-    stats.totalTokens.cacheRead += usage.cacheRead ?? 0;
-    stats.totalTokens.cacheWrite += usage.cacheWrite ?? 0;
-    collectors.reportedTotalTokens += usage.totalTokens ?? 0;
-    stats.totalTokens.cost.total += usage.cost?.total ?? 0;
+  if (usage) {
+    const input = finiteNumber(usage.input);
+    const output = finiteNumber(usage.output);
+    const cacheRead = finiteNumber(usage.cacheRead);
+    const cacheWrite = finiteNumber(usage.cacheWrite);
+    const cost = isRecord(usage.cost) ? finiteNumber(usage.cost.total) : 0;
+
+    stats.totalTokens.input += input;
+    stats.totalTokens.output += output;
+    stats.totalTokens.cacheRead += cacheRead;
+    stats.totalTokens.cacheWrite += cacheWrite;
+    stats.totalTokens.cost.total += cost;
+    collectors.reportedTotalTokens += finiteNumber(usage.totalTokens);
 
     if (model) {
-      model.input += usage.input ?? 0;
-      model.output += usage.output ?? 0;
-      model.cacheRead += usage.cacheRead ?? 0;
-      model.cacheWrite += usage.cacheWrite ?? 0;
-      model.cost += usage.cost?.total ?? 0;
+      model.input += input;
+      model.output += output;
+      model.cacheRead += cacheRead;
+      model.cacheWrite += cacheWrite;
+      model.cost += cost;
     }
   }
 
-  if (Array.isArray(msg.content)) {
-    for (const block of msg.content) {
-      if (block?.type === "toolCall" && block.name) {
-        collectors.toolCallMap.set(block.name, (collectors.toolCallMap.get(block.name) ?? 0) + 1);
-      }
-    }
+  if (!Array.isArray(message.content)) return;
+  for (const block of message.content) {
+    if (!isRecord(block) || block.type !== "toolCall" || typeof block.name !== "string") continue;
+    collectors.toolCalls.set(block.name, (collectors.toolCalls.get(block.name) ?? 0) + 1);
   }
 }
 
-/** Ensure a model usage collector exists for a message, if provider/model data is present. */
-function ensureMessageModel(modelMap: Map<string, ModelUsage>, msg: any): ModelUsage | undefined {
-  if (!msg.provider || !msg.model) return undefined;
-  const key = msg.provider + "/" + msg.model;
-  const existing = modelMap.get(key);
+function ensureMessageModel(
+  models: Map<string, ModelUsage>,
+  message: Record<string, unknown>,
+): ModelUsage | undefined {
+  if (typeof message.provider !== "string" || typeof message.model !== "string") return undefined;
+  const key = `${message.provider}/${message.model}`;
+  const existing = models.get(key);
   if (existing) {
     existing.count += 1;
     return existing;
   }
 
   const model: ModelUsage = {
-    provider: msg.provider,
-    modelId: msg.model,
+    provider: message.provider,
+    modelId: message.model,
     count: 1,
     input: 0,
     output: 0,
@@ -151,20 +194,42 @@ function ensureMessageModel(modelMap: Map<string, ModelUsage>, msg: any): ModelU
     cacheWrite: 0,
     cost: 0,
   };
-  modelMap.set(key, model);
+  models.set(key, model);
   return model;
 }
 
-/** Move collected maps into sorted arrays and finalize token totals. */
 function finishCollectors(stats: SessionStats, collectors: Collectors): void {
-  stats.toolCalls = mapToolUsage(collectors.toolCallMap);
-  stats.models = Array.from(collectors.modelMap.values()).sort((a, b) => b.count - a.count);
+  stats.toolCalls = mapToolUsage(collectors.toolCalls);
+  stats.models = [...collectors.models.values()].sort((left, right) => right.count - left.count);
   finalizeTotalTokens(stats, collectors.reportedTotalTokens);
 }
 
-/** Convert a tool usage map into a sorted array. */
-function mapToolUsage(toolCallMap: Map<string, number>): ToolUsage[] {
-  return Array.from(toolCallMap.entries())
+function mapToolUsage(toolCalls: ReadonlyMap<string, number>): ToolUsage[] {
+  return [...toolCalls.entries()]
     .map(([name, count]) => ({ name, count }))
-    .sort((a, b) => b.count - a.count);
+    .sort((left, right) => right.count - left.count || left.name.localeCompare(right.name));
+}
+
+function parseEntry(line: string): SessionEntryLike | undefined {
+  if (!line.trim()) return undefined;
+  try {
+    const value: unknown = JSON.parse(line);
+    return isRecord(value) ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function parseTimestamp(value: unknown): number | undefined {
+  if (typeof value !== "string" && typeof value !== "number") return undefined;
+  const timestamp = typeof value === "number" ? value : Date.parse(value);
+  return Number.isFinite(timestamp) ? timestamp : undefined;
+}
+
+function finiteNumber(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }

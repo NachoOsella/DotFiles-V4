@@ -1,0 +1,10 @@
+{
+  "name": "pi-session-stats",
+  "private": true,
+  "type": "module",
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
+    "effect": "4.0.0-beta.98"
+  }
+}

@@ -1,17 +1,13 @@
 {
-  "lastChangelogVersion": "0.80.8",
+  "lastChangelogVersion": "0.80.10",
   "theme": "gruvbox-material-dark-hard",
-  "defaultThinkingLevel": "off",
+  "defaultThinkingLevel": "medium",
   "hideThinkingBlock": false,
-  "quietStartup": true,
-  "packages": [
-    "git:github.com/nicobailon/pi-web-access",
-    "git:https://github.com/capyup/pi-goal"
-  ],
+  "quietStartup": false,
   "enableSkillCommands": true,
   "extensions": [],
   "defaultProvider": "openai-codex",
-  "defaultModel": "gpt-5.6-sol",
+  "defaultModel": "gpt-5.6-terra",
   "steeringMode": "one-at-a-time",
   "terminal": {
     "showTerminalProgress": false

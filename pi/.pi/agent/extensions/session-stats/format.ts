@@ -1,5 +1,6 @@
+import type { Theme } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-import type { SessionStats } from "./types.js";
+import type { SessionStats } from "./types.ts";
 
 /** Format large counts using compact suffixes. */
 export function formatNumber(num: number): string {
@@ -48,13 +49,17 @@ export function fitToWidth(text: string, width: number): string {
 }
 
 /** Apply a theme foreground token when a theme is available. */
-export function color(theme: any, token: string, text: string): string {
-  return theme?.fg ? theme.fg(token, text) : text;
+export function color(
+  theme: Theme | undefined,
+  token: Parameters<Theme["fg"]>[0],
+  text: string,
+): string {
+  return theme ? theme.fg(token, text) : text;
 }
 
 /** Apply bold styling when a theme is available. */
-export function bold(theme: any, text: string): string {
-  return theme?.bold ? theme.bold(text) : text;
+export function bold(theme: Theme | undefined, text: string): string {
+  return theme ? theme.bold(text) : text;
 }
 
 /** Pad a possibly styled string to a visible width. */
@@ -63,17 +68,23 @@ export function padRightVisible(text: string, width: number): string {
 }
 
 /** Build a simple horizontal progress bar. */
-export function progressBar(value: number, max: number, width: number, theme?: any): string {
+export function progressBar(
+  value: number,
+  max: number,
+  width: number,
+  theme?: Theme,
+  fillToken: Parameters<Theme["fg"]>[0] = "accent",
+): string {
   const safeMax = Math.max(1, max);
   const ratio = Math.max(0, Math.min(1, value / safeMax));
   const filled = Math.round(ratio * width);
-  return color(theme, "accent", "█".repeat(filled)) + color(theme, "dim", "░".repeat(Math.max(0, width - filled)));
+  return color(theme, fillToken, "█".repeat(filled)) + color(theme, "dim", "░".repeat(Math.max(0, width - filled)));
 }
 
 /** Format cache hit rate with a bar. */
-export function formatCacheHit(input: number, cacheRead: number, theme?: any): string {
+export function formatCacheHit(input: number, cacheRead: number, theme?: Theme): string {
   const hitRate = readCacheHitRate(input, cacheRead);
-  return formatPercent(hitRate).padStart(5) + " " + progressBar(hitRate, 100, 10, theme);
+  return formatPercent(hitRate).padStart(5) + " " + progressBar(hitRate, 100, 10, theme, "success");
 }
 
 /** Finalize total token count from component counters and reported provider totals. */

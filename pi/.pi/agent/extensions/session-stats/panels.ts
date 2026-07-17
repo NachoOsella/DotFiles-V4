@@ -1,52 +1,89 @@
-import { truncateToWidth } from "@earendil-works/pi-tui";
-import { mkBox } from "./box.js";
-import { bold, color, fmtCost, formatCacheHit, formatNumber, fitToWidth } from "./format.js";
-import type { AggregatedModelUsage, ToolUsage } from "./types.js";
+import type { Theme } from "@earendil-works/pi-coding-agent";
+import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { color, fmtCost, formatNumber, formatPercent, padRightVisible } from "./format.ts";
+import type { AggregatedModelUsage, ToolUsage } from "./types.ts";
 
-/** Render a tool-usage panel. */
-export function buildToolBox(tools: ToolUsage[], width: number, theme?: any): string {
-  if (tools.length === 0) return "";
-  const box = mkBox(width, theme);
+const MAX_VISIBLE_TOOLS = 5;
+const MAX_VISIBLE_MODELS = 3;
+
+/** Render only the highest-volume tools and collapse the long tail. */
+export function buildToolRows(
+  tools: readonly ToolUsage[],
+  contentWidth: number,
+  theme?: Theme,
+): string[] {
+  const compact = compactToolUsage(tools, MAX_VISIBLE_TOOLS);
+  if (compact.length === 0) return [color(theme, "dim", "No tool calls")];
+
   const total = Math.max(1, tools.reduce((sum, tool) => sum + tool.count, 0));
-  const maxCount = Math.max(1, tools[0].count);
-  const barMax = Math.min(20, Math.max(8, width - 36));
-  const maxNameLen = Math.min(18, Math.max(8, width - 38));
+  const maxCount = Math.max(1, compact[0]?.count ?? 1);
+  const nameWidth = Math.max(10, Math.min(18, Math.floor(contentWidth * 0.34)));
+  const countWidth = 6;
+  const percentWidth = 5;
+  const barWidth = Math.max(6, contentWidth - nameWidth - countWidth - percentWidth - 4);
 
-  const lines: string[] = [box.hline(), box.sectionCentered("TOOL USAGE"), box.divider()];
-  for (const tool of tools) {
-    const barLen = Math.max(1, Math.round((tool.count / maxCount) * barMax));
-    const bar = color(theme, "accent", "█".repeat(barLen)) + color(theme, "dim", "░".repeat(Math.max(0, barMax - barLen)));
-    const pct = ((tool.count / total) * 100).toFixed(0) + "%";
-    const name = fitToWidth(tool.name, maxNameLen);
-    const countStr = truncateToWidth(formatNumber(tool.count), 7, "", false).padStart(7);
-    const pctStr = pct.padStart(4);
-    const row = " " + color(theme, "text", name) + " " + bar + " " + color(theme, "text", countStr) + color(theme, "dim", " (" + pctStr + ")");
-    lines.push(box.content(row));
-  }
-  lines.push(box.hlineEnd());
-  return lines.join("\n");
+  return compact.map((tool) => {
+    const name = padRightVisible(truncateToWidth(tool.name, nameWidth, "…", false), nameWidth);
+    const filled = Math.max(1, Math.round((tool.count / maxCount) * barWidth));
+    const bar =
+      color(theme, tool.name === "Other" ? "muted" : "accent", "█".repeat(filled)) +
+      color(theme, "dim", "░".repeat(Math.max(0, barWidth - filled)));
+    const count = formatNumber(tool.count).padStart(countWidth);
+    const percent = formatPercent((tool.count / total) * 100).padStart(percentWidth);
+    return `${color(theme, tool.name === "Other" ? "muted" : "text", name)} ${bar} ${color(theme, tool.name === "Other" ? "muted" : "accent", count)} ${color(theme, "dim", percent)}`;
+  });
 }
 
-/** Render a model-usage panel. */
-export function buildModelBox(models: AggregatedModelUsage[], width: number, theme?: any): string {
-  if (models.length === 0) return "";
-  const box = mkBox(width, theme);
-  const lines: string[] = [box.hline(), box.sectionCentered("MODEL USAGE"), box.divider()];
+/** Render model usage as a compact aligned table instead of repeated cards. */
+export function buildModelRows(
+  models: readonly AggregatedModelUsage[],
+  contentWidth: number,
+  theme?: Theme,
+): string[] {
+  if (models.length === 0) return [color(theme, "dim", "No model usage")];
 
-  models.forEach((model, index) => {
-    const key = model.provider + "/" + model.modelId;
-    lines.push(box.content(" " + color(theme, "toolTitle", bold(theme, key))));
-    lines.push(box.row("Messages", formatNumber(model.messages)));
-    lines.push(box.row("Input", formatNumber(model.input)));
-    lines.push(box.row("Output", formatNumber(model.output)));
-    lines.push(box.row("Cache Read", formatNumber(model.cacheRead)));
-    lines.push(box.row("Read Cache Hit", formatCacheHit(model.input, model.cacheRead, theme)));
-    lines.push(box.row("Cost", fmtCost(model.cost)));
-    if (index < models.length - 1) {
-      lines.push(box.divider());
-    }
-  });
+  const visible = models.slice(0, MAX_VISIBLE_MODELS);
+  const messageWidth = 5;
+  const tokenWidth = 8;
+  const costWidth = 8;
+  const nameWidth = Math.max(12, contentWidth - messageWidth - tokenWidth - costWidth - 3);
+  const header =
+    padRightVisible("MODEL", nameWidth) +
+    " " + "MSG".padStart(messageWidth) +
+    " " + "TOKENS".padStart(tokenWidth) +
+    " " + "COST".padStart(costWidth);
 
-  lines.push(box.hlineEnd());
-  return lines.join("\n");
+  const rows = [color(theme, "dim", header)];
+  for (const model of visible) {
+    const modelName = truncateToWidth(`${model.provider}/${model.modelId}`, nameWidth, "…", false);
+    const tokens = model.input + model.output + model.cacheRead;
+    rows.push(
+      color(theme, "text", padRightVisible(modelName, nameWidth)) +
+        " " + color(theme, "muted", formatNumber(model.messages).padStart(messageWidth)) +
+        " " + color(theme, "accent", formatNumber(tokens).padStart(tokenWidth)) +
+        " " + color(theme, model.cost > 0 ? "warning" : "muted", fmtCost(model.cost).padStart(costWidth)),
+    );
+  }
+
+  const hidden = models.length - visible.length;
+  if (hidden > 0) {
+    rows.push(color(theme, "dim", `+ ${hidden} more model${hidden === 1 ? "" : "s"}`));
+  }
+  return rows.map((row) => truncateToWidth(row, contentWidth, "…", false));
+}
+
+/** Keep the dominant tools visible and combine everything else into one row. */
+export function compactToolUsage(
+  tools: readonly ToolUsage[],
+  limit = MAX_VISIBLE_TOOLS,
+): ToolUsage[] {
+  const sorted = [...tools].sort(
+    (left, right) => right.count - left.count || left.name.localeCompare(right.name),
+  );
+  if (sorted.length <= limit) return sorted;
+
+  const visibleCount = Math.max(1, limit - 1);
+  const visible = sorted.slice(0, visibleCount);
+  const otherCount = sorted.slice(visibleCount).reduce((sum, tool) => sum + tool.count, 0);
+  return [...visible, { name: "Other", count: otherCount }];
 }

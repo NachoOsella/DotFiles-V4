@@ -1,6 +1,6 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
-import type { Todo, TodoDetails } from "./types.js";
+import type { Todo, TodoDetails } from "./types.ts";
 
 /** Render the compact todowrite call header. */
 export function renderTodoCall(args: { todos?: Todo[] }, theme: Theme): Text {

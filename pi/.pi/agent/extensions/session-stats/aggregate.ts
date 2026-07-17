@@ -1,7 +1,7 @@
-import type { AggregatedModelUsage, SessionStats, ToolUsage } from "./types.js";
+import type { AggregatedModelUsage, SessionStats, ToolUsage } from "./types.ts";
 
 /** Aggregate tool usage across sessions. */
-export function buildToolUsage(sessions: SessionStats[]): ToolUsage[] {
+export function buildToolUsage(sessions: readonly SessionStats[]): ToolUsage[] {
   const map = new Map<string, number>();
   for (const session of sessions) {
     for (const tool of session.toolCalls) {
@@ -10,11 +10,11 @@ export function buildToolUsage(sessions: SessionStats[]): ToolUsage[] {
   }
   return Array.from(map.entries())
     .map(([name, count]) => ({ name, count }))
-    .sort((a, b) => b.count - a.count);
+    .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
 }
 
 /** Aggregate model usage across sessions. */
-export function buildModelStats(sessions: SessionStats[]): AggregatedModelUsage[] {
+export function buildModelStats(sessions: readonly SessionStats[]): AggregatedModelUsage[] {
   const map = new Map<string, AggregatedModelUsage>();
   for (const session of sessions) {
     for (const model of session.models) {
@@ -41,5 +41,7 @@ export function buildModelStats(sessions: SessionStats[]): AggregatedModelUsage[
       }
     }
   }
-  return Array.from(map.values()).sort((a, b) => b.messages - a.messages);
+  return Array.from(map.values()).sort(
+    (a, b) => b.messages - a.messages || a.modelId.localeCompare(b.modelId),
+  );
 }

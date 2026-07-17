@@ -1,32 +1,68 @@
-import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import { Text, matchesKey, truncateToWidth } from "@earendil-works/pi-tui";
+import type { ExtensionCommandContext, Theme } from "@earendil-works/pi-coding-agent";
+import { matchesKey, truncateToWidth } from "@earendil-works/pi-tui";
 
-/** Show stats output in a lightweight custom modal or notify fallback. */
-export function showStatsModal(buildFn: (width: number, theme?: any) => string, ctx: ExtensionCommandContext): void {
-  if (!ctx.hasUI) {
-    ctx.ui.notify(buildFn(56), "info");
+/** Render statistics as a centered, width-safe dashboard overlay. */
+export async function showStatsModal(
+  buildOutput: (width: number, theme?: Theme) => string,
+  ctx: ExtensionCommandContext,
+): Promise<void> {
+  if (ctx.mode !== "tui") {
+    if (ctx.hasUI) ctx.ui.notify(buildOutput(60), "info");
     return;
   }
 
-  ctx.ui.custom((_tui: any, theme: any, _kb: any, done: (value?: unknown) => void) => {
-    const output = new Text("", 0, 0);
+  await ctx.ui.custom<void>(
+    (tui, theme, _keybindings, done) => {
+      let cachedWidth: number | undefined;
+      let cachedLines: string[] | undefined;
+      let closed = false;
 
-    return {
-      render: (width: number) => {
-        const boxWidth = Math.max(2, Math.min(56, width - 2));
-        const rendered = buildFn(boxWidth, theme)
-          .split("\n")
-          .map((line) => truncateToWidth(line, width, "", false))
-          .join("\n");
-        output.setText(rendered);
-        return output.render(width);
+      const close = () => {
+        if (closed) return;
+        closed = true;
+        done();
+      };
+
+      return {
+        render(width: number): string[] {
+          if (cachedLines && cachedWidth === width) return cachedLines;
+          const dashboardWidth = Math.max(32, width);
+          cachedLines = buildOutput(dashboardWidth, theme)
+            .split("\n")
+            .map((line) => truncateToWidth(line, width, "", false));
+          cachedWidth = width;
+          return cachedLines;
+        },
+        invalidate(): void {
+          cachedWidth = undefined;
+          cachedLines = undefined;
+        },
+        handleInput(data: string): void {
+          if (
+            matchesKey(data, "escape") ||
+            matchesKey(data, "enter") ||
+            data.toLowerCase() === "q"
+          ) {
+            close();
+            return;
+          }
+          tui.requestRender();
+        },
+        dispose(): void {
+          closed = true;
+          cachedLines = undefined;
+        },
+      };
+    },
+    {
+      overlay: true,
+      overlayOptions: {
+        anchor: "center",
+        width: 62,
+        minWidth: 40,
+        maxHeight: "90%",
+        margin: 1,
       },
-      invalidate: () => output.invalidate(),
-      handleInput: (data: string) => {
-        if (matchesKey(data, "escape") || matchesKey(data, "enter") || matchesKey(data, "q")) {
-          done(undefined);
-        }
-      },
-    };
-  });
+    },
+  );
 }
