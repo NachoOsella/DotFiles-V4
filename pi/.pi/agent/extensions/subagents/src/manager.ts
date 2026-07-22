@@ -41,7 +41,7 @@ import {
   SpawnError,
 } from "./domain.ts";
 
-export const MAX_RUNNING = 4;
+export const MAX_RUNNING = 8;
 export const MAX_TRACKED = 64;
 const STOP_TIMEOUT_MS = 5_000;
 const ERROR_TEXT_MAX_LENGTH = 4_096;

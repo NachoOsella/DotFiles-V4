@@ -3,7 +3,7 @@
  *
  * Tools (for the parent LLM):
  * - subagent_spawn: fire-and-forget spawn (prompt, title, working_dir, model,
- *   reasoning_effort). Max 4 running at once.
+ *   reasoning_effort). Max 8 running at once.
  * - subagent_wait: block until the listed subagents settle, return results.
  * - subagent_cancel: stop one or more running subagents.
  * - subagent_check: peek at a subagent's status and recent activity.

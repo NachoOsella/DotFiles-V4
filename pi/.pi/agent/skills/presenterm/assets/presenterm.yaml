@@ -1,0 +1,23 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/mfontanini/presenterm/master/config-file-schema.json
+
+defaults:
+  max_columns: 100
+  max_columns_alignment: center
+  max_rows: 32
+  max_rows_alignment: center
+  validate_overflows: when_developing
+  incremental_lists:
+    pause_before: false
+    pause_after: false
+
+transition:
+  duration_millis: 320
+  frames: 20
+  animation:
+    style: fade
+
+export:
+  dimensions:
+    columns: 100
+    rows: 32
+  pauses: new_slide

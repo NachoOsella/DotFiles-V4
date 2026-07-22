@@ -5,6 +5,7 @@ import { matchesKey, truncateToWidth } from "@earendil-works/pi-tui";
 export async function showStatsModal(
   buildOutput: (width: number, theme?: Theme) => string,
   ctx: ExtensionCommandContext,
+  onInput?: (data: string) => boolean,
 ): Promise<void> {
   if (ctx.mode !== "tui") {
     if (ctx.hasUI) ctx.ui.notify(buildOutput(60), "info");
@@ -38,6 +39,12 @@ export async function showStatsModal(
           cachedLines = undefined;
         },
         handleInput(data: string): void {
+          if (onInput?.(data)) {
+            cachedWidth = undefined;
+            cachedLines = undefined;
+            tui.requestRender();
+            return;
+          }
           if (
             matchesKey(data, "escape") ||
             matchesKey(data, "enter") ||

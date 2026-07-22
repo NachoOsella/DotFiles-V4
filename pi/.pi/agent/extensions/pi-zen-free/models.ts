@@ -32,11 +32,12 @@ export function buildModelConfigs(
       reasoning: info.reasoning ?? false,
       thinkingLevelMap,
       input: info.modalities?.input?.includes("image") ? ["text", "image"] : ["text"],
+      // Keep provider pricing metadata instead of assuming every zero-input model is free.
       cost: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
+        input: info.cost?.input ?? 0,
+        output: info.cost?.output ?? 0,
+        cacheRead: info.cost?.cache_read ?? 0,
+        cacheWrite: info.cost?.cache_write ?? 0,
       },
       contextWindow: info.limit?.context ?? 128000,
       maxTokens: info.limit?.output ?? 16384,

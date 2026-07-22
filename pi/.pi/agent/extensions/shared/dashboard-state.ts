@@ -1,5 +1,6 @@
 export const MODEL_INFO_CHANNEL = "dashboard:model-info";
 export const GIT_INFO_CHANNEL = "dashboard:git-info";
+export const LSP_INFO_CHANNEL = "dashboard:lsp-info";
 export const REFRESH_CHANNEL = "dashboard:refresh";
 
 export interface ModelInfoState {
@@ -13,6 +14,12 @@ export interface ModelInfoState {
   cost: number;
   tokensPerSecond: number | null;
   generating: boolean;
+}
+
+export interface LspInfoState {
+  enabled: boolean;
+  message: string;
+  servers: string[];
 }
 
 export interface PullRequestInfo {
@@ -52,12 +59,30 @@ export function emptyGitInfoState(): GitInfoState {
   };
 }
 
+export function emptyLspInfoState(): LspInfoState {
+  return {
+    enabled: false,
+    message: "LSP disabled",
+    servers: [],
+  };
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
 function isNullableNumber(value: unknown) {
   return value === null || typeof value === "number";
+}
+
+export function isLspInfoState(value: unknown): value is LspInfoState {
+  if (!isRecord(value)) return false;
+  return (
+    typeof value.enabled === "boolean" &&
+    typeof value.message === "string" &&
+    Array.isArray(value.servers) &&
+    value.servers.every((server) => typeof server === "string")
+  );
 }
 
 export function isModelInfoState(value: unknown): value is ModelInfoState {

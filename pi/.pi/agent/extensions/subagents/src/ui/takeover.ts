@@ -476,38 +476,59 @@ class TakeoverView implements Component, Focusable {
 
   private viewportHeight(): number {
     const rows = this.tui.terminal.rows || 30;
-    // The complete view renders viewport + 7 chrome rows. Using rows - 8
-    // makes the overlay exactly terminal rows - 1.
-    return Math.max(6, rows - 8);
+    // The complete view renders viewport + 8 chrome rows and leaves pi's
+    // final footer row visible.
+    return Math.max(6, rows - 9);
   }
 
   render(width: number): string[] {
     const theme = this.theme;
-    const border = theme.fg("borderAccent", "─".repeat(Math.max(1, width)));
+    const frameWidth = Math.max(1, width - 2);
+    const contentWidth = Math.max(1, frameWidth - 2);
+    const horizontal = (left: string, fill: string, right: string) =>
+      theme.fg("borderAccent", left + fill.repeat(frameWidth) + right);
+    const framed = (content: string) => {
+      const clipped = truncateToWidth(content, contentWidth);
+      return (
+        theme.fg("borderAccent", "│") +
+        " " +
+        clipped +
+        " ".repeat(Math.max(0, contentWidth - visibleWidth(clipped) + 1)) +
+        theme.fg("borderAccent", "│")
+      );
+    };
     const lines: string[] = [];
     const snap = this.snap();
 
     if (!snap) {
-      lines.push(border);
-      lines.push(theme.fg("dim", `${this.id} is no longer tracked`));
-      lines.push(border);
-      return lines;
+      return [
+        horizontal("╭", "─", "╮"),
+        framed(theme.fg("dim", `${this.id} is no longer tracked`)),
+        horizontal("╰", "─", "╯"),
+      ];
     }
 
-    lines.push(border);
     const utilization = formatContextUtilization(snap.usage);
-    const header =
+    const title =
       `${statusGlyph(snap, theme)} ` +
-      theme.fg("accent", theme.bold(`${snap.id} · ${snap.title}`)) +
-      theme.fg("muted", ` · ${snap.status} · ${formatElapsed(snap)}`) +
-      theme.fg("dim", ` · ${snap.backend}: ${snap.meta.modelLabel ?? "?"}`) +
-      (utilization ? theme.fg("dim", ` · ${utilization}`) : "");
-    lines.push(truncateToWidth(header, width));
-    lines.push(border);
+      theme.fg("accent", theme.bold(snap.title)) +
+      theme.fg("dim", `  ${snap.id}`);
+    const metadata = [
+      statusWord(snap, theme),
+      theme.fg("muted", formatElapsed(snap)),
+      theme.fg("muted", snap.meta.modelLabel ?? "unknown model"),
+      utilization ? theme.fg("muted", utilization) : "",
+    ]
+      .filter(Boolean)
+      .join(theme.fg("dim", "  ·  "));
+    lines.push(horizontal("╭", "─", "╮"));
+    lines.push(framed(title));
+    lines.push(framed(metadata));
+    lines.push(horizontal("├", "─", "┤"));
 
     // Fixed-height transcript viewport. Error and scroll status consume rows
     // inside the viewport so streaming/scrolling never changes overlay height.
-    const transcript = buildTranscriptLines(snap, width, theme);
+    const transcript = buildTranscriptLines(snap, contentWidth, theme);
     const viewport = this.viewportHeight();
     const errorRows = snap.errorText ? 1 : 0;
     const scrollRows = this.scrollOffset > 0 ? 1 : 0;
@@ -517,9 +538,7 @@ class TakeoverView implements Component, Focusable {
 
     const body: string[] = [];
     if (snap.errorText) {
-      body.push(
-        truncateToWidth(theme.fg("error", `error: ${snap.errorText}`), width),
-      );
+      body.push(theme.fg("error", `error: ${snap.errorText}`));
     }
 
     const capacity = Math.max(
@@ -528,32 +547,43 @@ class TakeoverView implements Component, Focusable {
     );
     const end = transcript.length - this.scrollOffset;
     const visible = transcript.slice(Math.max(0, end - capacity), end);
-    if (visible.length === 0) body.push(theme.fg("dim", "(no output yet)"));
+    if (visible.length === 0) body.push(theme.fg("dim", "Waiting for output..."));
     else body.push(...visible);
 
     if (this.scrollOffset > 0) {
       body.push(
-        truncateToWidth(
-          theme.fg("dim", `... ${this.scrollOffset} lines below · ↓/pgdn`),
-          width,
-        ),
+        theme.fg("dim", `↓ ${this.scrollOffset} newer lines · down/page down`),
       );
     }
     while (body.length < viewport) body.push("");
-    lines.push(...body.slice(0, viewport));
-
-    lines.push(border);
-    lines.push(...this.input.render(width));
+    // Card lines (from buildTranscriptLines) already have their own box-drawing
+    // borders — pad without adding extra framing. Plain lines get the framed
+    // treatment.
+    const isCardLine = (s: string) => {
+      const plain = s.replace(/\x1b\[[0-9;]*m/g, "");
+      const ch = plain[0];
+      return ch === "\u256d" || ch === "\u2502" || ch === "\u2570" || ch === "\u251c";
+    };
     lines.push(
-      truncateToWidth(
-        theme.fg(
-          "dim",
-          `${configuredKeys(this.keybindings, "tui.input.submit")} send · ${configuredKeys(this.keybindings, "app.interrupt")} back · ${configuredKeys(this.keybindings, "app.clear")} abort run · ${configuredKeys(this.keybindings, "tui.editor.cursorUp")}/${configuredKeys(this.keybindings, "tui.editor.cursorDown")} scroll · ${configuredKeys(this.keybindings, "tui.editor.pageUp")}/${configuredKeys(this.keybindings, "tui.editor.pageDown")} page`,
-        ),
-        width,
-      ),
+      ...body.slice(0, viewport).map((line) => {
+        if (isCardLine(line)) {
+          const clipped = truncateToWidth(line, contentWidth);
+          return clipped + " ".repeat(Math.max(0, contentWidth - visibleWidth(clipped)));
+        }
+        return framed(line);
+      }),
     );
-    lines.push(border);
+
+    lines.push(horizontal("├", "─", "┤"));
+    const inputLines = this.input.render(Math.max(1, contentWidth - 2));
+    lines.push(framed(theme.fg("accent", "› ") + (inputLines[0] ?? "")));
+    const hints =
+      `${configuredKeys(this.keybindings, "tui.input.submit")} send  ·  ` +
+      `${configuredKeys(this.keybindings, "tui.editor.cursorUp")}/${configuredKeys(this.keybindings, "tui.editor.cursorDown")} scroll  ·  ` +
+      `${configuredKeys(this.keybindings, "app.clear")} abort  ·  ` +
+      `${configuredKeys(this.keybindings, "app.interrupt")} back`;
+    lines.push(framed(theme.fg("dim", hints)));
+    lines.push(horizontal("╰", "─", "╯"));
     return lines;
   }
 

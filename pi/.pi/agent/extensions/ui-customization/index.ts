@@ -13,11 +13,14 @@ import {
 } from "@earendil-works/pi-tui";
 import {
   emptyGitInfoState,
+  emptyLspInfoState,
   emptyModelInfoState,
   GIT_INFO_CHANNEL,
+  LSP_INFO_CHANNEL,
   MODEL_INFO_CHANNEL,
   REFRESH_CHANNEL,
   isGitInfoState,
+  isLspInfoState,
   isModelInfoState,
 } from "../shared/dashboard-state.ts";
 
@@ -126,6 +129,7 @@ export default function uiCustomization(pi: ExtensionAPI) {
   let title = "pi";
   let modelInfo = emptyModelInfoState();
   let gitInfo = emptyGitInfoState();
+  let lspInfo = emptyLspInfoState();
   let requestRender: (() => void) | undefined;
   let activeTui: DashboardTui | undefined;
   let themeRemovalTimers: Array<ReturnType<typeof setTimeout>> = [];
@@ -139,6 +143,12 @@ export default function uiCustomization(pi: ExtensionAPI) {
   const stopGitListener = pi.events.on(GIT_INFO_CHANNEL, (value) => {
     if (!isGitInfoState(value)) return;
     gitInfo = value;
+    requestRender?.();
+  });
+
+  const stopLspListener = pi.events.on(LSP_INFO_CHANNEL, (value) => {
+    if (!isLspInfoState(value)) return;
+    lspInfo = value;
     requestRender?.();
   });
 
@@ -216,6 +226,11 @@ export default function uiCustomization(pi: ExtensionAPI) {
           const lines = [
             columns(directory, theme.fg("muted", model), width),
             columns(theme.fg("muted", usage), theme.fg("muted", git), width),
+            truncateToWidth(
+              theme.fg("dim", lspInfo.message),
+              width,
+              theme.fg("dim", "..."),
+            ),
           ];
 
           // Extension statuses render after the two dashboard lines, one per row.
@@ -242,6 +257,7 @@ export default function uiCustomization(pi: ExtensionAPI) {
     title = formatDirectory(ctx.cwd);
     modelInfo = emptyModelInfoState();
     gitInfo = emptyGitInfoState();
+    lspInfo = emptyLspInfoState();
     install(ctx);
   });
 
@@ -252,6 +268,7 @@ export default function uiCustomization(pi: ExtensionAPI) {
   pi.on("session_shutdown", (_event, ctx) => {
     stopModelListener();
     stopGitListener();
+    stopLspListener();
     for (const timer of themeRemovalTimers) clearTimeout(timer);
     themeRemovalTimers = [];
     activeTui = undefined;

@@ -57,11 +57,17 @@ export function buildModelRows(
   for (const model of visible) {
     const modelName = truncateToWidth(`${model.provider}/${model.modelId}`, nameWidth, "…", false);
     const tokens = model.input + model.output + model.cacheRead;
+    const cost =
+      model.pricingSource === "unknown"
+        ? "?"
+        : model.pricingSource === "mixed" || model.pricingSource === "estimated"
+          ? "~" + fmtCost(model.cost)
+          : fmtCost(model.cost);
     rows.push(
       color(theme, "text", padRightVisible(modelName, nameWidth)) +
         " " + color(theme, "muted", formatNumber(model.messages).padStart(messageWidth)) +
         " " + color(theme, "accent", formatNumber(tokens).padStart(tokenWidth)) +
-        " " + color(theme, model.cost > 0 ? "warning" : "muted", fmtCost(model.cost).padStart(costWidth)),
+        " " + color(theme, model.pricingSource === "unknown" || model.cost > 0 ? "warning" : "muted", cost.padStart(costWidth)),
     );
   }
 

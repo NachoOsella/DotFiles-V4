@@ -35,6 +35,7 @@ Preserve:
 | `codex-plan-mode` | `codex-plan-mode/index.ts` | Entry handles state and Pi hooks; plan parsing, prompt builders, message helpers, and request-user-input are split out. |
 | `checkpoint` | `checkpoint/checkpoint.ts` | Package entry preserved; core git operations are in `checkpoint-core.ts`. |
 | `session-stats` | `session-stats/index.ts` | Entry handles `/stats`; parser, aggregation, formatting, modal, panels, and output builders are split out. |
+| `lsp` | `lsp/index.ts` | Effect v4 LSP clients, semantic navigation, and post-edit diagnostics. |
 | `pi-diff-minimal` | `pi-diff-minimal/src/index.ts` | Package-style extension; renderer is the main remaining monolith. |
 | `pi-engram-memory` | `pi-engram-memory/index.ts` | Largest extension; config, types, pure utilities, row formatting, and tool renderers are split out. |
 

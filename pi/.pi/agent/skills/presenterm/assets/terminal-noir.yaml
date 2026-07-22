@@ -1,0 +1,200 @@
+---
+extends: tokyonight-night
+
+default:
+  margin:
+    percent: 7
+  colors:
+    foreground: "c0caf5"
+    background: "16161e"
+
+column_layout:
+  margin:
+    fixed: 4
+
+slide_title:
+  alignment: left
+  margin:
+    percent: 7
+  prefix: "▍"
+  padding_top: 1
+  padding_bottom: 1
+  separator: false
+  bold: true
+  font_size: 2
+  colors:
+    foreground: "7dcfff"
+
+intro_slide:
+  title:
+    alignment: left
+    margin:
+      percent: 8
+    font_size: 2
+    colors:
+      foreground: "7aa2f7"
+  subtitle:
+    alignment: left
+    margin:
+      percent: 8
+    colors:
+      foreground: "bb9af7"
+  event:
+    alignment: left
+    margin:
+      percent: 8
+    colors:
+      foreground: "7dcfff"
+  location:
+    alignment: left
+    margin:
+      percent: 8
+    colors:
+      foreground: "9aa5ce"
+  date:
+    alignment: left
+    margin:
+      percent: 8
+    colors:
+      foreground: "e0af68"
+  author:
+    alignment: left
+    margin:
+      percent: 8
+    positioning: below_title
+    colors:
+      foreground: "9ece6a"
+  footer: false
+
+headings:
+  h1:
+    prefix: "◆"
+    bold: true
+    colors:
+      foreground: "7aa2f7"
+  h2:
+    prefix: "◇"
+    bold: true
+    colors:
+      foreground: "bb9af7"
+  h3:
+    prefix: "·"
+    colors:
+      foreground: "7dcfff"
+
+code:
+  alignment: center
+  minimum_size: 52
+  minimum_margin:
+    percent: 7
+  theme_name: visual-studio-dark-plus
+  padding:
+    horizontal: 2
+    vertical: 1
+  background: true
+  line_numbers: false
+
+inline_code:
+  colors:
+    foreground: "9ece6a"
+    background: "24283b"
+
+execution_output:
+  colors:
+    foreground: "c0caf5"
+    background: "24283b"
+  status:
+    running:
+      foreground: "7aa2f7"
+    success:
+      foreground: "9ece6a"
+    failure:
+      foreground: "f7768e"
+    not_started:
+      foreground: "e0af68"
+  padding:
+    horizontal: 2
+    vertical: 1
+
+block_quote:
+  prefix: "│ "
+  colors:
+    foreground: "a9b1d6"
+    background: "24283b"
+
+footer:
+  style: template
+  right: "<span style='color: p:muted'>{current_slide}/{total_slides}</span>"
+  height: 2
+
+palette:
+  colors:
+    accent: "7aa2f7"
+    accent2: "bb9af7"
+    cyan: "7dcfff"
+    success: "9ece6a"
+    warning: "e0af68"
+    danger: "f7768e"
+    muted: "737aa2"
+    text: "c0caf5"
+  classes:
+    accent:
+      foreground: "7aa2f7"
+    accent2:
+      foreground: "bb9af7"
+    muted:
+      foreground: "737aa2"
+    success:
+      foreground: "9ece6a"
+    warning:
+      foreground: "e0af68"
+    danger:
+      foreground: "f7768e"
+    badge:
+      foreground: "16161e"
+      background: "7dcfff"
+
+bold:
+  colors:
+    foreground: "7dcfff"
+
+italics:
+  colors:
+    foreground: "bb9af7"
+
+alert:
+  prefix: "▍ "
+  base_colors:
+    foreground: "c0caf5"
+    background: "24283b"
+  styles:
+    note:
+      color: "7aa2f7"
+      title: "Note"
+      icon: "i"
+    tip:
+      color: "9ece6a"
+      title: "Tip"
+      icon: "+"
+    important:
+      color: "bb9af7"
+      title: "Important"
+      icon: "!"
+    warning:
+      color: "e0af68"
+      title: "Warning"
+      icon: "!"
+    caution:
+      color: "f7768e"
+      title: "Caution"
+      icon: "×"
+
+mermaid:
+  background: transparent
+  theme: dark
+
+d2:
+  theme: 200
+
+layout_grid:
+  color: "7aa2f7"

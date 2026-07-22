@@ -1,7 +1,15 @@
 import { readFile } from "node:fs/promises";
 import { Data, Effect } from "effect";
 import { finalizeTotalTokens } from "./format.ts";
-import type { ModelUsage, SessionEntryLike, SessionStats, ToolUsage } from "./types.ts";
+import { calculateUsageCost, combinePricingSources } from "./pricing.ts";
+import type {
+  ModelPricingResolver,
+  ModelUsage,
+  PricingSource,
+  SessionEntryLike,
+  SessionStats,
+  ToolUsage,
+} from "./types.ts";
 
 /** Identifies a session file that could not be read. */
 export class SessionReadError extends Data.TaggedError("SessionReadError")<{
@@ -34,16 +42,20 @@ export function createEmptyStats(file: string, name?: string): SessionStats {
 /** Parse a persisted JSONL session as a composable Effect. */
 export function parseSessionFileEffect(
   filePath: string,
+  pricing?: ModelPricingResolver,
 ): Effect.Effect<SessionStats, SessionReadError> {
   return Effect.tryPromise({
     try: () => readFile(filePath, "utf8"),
     catch: (cause) => new SessionReadError({ path: filePath, cause }),
-  }).pipe(Effect.map((content) => parseSessionText(content, filePath)));
+  }).pipe(Effect.map((content) => parseSessionText(content, filePath, pricing)));
 }
 
 /** Promise adapter retained for callers outside an Effect pipeline. */
-export function parseSessionFile(filePath: string): Promise<SessionStats> {
-  return Effect.runPromise(parseSessionFileEffect(filePath));
+export function parseSessionFile(
+  filePath: string,
+  pricing?: ModelPricingResolver,
+): Promise<SessionStats> {
+  return Effect.runPromise(parseSessionFileEffect(filePath, pricing));
 }
 
 /** Parse the current in-memory branch from Pi's session manager. */
@@ -51,6 +63,7 @@ export function parseCurrentBranch(
   entries: readonly SessionEntryLike[],
   file: string,
   name?: string,
+  pricing?: ModelPricingResolver,
 ): SessionStats {
   const stats = createEmptyStats(file, name);
   const collectors = createCollectors();
@@ -61,7 +74,7 @@ export function parseCurrentBranch(
     const timestamp = parseTimestamp(entry.timestamp);
     firstTimestamp ??= timestamp;
     if (timestamp !== undefined) lastTimestamp = timestamp;
-    if (entry.type !== "session") collectEntry(stats, collectors, entry);
+    if (entry.type !== "session") collectEntry(stats, collectors, entry, pricing);
   }
 
   if (firstTimestamp !== undefined) stats.startTime = new Date(firstTimestamp).toISOString();
@@ -72,7 +85,11 @@ export function parseCurrentBranch(
   return stats;
 }
 
-function parseSessionText(content: string, filePath: string): SessionStats {
+function parseSessionText(
+  content: string,
+  filePath: string,
+  pricing?: ModelPricingResolver,
+): SessionStats {
   const stats = createEmptyStats(filePath);
   const collectors = createCollectors();
   let firstTimestamp: number | undefined;
@@ -88,7 +105,7 @@ function parseSessionText(content: string, filePath: string): SessionStats {
     if (entry.type === "session_info" && typeof entry.name === "string") {
       stats.name = entry.name;
     }
-    if (entry.type !== "session") collectEntry(stats, collectors, entry);
+    if (entry.type !== "session") collectEntry(stats, collectors, entry, pricing);
   }
 
   if (firstTimestamp !== undefined) stats.startTime = new Date(firstTimestamp).toISOString();
@@ -113,6 +130,7 @@ function collectEntry(
   stats: SessionStats,
   collectors: Collectors,
   entry: SessionEntryLike,
+  pricing?: ModelPricingResolver,
 ): void {
   if (entry.type !== "message" || !isRecord(entry.message)) return;
   const message = entry.message;
@@ -122,7 +140,7 @@ function collectEntry(
       stats.userMessages += 1;
       break;
     case "assistant":
-      collectAssistantMessage(stats, collectors, message);
+      collectAssistantMessage(stats, collectors, message, pricing);
       break;
     case "toolResult":
       stats.toolResults += 1;
@@ -137,6 +155,7 @@ function collectAssistantMessage(
   stats: SessionStats,
   collectors: Collectors,
   message: Record<string, unknown>,
+  pricingResolver?: ModelPricingResolver,
 ): void {
   stats.assistantMessages += 1;
   const model = ensureMessageModel(collectors.models, message);
@@ -147,7 +166,23 @@ function collectAssistantMessage(
     const output = finiteNumber(usage.output);
     const cacheRead = finiteNumber(usage.cacheRead);
     const cacheWrite = finiteNumber(usage.cacheWrite);
-    const cost = isRecord(usage.cost) ? finiteNumber(usage.cost.total) : 0;
+    const cacheWrite1h = finiteNumber(usage.cacheWrite1h);
+    const reportedCost = isRecord(usage.cost) ? finiteNumber(usage.cost.total) : 0;
+    const provider = typeof message.provider === "string" ? message.provider : undefined;
+    const modelId = typeof message.model === "string" ? message.model : undefined;
+    const pricing =
+      provider && modelId ? pricingResolver?.(provider, modelId) : undefined;
+    const pricingSource: PricingSource =
+      reportedCost > 0
+        ? "reported"
+        : pricing?.source ?? (pricing ? "catalog" : "unknown");
+    const cost =
+      reportedCost > 0
+        ? reportedCost
+        : calculateUsageCost(
+            { input, output, cacheRead, cacheWrite, cacheWrite1h },
+            pricing,
+          );
 
     stats.totalTokens.input += input;
     stats.totalTokens.output += output;
@@ -162,6 +197,10 @@ function collectAssistantMessage(
       model.cacheRead += cacheRead;
       model.cacheWrite += cacheWrite;
       model.cost += cost;
+      model.pricingSource = combinePricingSources(
+        model.pricingSource,
+        pricingSource,
+      );
     }
   }
 

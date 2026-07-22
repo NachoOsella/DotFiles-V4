@@ -41,6 +41,9 @@ const CHILD_TOOL_CALL_TIMEOUT_MS = 3 * 60 * 1_000;
 
 /** Tools that headless children must not receive. Everything else stays enabled. */
 const CHILD_EXCLUDED_TOOL_NAMES = [
+  // Each child session owns its tool resources. LSP calls can therefore start
+  // duplicate multi-gigabyte language servers that outlive the child run.
+  "lsp",
   "subagent_spawn",
   "subagent_wait",
   "subagent_cancel",

@@ -4,7 +4,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Effect } from "effect";
 import { renderTodoCall, renderTodoResult } from "./renderers.ts";
 import { TodoWriteParams } from "./schema.ts";
-import { buildDetails, resetTodoState, setTodos } from "./state.ts";
+import { buildDetails, removeSessionState, setTodos } from "./state.ts";
 import type { Todo } from "./types.ts";
 import { decodeStoredTodos, validateTodos } from "./validation.ts";
 import { clearWidget, refreshWidget, toggleWidget } from "./widget.ts";
@@ -22,14 +22,14 @@ export default function todowriteExtension(pi: ExtensionAPI) {
   });
 
   pi.on("session_start", (_event, ctx) => {
-    resetTodoState();
-    restoreTodos(ctx.sessionManager.getBranch());
+    const sessionId = ctx.sessionManager.getSessionId();
+    restoreTodos(sessionId, ctx.sessionManager.getBranch());
     clearWidget(ctx);
   });
 
   pi.on("session_shutdown", (_event, ctx) => {
     clearWidget(ctx);
-    resetTodoState();
+    removeSessionState(ctx.sessionManager.getSessionId());
   });
 
   pi.registerTool({
@@ -42,15 +42,14 @@ export default function todowriteExtension(pi: ExtensionAPI) {
     ].join(" "),
     promptSnippet: "Track session progress with a todo list",
     promptGuidelines: [
-      "Use todowrite when the task has 3+ meaningful steps or the user requests multiple changes.",
-      "Keep todos short and actionable with todowrite. Only one todo should be in_progress at a time.",
-      "Always rewrite the full todo list with todowrite. Do not use it for trivial one-step tasks.",
+      "Use todowrite for tasks with multiple meaningful steps; keep one item in_progress.",
     ],
     parameters: TodoWriteParams,
 
-    async execute(_toolCallId, params) {
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const sessionId = ctx.sessionManager.getSessionId();
       const todos = await Effect.runPromise(validateTodos(params.todos));
-      setTodos(todos);
+      setTodos(sessionId, todos);
       return {
         content: [{ type: "text" as const, text: `Todo list updated.${buildSummary(todos)}` }],
         details: buildDetails(todos),
@@ -66,8 +65,8 @@ export default function todowriteExtension(pi: ExtensionAPI) {
   });
 }
 
-/** Restore the latest todo snapshot on the active branch. */
-function restoreTodos(entries: readonly unknown[]): void {
+/** Restore the latest todo snapshot on the active branch for the given session. */
+function restoreTodos(sessionId: string, entries: readonly unknown[]): void {
   for (let index = entries.length - 1; index >= 0; index -= 1) {
     const entry = entries[index];
     if (!isRecord(entry) || entry.type !== "message" || !isRecord(entry.message)) continue;
@@ -77,7 +76,7 @@ function restoreTodos(entries: readonly unknown[]): void {
     }
 
     const restored = decodeStoredTodos(message.details.items);
-    if (restored) setTodos(restored);
+    if (restored) setTodos(sessionId, restored);
     return;
   }
 }

@@ -10,9 +10,8 @@ export const SUBAGENT_SPAWN_PROMPT_SNIPPET =
 
 /** Guides the parent model to delegate standalone tasks and avoid unnecessary blocking waits. */
 export const SUBAGENT_SPAWN_PROMPT_GUIDELINES = [
-  "Use subagent_spawn to delegate self-contained tasks that can run in the background; give it a complete, standalone prompt.",
-  "Each subagent runs in the Pi harness and inherits the current environment.",
-  "After subagent_spawn, keep working; results arrive automatically. Only call subagent_wait when you cannot proceed without the result.",
+  "Use subagent_spawn for self-contained work that can run in parallel.",
+  "Keep working after spawning; wait only when the result is required.",
 ];
 
 /** Model-facing schema descriptions for subagent_spawn task and execution options. */

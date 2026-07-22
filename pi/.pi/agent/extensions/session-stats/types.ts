@@ -1,3 +1,33 @@
+/** Per-million-token model pricing rates. */
+export interface ModelPricing {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  tiers?: ModelPricingTier[];
+  /** Whether rates are catalog rates or a reference estimate for a free model. */
+  source?: "catalog" | "estimated";
+}
+
+/** Alternate pricing rates selected for large requests. */
+export interface ModelPricingTier extends Omit<ModelPricing, "tiers"> {
+  inputTokensAbove: number;
+}
+
+/** Resolve pricing for a provider/model pair. */
+export type ModelPricingResolver = (
+  provider: string,
+  modelId: string,
+) => ModelPricing | undefined;
+
+/** Source used to determine a model's cost. */
+export type PricingSource =
+  | "reported"
+  | "catalog"
+  | "estimated"
+  | "unknown"
+  | "mixed";
+
 /** Aggregated model usage for a session. */
 export interface ModelUsage {
   provider: string;
@@ -8,6 +38,8 @@ export interface ModelUsage {
   cacheRead: number;
   cacheWrite: number;
   cost: number;
+  /** Optional for compatibility with callers constructing test data. */
+  pricingSource?: PricingSource;
 }
 
 /** Aggregated model usage across one or more sessions. */
@@ -34,6 +66,8 @@ export interface TokenTotals {
 /** Statistics for one Pi session or the current in-memory branch. */
 export interface SessionStats {
   file: string;
+  /** Working directory associated with persisted sessions. */
+  project?: string;
   name?: string;
   startTime?: string;
   durationMs?: number;

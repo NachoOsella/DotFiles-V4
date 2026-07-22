@@ -1,716 +1,413 @@
 ---
-name: presenterm
-description: Create terminal slide decks with presenterm. Use whenever the user asks for a presentation, slideshow, slide deck, or demo in the terminal. Produces ready-to-run .md files.
+name: beautiful-presenterm
+description: Create, redesign, and validate polished terminal-native slide decks for Presenterm from a topic, outline, notes, codebase, or existing Markdown. Use for Presenterm presentations, Markdown slides, technical talks, live-code demos, speaker notes, custom themes, diagrams, exports, or visual and narrative review of a terminal deck.
+license: MIT
+compatibility: Requires Presenterm. Mermaid, D2, Typst, Pandoc, and WeasyPrint are optional and only needed for their corresponding render or export features.
+metadata:
+  author: Nacho
+  version: "1.0.0"
+  presenterm-version: "0.16.x"
 ---
 
-# Presenterm Skill
+# Beautiful Presenterm
 
-Produce beautiful, presentation-ready `.md` files for [presenterm](https://github.com/mfontanini/presenterm) — a terminal-native slideshow tool. The output is a single Markdown file the user can run directly with `presenterm slides.md`.
+Create presentations that feel intentionally designed for the terminal rather than like documents split into pages.
 
----
+## Definition of done
 
-## Quick Reference (CLI)
+A completed deck must:
 
-```bash
-presenterm slides.md                        # Run (auto hot-reloads on save)
-presenterm --theme tokyonight-storm s.md    # Override theme
-presenterm --present slides.md             # Presentation mode (no hot-reload)
-presenterm --list-themes                   # Preview all themes interactively
-presenterm -e slides.md                    # Export to PDF
-presenterm -E slides.md                    # Export to HTML
-presenterm -x slides.md                    # Enable code block execution
-presenterm --publish-speaker-notes s.md    # Main instance (publish notes)
-presenterm --listen-speaker-notes s.md     # Speaker notes display instance
-```
+- Tell one coherent story for a specific audience and desired outcome.
+- Use Presenterm-native syntax correctly.
+- Be visually restrained, high-contrast, and readable at the intended terminal size.
+- Vary slide composition without becoming decorative or inconsistent.
+- Keep code, diagrams, images, and animation purposeful.
+- Include the source deck, any local assets, a theme when appropriate, and exact run/export commands.
+- Be checked for broken paths, accidental overflow, invalid snippets, and unsafe execution settings.
 
----
+## First choose the operating mode
 
-## File Structure
+Infer the mode from the request. Do not force the user through a questionnaire when the available context is sufficient.
 
-```
-[YAML front matter]      <- title, author, theme, event, date, location
-                         <- auto-generates a styled intro slide
-[slide content]
-<!-- end_slide -->        <- slide separator (NEVER use ---)
-[slide content]
-<!-- end_slide -->
-...
-```
+### Create
 
----
+Build a new deck from a topic, outline, notes, documents, or repository.
 
-## Front Matter
+### Redesign
+
+Preserve the facts and intent of an existing deck while improving hierarchy, pacing, layouts, theme, and wording.
+
+### Technical demo
+
+Prioritize short code snippets, progressive highlighting, architecture diagrams, and an explicit live-demo path plus a non-live fallback.
+
+### Review
+
+Audit an existing deck and return prioritized findings. When asked to fix it, edit the files rather than stopping at critique.
+
+## Workflow
+
+### 1. Establish the brief
+
+Determine, from the request and available files:
+
+- audience and their baseline knowledge;
+- presentation goal: teach, persuade, report, pitch, or demonstrate;
+- expected duration;
+- language and tone;
+- whether the deck will be presented live, exported, or both;
+- target terminal and approximate viewport;
+- whether optional tools such as Mermaid, D2, Typst, or WeasyPrint are available.
+
+When information is missing, make a reasonable assumption and record it briefly in the delivery notes. Use visible placeholders only for facts that cannot be inferred safely.
+
+A useful pacing baseline is roughly one meaningful slide per minute, then adjust for demos and discussion. Do not pad a short idea into a long deck.
+
+### 2. Inspect the source material
+
+For repository-based talks, inspect the actual code, architecture, README, tests, and relevant history before writing claims. Prefer real snippets from the repository over invented pseudo-code.
+
+For notes or documents, extract:
+
+- the single central claim;
+- three to five supporting ideas;
+- evidence, examples, numbers, or demonstrations;
+- the final action or takeaway.
+
+Do not copy prose wholesale into slides. Convert source material into spoken visual beats.
+
+### 3. Build the narrative before styling
+
+Write a private slide map using this shape where appropriate:
+
+1. Hook or promise.
+2. Context and stakes.
+3. Problem or tension.
+4. Key insight.
+5. Explanation or evidence.
+6. Demonstration or example.
+7. Consequences or trade-offs.
+8. Resolution and takeaway.
+9. Clear closing or call to action.
+
+Not every deck needs every stage. Each slide must earn its place and advance the argument.
+
+### 4. Choose a visual system
+
+Default to the bundled `assets/terminal-noir.yaml` unless the user requests another style or the content calls for a light theme.
+
+Use one dominant foreground, one accent, one secondary accent, and semantic success/warning/error colors. Avoid rainbow syntax outside code. Color must reinforce hierarchy, not compensate for weak structure.
+
+For a portable deck, copy the theme beside the presentation and reference it with a relative path:
 
 ```yaml
 ---
-title: "**My** _First_ Presentation"   # supports inline markdown
-sub_title: Running from the terminal
-author: Jane Dev
-# Multiple authors:
-# authors:
-#   - Jane Dev
-#   - Bob Eng
-event: RustConf 2025
-location: San Francisco
-date: "2025-10-01"
 theme:
-  name: tokyonight-storm
+  path: ./theme.yaml
 ---
 ```
 
-All front-matter fields (`author`, `event`, `location`, `date`, `title`, `sub_title`) are available as `{variable}` in footer templates.
+For a dependency-free deck, use an exact built-in name such as `tokyonight-night`, `catppuccin-mocha`, `gruvbox-dark`, `dark`, or `terminal-dark`.
 
----
+### 5. Author with explicit Presenterm syntax
 
-## Built-in Themes
+Use explicit slide boundaries by default:
 
-```bash
-presenterm --list-themes   # Preview all themes in an interactive slideshow
-```
-
-| Theme | Style |
-|---|---|
-| `tokyonight-storm` | Best default — vibrant blue/purple, modern dev |
-| `tokyonight-night` | Darker tokyonight variant |
-| `tokyonight-moon` | Softer moon tones |
-| `tokyonight-day` | Light tokyonight |
-| `catppuccin-mocha` | Warm pastel dark (very popular) |
-| `catppuccin-macchiato` | Slightly lighter mocha |
-| `catppuccin-frappe` | Medium contrast pastel |
-| `catppuccin-latte` | Light pastel |
-| `gruvbox-dark` | Retro amber/green warm dark |
-| `dark` | Simple dark fallback |
-| `light` | Simple light / projected rooms |
-| `terminal-dark` | Inherits terminal palette (dark) |
-| `terminal-light` | Inherits terminal palette (light) |
-
-**Auto light/dark detection:**
-```yaml
----
-theme:
-  light: catppuccin-latte
-  dark: catppuccin-mocha
----
-```
-
----
-
-## Theme Overrides (inline, no external files needed)
-
-Override any part of any theme directly in the front matter:
-
-```yaml
----
-theme:
-  name: tokyonight-storm
-  override:
-    default:
-      margin:
-        percent: 8
-      colors:
-        foreground: "cdd6f4"
-        background: "1e1e2e"
-    slide_title:
-      prefix: "▌"
-      font_size: 2
-      bold: true
-      separator: true
-      padding_top: 1
-      padding_bottom: 1
-      colors:
-        foreground: "89b4fa"
-    headings:
-      h1:
-        prefix: "██ "
-        bold: true
-        colors:
-          foreground: "89b4fa"
-      h2:
-        prefix: "▓▓ "
-        colors:
-          foreground: "a6e3a1"
-      h3:
-        prefix: "░░ "
-        italics: true
-    footer:
-      style: template
-      left: "{author}"
-      center: "{event}"
-      right: "{current_slide} / {total_slides}"
-      height: 2
-    code:
-      theme_name: base16-eighties.dark
-      padding:
-        horizontal: 2
-        vertical: 1
-      background: true
-      line_numbers: false
-    block_quote:
-      prefix: "▍ "
-    bold:
-      colors:
-        foreground: "f9e2af"
-    italics:
-      colors:
-        foreground: "cba6f7"
-    mermaid:
-      background: transparent
-      theme: dark
----
-```
-
-**Best code highlight themes:**
-- `base16-eighties.dark` — classic dark
-- `Catppuccin` — matches catppuccin themes perfectly
-- `gruvbox` — warm retro
-- `dracula-sublime` — purple/pink
-- `Nord-sublime` — arctic blue
-- `TwoDark` — atom-style
-- `visual-studio-dark-plus` — familiar VS Code look
-
-**Footer styles:**
-```yaml
-footer:
-  style: template      # left/center/right text with variables
-  style: progress_bar  # bar that advances as slides progress (optional character: emoji)
-  style: empty         # no footer
-```
-
-**Footer with images** (e.g. company logo):
-```yaml
-footer:
-  style: template
-  left:
-    image: logo.png    # relative to presentation file
-  right: "{current_slide} / {total_slides}"
-  height: 5
-```
-
-**Color palette** (define once, reuse everywhere):
-```yaml
-theme:
-  override:
-    palette:
-      colors:
-        accent: "89b4fa"
-        warn: "f38ba8"
-      classes:
-        highlight:
-          foreground: "1e1e2e"
-          background: "89b4fa"
-```
-Use in text: `<span style="color: palette:accent">colored text</span>`
-Use as class: `<span class="highlight">highlighted</span>`
-
-**Extend a theme** (in a custom theme YAML file):
-```yaml
-extends: dark
-default:
-  colors:
-    background: "000000"
-```
-
----
-
-## Slide Separator
-
-```
+```markdown
 <!-- end_slide -->
 ```
 
-This is the ONLY valid slide separator. Do NOT use `---`.
-
----
-
-## Slide Titles (Setext Style)
+Do not use `---` as a slide separator unless `options.end_slide_shorthand: true` is explicitly enabled. Use Setext headings for ordinary slide titles:
 
 ```markdown
-My Slide Title
-===
+A clear slide title
+===================
 ```
 
-Setext headers get special full-width styled rendering with font size, separator, etc. ATX headers (`#`, `##`, `###`) are styled as in-slide headings.
+Use the introduction front matter only when a formal title slide adds value:
 
+```yaml
 ---
+title: "A concise, specific title"
+sub_title: "The promise or angle"
+author: "Name"
+theme:
+  path: ./theme.yaml
+options:
+  implicit_slide_ends: false
+  end_slide_shorthand: false
+---
+```
 
-## Colored Text (Inline)
+Keep a blank line around Presenterm comment commands so the source remains readable.
+
+### 6. Compose slides, do not merely fill them
+
+Use a deliberate mix of these archetypes:
+
+- title or cover;
+- large statement or question;
+- section divider;
+- sparse list;
+- comparison;
+- two-column explanation;
+- code walkthrough;
+- diagram or flow;
+- image with one insight;
+- result or metric;
+- summary and closing.
+
+Avoid using the same title-plus-bullets composition more than twice in a row.
+
+#### Density rules
+
+Treat these as strong defaults, not mathematical requirements:
+
+- One primary idea per slide.
+- Usually 12–40 words on a normal slide, excluding code and speaker notes.
+- No more than four main bullets; each should fit on one visual line when possible.
+- No paragraph longer than three short lines.
+- No more than one table per slide; keep tables small.
+- Keep visible code to roughly 6–18 lines.
+- Split complex diagrams instead of shrinking them.
+- Preserve empty space. Do not fill the terminal because space is available.
+
+Write slide text for speech: concrete nouns, active verbs, short clauses. Put nuance, citations, transitions, and reminders in speaker notes.
+
+### 7. Use layouts with intent
+
+Two columns work well for text/code, before/after, concept/example, and claim/evidence:
 
 ```markdown
-<span style="color: #ff6b6b">red text</span>
-<span style="color: #89b4fa; background-color: #1e1e2e">blue on dark</span>
-<span style="color: palette:accent">uses palette color</span>
-<span class="highlight">uses palette class</span>
+<!-- column_layout: [3, 2] -->
+
+<!-- column: 0 -->
+
+Main explanation
+
+<!-- column: 1 -->
+
+Supporting code or image
+
+<!-- reset_layout -->
 ```
 
-Only `<span>` tags are supported. No other HTML.
+Recommended ratios:
 
----
+- `[1, 1]` for balanced comparison;
+- `[3, 2]` for explanation plus supporting visual;
+- `[2, 3]` for visual plus commentary;
+- `[1, 3, 1]` with content only in column 1 for a narrower centered block.
 
-## GitHub-Style Alerts
+Never create columns only to make a slide look busy. Reset the layout before adding full-width content.
+
+### 8. Reveal information sparingly
+
+Use pauses when sequence changes comprehension:
 
 ```markdown
-> [!NOTE]
-> Useful information that users should know.
+First establish the premise.
 
-> [!TIP]
-> Helpful advice for doing things better.
+<!-- pause -->
 
-> [!IMPORTANT]
-> Key information users need to succeed.
-
-> [!WARNING]
-> Urgent info that needs immediate attention.
-
-> [!CAUTION]
-> Advises about risks or negative outcomes.
+Then reveal the consequence.
 ```
 
----
-
-## Images
-
-```markdown
-![](./path/to/image.png)              # original size
-![image:width:50%](image.png)         # 50% of terminal width
-![image:w:30%](logo.png)              # shorthand for width
-```
-
-**Key rules:**
-- Paths are **relative to the presentation file**
-- Remote URLs are NOT supported (by design)
-- Renders natively in: kitty, iterm2, WezTerm, ghostty, foot
-- Falls back to ASCII blocks in unsupported terminals
-- Images auto-resize to fit terminal preserving aspect ratio
-- In tmux: add `set -g allow-passthrough on` to `.tmux.conf`
-
-**Forcing image protocol** (if auto-detection fails):
-```bash
-presenterm --image-protocol iterm2 slides.md
-presenterm --image-protocol kitty-local slides.md
-presenterm --image-protocol ascii-blocks slides.md   # forced ASCII fallback
-```
-
----
-
-## Comment Commands (Full Reference)
-
-### Slide control
-```
-<!-- end_slide -->            End slide, start next
-<!-- skip_slide -->           Exclude this slide from presentation
-<!-- no_footer -->            Hide footer on this slide only
-```
-
-### Progressive reveal
-```
-<!-- pause -->                               Pause, reveal on next key press
-<!-- incremental_lists: true -->             Auto-pause after each list item
-<!-- incremental_lists: false -->            Turn off incremental lists
-```
-
-### Layout and spacing
-```
-<!-- jump_to_middle -->                      Jump to vertical center of slide
-<!-- new_line -->                            Insert one blank line
-<!-- new_lines: 5 -->                        Insert N blank lines
-<!-- alignment: center -->                   Align rest of slide (left/center/right)
-<!-- list_item_newlines: 2 -->               Space N lines between list items
-<!-- font_size: 2 -->                        Set font size 1-7 (kitty terminal only)
-```
-
-### Columns
-```
-<!-- column_layout: [3, 2] -->               Define column proportions
-<!-- column: 0 -->                           Enter column by 0-based index
-<!-- reset_layout -->                        Exit column layout, return to full width
-```
-
-### Content and notes
-```
-<!-- include: other.md -->                   Include external markdown file
-<!-- speaker_note: your note here -->        Speaker note (hidden from audience)
-<!--
-speaker_note: |
-  Multiline note line 1
-  Multiline note line 2
--->
-```
-
-### User comments (never rendered)
-```
-<!-- // private note or TODO -->
-<!-- comment: source reference here -->
-```
-
----
-
-## Incremental Lists
-
-Much cleaner than scattering `<!-- pause -->` between every bullet:
+For a short list that truly benefits from staged disclosure:
 
 ```markdown
 <!-- incremental_lists: true -->
 
-- This bullet appears first
-- Then this one
-- Then this one
+- First step
+- Second step
+- Final implication
 
 <!-- incremental_lists: false -->
-
-- This list
-- Shows all at once
 ```
 
----
+Do not make every bullet incremental. A deck should remain pleasant when exported, where pause behavior may differ.
 
-## Jump to Middle (Section Divider Slides)
+### 9. Make code legible and narratable
 
-Perfect for dramatic section breaks:
+Prefer a single focused snippet over a wall of code. Include line numbers only when the narration refers to them:
+
+````markdown
+```typescript +line_numbers {2-4|6-8|all}
+export function total(items: Item[]): number {
+  const valid = items.filter(item => item.enabled);
+  const subtotal = valid.reduce((sum, item) => sum + item.price, 0);
+
+  const tax = subtotal * 0.21;
+  return subtotal + tax;
+}
+```
+````
+
+Use dynamic highlights to guide attention through the same snippet rather than duplicating nearly identical slides.
+
+When the code already exists in the repository, include it as an external file so the presentation does not drift:
+
+````markdown
+```file +line_numbers
+path: src/example.ts
+language: typescript
+start_line: 10
+end_line: 24
+```
+````
+
+For executable snippets, hidden setup lines may use `/// ` in Java, Kotlin, JavaScript, TypeScript, Python, shell, C, C++, and Go; Rust uses `# `. Keep hidden setup minimal and understandable from the source.
+
+### 10. Treat execution as privileged
+
+Never add `+exec`, `+auto_exec`, `+exec_replace`, `+image`, or `+acquire_terminal` merely for spectacle.
+
+Only add executable content when:
+
+- the user explicitly wants a live demo or executable deck;
+- the source is trusted;
+- commands are deterministic and reasonably fast;
+- no secrets, destructive operations, network mutations, or broad filesystem writes are involved;
+- the deck also explains how execution is enabled.
+
+`+exec` requires opt-in with `-x`. `+exec_replace` and `+image` require stronger opt-in with `-X`. Never enable snippet execution globally on the user's behalf.
+
+Give every live demo a fallback: captured output, a static code/result slide, or a prepared local artifact.
+
+### 11. Use diagrams only when they compress complexity
+
+Mermaid:
+
+````markdown
+```mermaid +render +width:80%
+flowchart LR
+    A[Input] --> B[Transform]
+    B --> C[Result]
+```
+````
+
+D2:
+
+````markdown
+```d2 +render +width:80%
+client -> api -> database
+```
+````
+
+LaTeX or Typst can render formulas with `+render`. These features require external tools; do not introduce them unless available or clearly document the dependency and a fallback.
+
+Keep diagrams to a small number of nodes. Use progressive slides for architecture that cannot be understood at once.
+
+### 12. Handle images portably
+
+Use local relative paths. Remote images are unsupported. Size images explicitly when useful:
 
 ```markdown
-<!-- end_slide -->
-
-<!-- jump_to_middle -->
-
-Part II — Advanced Topics
-===
-
-<!-- end_slide -->
+![image:width:55%](assets/architecture.png)
 ```
 
----
+Assume images may fall back to ASCII in unsupported terminals. A slide must remain understandable from its title and accompanying text even if image fidelity is poor.
 
-## Column Layouts
+### 13. Add speaker notes for real talks
+
+Use notes for narration, transitions, timing, source attribution, and demo cues:
 
 ```markdown
-My Slide
-===
-
-<!-- column_layout: [3, 2] -->
-
-<!-- column: 0 -->
-
-Content in left column (60% width)
-
-<!-- column: 1 -->
-
-Content in right column (40% width)
-
-<!-- reset_layout -->
-
-Full-width content below columns.
-```
-
-**Common patterns:**
-- `[2, 1]` — code left, notes right
-- `[1, 2, 1]` — centered content (write only in middle column)
-- `[1, 1]` — equal two-column split
-- `[3, 2]` — slightly wider left
-
-**Debug columns:** Press `T` while presenting to toggle the layout grid.
-
----
-
-## Code Blocks
-
-### Basic syntax highlighting
-````markdown
-```python
-def greet(name: str) -> str:
-    return f"Hello, {name}!"
-```
-````
-
-### Line numbers
-````markdown
-```rust +line_numbers
-fn main() {
-    println!("Hello!");
-}
-```
-````
-
-### Static selective highlight
-````markdown
-```python {1,3-5}
-def process(data):
-    raw = load(data)          # line 2 — dim
-    cleaned = clean(raw)      # line 3 — highlighted
-    result = analyze(cleaned) # line 4 — highlighted
-    return result             # line 5 — highlighted
-```
-````
-
-### Dynamic highlight (advances on key press)
-````markdown
-```rust {1-3|5-9|11-13}
-struct Config {
-    timeout: u32,
-    retries: u8,
-}
-
-impl Config {
-    fn new() -> Self {
-        Config { timeout: 30, retries: 3 }
-    }
-}
-
-fn main() {
-    let cfg = Config::new();
-}
-```
-````
-
-### Executable code block
-````markdown
-```bash +exec
-echo "Live output appears below"
-date && uptime
-```
-````
-Run with `presenterm -x slides.md`, execute with `Ctrl+E`.
-
-**Supported languages:** ada, awk, bash, C, C++, C#, clojure, cmake, css, D, diff, docker, dotenv, elixir, elm, erlang, go, haskell, html, java, javascript, json, kotlin, latex, lua, makefile, markdown, nix, ocaml, perl, php, protobuf, python, R, rust, scala, shell, sql, swift, svelte, terraform, typescript, xml, yaml, vue, zig (and more).
-
----
-
-## Mermaid Diagrams
-
-````markdown
-```mermaid
-graph TD
-    A[Start] --> B{Decision}
-    B -->|Yes| C[Do it]
-    B -->|No| D[Skip it]
-    C --> E[End]
-    D --> E
-```
-````
-
-Requires: `npm install -g @mermaid-js/mermaid-cli`
-
----
-
-## LaTeX / Math Formulas
-
-````markdown
-```latex +render
-\frac{-b \pm \sqrt{b^2 - 4ac}}{2a}
-```
-````
-
-Renders as an inline image. Requires `latex` + `dvisvgm`.
-
----
-
-## Speaker Notes (Two-instance Setup)
-
-```markdown
-Normal slide content visible to audience.
-
-<!-- speaker_note: Mention the benchmark data here -->
-
 <!--
 speaker_note: |
-  Multiline reminder:
-  - First point to cover
-  - Second point to cover
+  Explain why this matters before discussing implementation.
+  Transition: “Now that the constraint is clear, we can simplify the design.”
 -->
 ```
 
+Keep visible slides concise; do not turn notes into an essay. When the user asks for speaker notes, include them on every substantive slide.
+
+### 14. Package the result
+
+For a new polished deck, normally create:
+
+```text
+presentation/
+├── presentation.md
+├── theme.yaml
+├── presenterm.yaml
+├── README.md
+└── assets/
+```
+
+Use `assets/starter-deck.md`, `assets/terminal-noir.yaml`, and `assets/presenterm.yaml` as starting points, then adapt them rather than copying blindly.
+
+The README should include exact commands for:
+
+- development with hot reload;
+- presentation mode;
+- optional snippet execution;
+- speaker notes when present;
+- HTML export;
+- PDF export when requested;
+- validation.
+
+### 15. Validate and refine
+
+Check the source before declaring completion:
+
+1. Every non-final slide ends correctly.
+2. Front matter parses as YAML.
+3. Theme path and all local asset paths resolve relative to the deck.
+4. Column layouts use valid indices and are reset where needed.
+5. No unsupported remote image URLs are used.
+6. Code fences close correctly.
+7. Optional features have documented dependencies.
+8. Executable blocks are intentional and safe.
+9. Long lines, tables, diagrams, and code fit the target viewport.
+10. The deck has a clear opening, escalation, and ending.
+
+When Presenterm is installed, run the bundled validator:
+
 ```bash
-# Terminal 1 — main presentation
-presenterm slides.md --publish-speaker-notes
-
-# Terminal 2 — speaker notes view (auto-syncs slides)
-presenterm slides.md --listen-speaker-notes
+./scripts/validate.sh path/to/presentation.md path/to/presenterm.yaml
 ```
 
----
+Then inspect the deck interactively at the target size:
 
-## Slide Transitions
-
-Add to `~/.config/presenterm/config.yaml`:
-```yaml
-defaults:
-  transition:
-    type: fade              # fade | slide_horizontal | collapse_horizontal
-    duration_ms: 300
+```bash
+presenterm --config-file path/to/presenterm.yaml path/to/presentation.md
 ```
 
----
+Use `T` to inspect the layout grid, and test both normal navigation and fast navigation. For final delivery, use presentation mode:
 
-## Design Principles for Beautiful Presentations
-
-1. **One idea per slide.** Use `<!-- incremental_lists: true -->` to reveal bullets one at a time.
-2. **Setext titles (`===`) on every slide.** They receive the most prominent theme treatment.
-3. **Code + explanation → column layout.** Put code in the wider column, bullets on the right.
-4. **Section breaks → `jump_to_middle` + setext title.** Creates dramatic, clean dividers.
-5. **Control image sizes.** Use `![image:width:60%](file.png)` for consistent sizing.
-6. **Use alerts for callouts.** `> [!TIP]` and `> [!WARNING]` add visual hierarchy without images.
-7. **Full footer.** Always include `left: "{author}"`, `center: "{event}"`, `right: "{current_slide} / {total_slides}"`.
-8. **Pick theme for the venue.** Dark room → `tokyonight-storm` or `catppuccin-mocha`. Projected bright room → `catppuccin-latte` or `light`.
-9. **Colored text sparingly.** Use `<span style="color: palette:accent">…</span>` only for the most important emphasis.
-10. **Auto-detect terminal theme.** Use `light: / dark:` for presentations shared across environments.
-
----
-
-## Complete Example
-
-```markdown
----
-title: "**Rust** in Production"
-sub_title: Lessons from 2 years of shipping
-author: Jane Dev
-event: RustConf 2025
-theme:
-  name: tokyonight-storm
-  override:
-    footer:
-      style: template
-      left: "{author}"
-      center: "{event}"
-      right: "{current_slide} / {total_slides}"
-    code:
-      theme_name: base16-eighties.dark
-      padding:
-        horizontal: 2
-        vertical: 1
-    slide_title:
-      separator: true
-      bold: true
----
-
-<!-- jump_to_middle -->
-
-Part I — Why Rust?
-===
-
-<!-- end_slide -->
-
-The Case for Rust
-===
-
-<!-- incremental_lists: true -->
-
-- **Memory safety** without a garbage collector
-- **Zero-cost abstractions** — you pay for what you use
-- **Fearless concurrency** — data races are compile errors
-- **Stellar tooling** — cargo, rustfmt, clippy, rust-analyzer
-
-<!-- end_slide -->
-
-> [!TIP]
-> Start with the Rust Book at https://doc.rust-lang.org/book
-
-<!-- end_slide -->
-
-Ownership in Action
-===
-
-<!-- column_layout: [3, 2] -->
-
-<!-- column: 0 -->
-
-```rust {1-4|6-9|11-13}
-// 1. Move semantics
-let s1 = String::from("hello");
-let s2 = s1;
-// s1 is now invalid!
-
-// 2. Clone when you need both
-let s1 = String::from("hello");
-let s2 = s1.clone();
-println!("{} {}", s1, s2);
-
-// 3. Borrow immutably
-fn len(s: &String) -> usize {
-    s.len()
-}
+```bash
+presenterm --config-file path/to/presenterm.yaml --present path/to/presentation.md
 ```
 
-<!-- column: 1 -->
+When snippets are present and trusted:
 
-### The 3 Rules
-
-1. One **owner** per value
-2. One owner at a time
-3. Dropped when owner leaves scope
-
-<!-- new_lines: 2 -->
-
-> [!NOTE]
-> The borrow checker enforces these at compile time — zero runtime cost.
-
-<!-- reset_layout -->
-
-<!-- end_slide -->
-
-Benchmark Results
-===
-
-<!-- column_layout: [1, 1] -->
-
-<!-- column: 0 -->
-
-### Latency (p99)
-
-| Service | Before | After |
-|---|---|---|
-| Auth | 45ms | 8ms |
-| API | 120ms | 22ms |
-| Worker | 800ms | 95ms |
-
-<!-- column: 1 -->
-
-![image:width:90%](./charts/memory.png)
-
-<!-- reset_layout -->
-
-<!-- end_slide -->
-
-<!-- jump_to_middle -->
-
-Thank You
-===
-
-<!-- end_slide -->
+```bash
+presenterm --config-file path/to/presenterm.yaml --validate-snippets -x path/to/presentation.md
 ```
 
----
+If Presenterm is unavailable, still perform static checks, state that rendering was not executed, and provide the exact commands the user can run.
 
-## Key Commands Reference
+## Review rubric
 
-| Command | Purpose |
-|---|---|
-| `<!-- end_slide -->` | End slide, begin next |
-| `<!-- pause -->` | Reveal content step by step |
-| `<!-- incremental_lists: true/false -->` | Auto-pause per bullet |
-| `<!-- jump_to_middle -->` | Vertically center remaining content |
-| `<!-- column_layout: [2, 1] -->` | Define column proportions |
-| `<!-- column: 0 -->` | Enter column N (0-indexed) |
-| `<!-- reset_layout -->` | Exit columns, resume full width |
-| `<!-- new_lines: N -->` | Insert N blank lines |
-| `<!-- alignment: center -->` | Set text alignment (left/center/right) |
-| `<!-- font_size: 2 -->` | Set font size 1-7 (kitty terminal only) |
-| `<!-- no_footer -->` | Hide footer on this slide |
-| `<!-- skip_slide -->` | Exclude slide from presentation |
-| `<!-- include: file.md -->` | Include external markdown |
-| `<!-- speaker_note: ... -->` | Speaker-only note |
+Score each category from 1 to 5 and fix the weakest areas first:
 
----
+- narrative clarity;
+- slide-level focus;
+- information density;
+- visual hierarchy;
+- composition variety;
+- terminal readability;
+- code and diagram quality;
+- pacing and reveals;
+- portability;
+- technical correctness.
 
-## Output Guidelines
+A beautiful deck is not the one with the most features. It is the one where every feature makes the audience understand the idea faster.
 
-When producing a presentation:
+## Reference material
 
-1. Always include front matter: `title`, `author`, `theme` with footer override
-2. Always end each slide with `<!-- end_slide -->`
-3. Use setext headers (`===`) for slide titles
-4. Use `<!-- incremental_lists: true -->` on bullet slides
-5. Use `<!-- jump_to_middle -->` + setext title for section dividers
-6. Use column layouts for code + explanation slides
-7. Use `![image:width:X%](file.png)` for precise image sizing
-8. Use GitHub-style alerts for callouts
-9. Keep each slide focused on one concept
-10. Save output to `/mnt/user-data/outputs/presentation.md` (or descriptive name)
+Read these only as needed:
+
+- [Presenterm syntax and commands](references/presenterm-reference.md)
+- [Terminal presentation design playbook](references/design-playbook.md)

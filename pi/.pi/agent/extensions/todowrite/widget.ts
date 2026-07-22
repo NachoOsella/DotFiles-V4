@@ -2,16 +2,12 @@ import type { ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { getTodos, hasVisibleTodos, isWidgetVisible, toggleWidgetVisible } from "./state.ts";
 
-/** Return true when the widget should currently be rendered. */
-function shouldShowWidget(): boolean {
-  return isWidgetVisible() && hasVisibleTodos();
-}
+/** Build a compact checklist widget. */
+function buildWidgetLines(theme: Theme, width: number, sessionId: string): string[] {
+  const todos = getTodos(sessionId);
 
-/** Build a compact Codex-style checklist widget. */
-function buildWidgetLines(theme: Theme, width: number): string[] {
-  if (!shouldShowWidget()) return [];
+  if (todos.length === 0) return [];
 
-  const todos = getTodos();
   const titleText = "todos";
   const maxItemWidth = todos.reduce((max, todo) => {
     return Math.max(max, visibleWidth(todo.content) + 2);
@@ -22,7 +18,8 @@ function buildWidgetLines(theme: Theme, width: number): string[] {
   const title = theme.fg("muted", titleText);
   const topPrefix = "╭─ ";
   const topSuffixWidth = Math.max(0, panelWidth - visibleWidth(topPrefix + titleText) - 1);
-  const top = theme.fg("borderMuted", topPrefix) + title + theme.fg("borderMuted", "─".repeat(topSuffixWidth) + "╮");
+  const top =
+    theme.fg("borderMuted", topPrefix) + title + theme.fg("borderMuted", "─".repeat(topSuffixWidth) + "╮");
   const bottom = theme.fg("borderMuted", "╰" + "─".repeat(Math.max(0, panelWidth - 2)) + "╯");
 
   const lines: string[] = [top];
@@ -60,14 +57,16 @@ export function clearWidget(ctx: ExtensionContext): void {
 export function refreshWidget(ctx: ExtensionContext): void {
   if (!ctx.hasUI) return;
 
-  if (!shouldShowWidget()) {
+  const sessionId = ctx.sessionManager.getSessionId();
+
+  if (!hasVisibleTodos(sessionId) || !isWidgetVisible(sessionId)) {
     clearWidget(ctx);
     return;
   }
 
   ctx.ui.setWidget("todowrite", (_tui, theme) => ({
     render(width: number): string[] {
-      return buildWidgetLines(theme, width);
+      return buildWidgetLines(theme, width, sessionId);
     },
     invalidate(): void {},
   }));
@@ -75,11 +74,12 @@ export function refreshWidget(ctx: ExtensionContext): void {
 
 /** Toggle the todo widget from a keyboard shortcut and notify the user. */
 export function toggleWidget(ctx: ExtensionContext): void {
-  const visible = toggleWidgetVisible();
+  const sessionId = ctx.sessionManager.getSessionId();
+  const visible = toggleWidgetVisible(sessionId);
   refreshWidget(ctx);
 
   if (!ctx.hasUI) return;
-  if (visible && !hasVisibleTodos()) {
+  if (visible && !hasVisibleTodos(sessionId)) {
     ctx.ui.notify("Todo widget enabled, but there are no active todos.", "info");
     return;
   }

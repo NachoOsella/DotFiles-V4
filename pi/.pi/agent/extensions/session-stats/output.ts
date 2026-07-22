@@ -1,12 +1,15 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
+import { truncateToWidth } from "@earendil-works/pi-tui";
 import { buildModelStats, buildToolUsage } from "./aggregate.ts";
 import { createDashboardFrame } from "./box.ts";
 import {
+  color,
   fmtCost,
   fmtDuration,
   formatCacheHit,
   formatNumber,
   formatPercent,
+  padRightVisible,
   progressBar,
   readCacheHitRate,
 } from "./format.ts";
@@ -21,6 +24,8 @@ export function buildAllStatsOutput(
   daysFilter: number | undefined,
   width: number,
   theme?: Theme,
+  projectFilter = false,
+  projectName?: string,
 ): string {
   const filtered = filterByDays(sessions, daysFilter);
   if (filtered.length === 0) return "No sessions found for the given period.";
@@ -30,7 +35,11 @@ export function buildAllStatsOutput(
   const totals = calculateAllSessionTotals(filtered);
   const models = buildModelStats(filtered);
   const tools = buildToolUsage(filtered);
-  const scope = daysFilter ? `${daysFilter}d window` : "all sessions";
+  const scope = projectFilter
+    ? `${projectName ?? "current project"}${daysFilter ? `, ${daysFilter}d` : ""}`
+    : daysFilter
+      ? `${daysFilter}d window`
+      : "all sessions";
   const lines: string[] = [frame.top("SESSION STATS", scope)];
 
   lines.push(frame.section("Activity"));
@@ -54,8 +63,129 @@ export function buildAllStatsOutput(
 
   lines.push(frame.section("Top tools"));
   lines.push(...buildToolRows(tools, contentWidth, theme).map(frame.row));
-  lines.push(frame.footer("enter / esc / q  close"));
+  lines.push(
+    frame.footer(
+      projectFilter ? "esc back  q close" : "p projects  enter / esc / q close",
+    ),
+  );
   return lines.join("\n");
+}
+
+/** Summary of usage grouped by the session working directory. */
+export interface ProjectSummary {
+  project: string;
+  sessions: SessionStats[];
+  totals: ReturnType<typeof calculateAllSessionTotals>;
+}
+
+/** Build the project browser shown from the global all-session dashboard. */
+export function buildProjectStatsOutput(
+  sessions: readonly SessionStats[],
+  daysFilter: number | undefined,
+  width: number,
+  theme?: Theme,
+  selectedIndex = 0,
+): string {
+  const projects = buildProjectSummaries(sessions, daysFilter);
+  if (projects.length === 0) return "No projects found for the given period.";
+
+  const frame = createDashboardFrame(width, theme);
+  const selected = Math.max(0, Math.min(selectedIndex, projects.length - 1));
+  const lines: string[] = [
+    frame.top("PROJECT STATS", `${projects.length} project${projects.length === 1 ? "" : "s"}`),
+  ];
+
+  lines.push(frame.section("Top 3 by estimated cost"));
+  const topProjects = projects.slice(0, 3);
+  const maxCost = Math.max(0, topProjects[0]?.totals.totalCost ?? 0);
+  for (let index = 0; index < topProjects.length; index += 1) {
+    const project = topProjects[index];
+    if (!project) continue;
+    for (const row of buildProjectTopRows(project, index, maxCost, frame.innerWidth - 2, theme)) {
+      lines.push(frame.row(row));
+    }
+  }
+
+  lines.push(frame.section(`All projects (${selected + 1}/${projects.length})`));
+  const visibleCount = 8;
+  const start = Math.max(
+    0,
+    Math.min(selected - Math.floor(visibleCount / 2), projects.length - visibleCount),
+  );
+  const end = Math.min(projects.length, start + visibleCount);
+  if (start > 0) lines.push(frame.row("... more projects above"));
+  for (let index = start; index < end; index += 1) {
+    const project = projects[index];
+    if (!project) continue;
+    lines.push(frame.row(buildProjectRow(project, theme, index === selected)));
+  }
+  if (end < projects.length) lines.push(frame.row("... more projects below"));
+  lines.push(frame.footer("j/k move  enter detail  esc back  q close"));
+  return lines.join("\n");
+}
+
+/** Group sessions by project and sort by estimated cost, then token usage. */
+export function buildProjectSummaries(
+  sessions: readonly SessionStats[],
+  daysFilter: number | undefined,
+): ProjectSummary[] {
+  const groups = new Map<string, SessionStats[]>();
+  for (const session of filterByDays(sessions, daysFilter)) {
+    const project = session.project || "Unknown project";
+    const group = groups.get(project);
+    if (group) group.push(session);
+    else groups.set(project, [session]);
+  }
+
+  return [...groups.entries()]
+    .map(([project, groupedSessions]) => ({
+      project,
+      sessions: groupedSessions,
+      totals: calculateAllSessionTotals(groupedSessions),
+    }))
+    .sort(
+      (left, right) =>
+        right.totals.totalCost - left.totals.totalCost ||
+        right.totals.totalTokens - left.totals.totalTokens ||
+        left.project.localeCompare(right.project),
+    );
+}
+
+function buildProjectTopRows(
+  project: ProjectSummary,
+  index: number,
+  maxCost: number,
+  contentWidth: number,
+  theme: Theme | undefined,
+): string[] {
+  const barWidth = Math.max(8, Math.min(16, Math.floor(contentWidth * 0.28)));
+  const costWidth = 10;
+  const nameWidth = Math.max(12, contentWidth - barWidth - costWidth - 2);
+  const name = truncateToWidth(`${index + 1}. ${project.project}`, nameWidth, "…", false);
+  const bar = progressBar(project.totals.totalCost, maxCost, barWidth, theme, "accent");
+  const cost = fmtCost(project.totals.totalCost).padStart(costWidth);
+  return [
+    padRightVisible(color(theme, "text", name), nameWidth) +
+      " " +
+      bar +
+      " " +
+      color(theme, project.totals.totalCost > 0 ? "warning" : "muted", cost),
+    color(
+      theme,
+      "muted",
+      `   ${formatNumber(project.sessions.length)} sessions  ·  ${formatNumber(project.totals.totalTokens)} tokens`,
+    ),
+  ];
+}
+
+function buildProjectRow(
+  project: ProjectSummary,
+  theme: Theme | undefined,
+  selected = false,
+): string {
+  const marker = selected ? ">" : " ";
+  const metrics = `${formatNumber(project.sessions.length)} sessions  ${formatNumber(project.totals.totalTokens)} tokens  ${fmtCost(project.totals.totalCost)}`;
+  return `${color(theme, selected ? "accent" : "text", marker)} ${color(theme, "text", project.project)} ${color(theme, "muted", metrics)}`;
 }
 
 /** Build the current-session `/stats` dashboard. */
@@ -77,6 +207,7 @@ export function buildCurrentSessionOutput(
     cacheRead: model.cacheRead,
     cacheWrite: model.cacheWrite,
     cost: model.cost,
+    pricingSource: model.pricingSource,
   }));
   const lines: string[] = [frame.top("SESSION STATS", "current")];
 

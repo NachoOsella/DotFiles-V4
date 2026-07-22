@@ -8,9 +8,7 @@ export const SEARCH_PROMPT_SNIPPET =
 
 /** Guides the model on when to search and when to follow with scrape or crawl. */
 export const SEARCH_PROMPT_GUIDELINES = [
-  "Use search when the user asks for current web information, discovery, or sources beyond the local workspace.",
-  "Use scrape after search when you need the full readable content of a specific page.",
-  "Use crawl when the user needs content from multiple pages of the same website.",
+  "Use search to discover current information or relevant URLs.",
 ];
 
 /** Model-facing schema descriptions for Firecrawl search parameters. */
@@ -31,9 +29,7 @@ export const CRAWL_PROMPT_SNIPPET =
 
 /** Guides the model to use focused crawl limits and prefer scrape for one URL. */
 export const CRAWL_PROMPT_GUIDELINES = [
-  "Use crawl when the user needs content from multiple related pages on one website.",
-  "Keep crawl limits as low as practical because each crawled page consumes Firecrawl credits.",
-  "Use scrape instead of crawl when only one known URL is needed.",
+  "Use crawl for multiple related pages on one site; keep limits low.",
 ];
 
 /** Model-facing schema descriptions for Firecrawl crawl parameters. */
@@ -59,9 +55,7 @@ export const SCRAPE_PROMPT_SNIPPET =
 
 /** Guides the model to use scrape for one known page and crawl for multiple pages. */
 export const SCRAPE_PROMPT_GUIDELINES = [
-  "Use scrape when you need the full readable markdown content of one known URL.",
-  "Prefer scrape over bash or raw HTTP fetching for web pages because scrape returns cleaned content.",
-  "Use crawl instead when content is needed from multiple pages on the same website.",
+  "Use scrape for the readable content of one known URL.",
 ];
 
 /** Model-facing schema descriptions for Firecrawl scrape parameters. */

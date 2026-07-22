@@ -25,8 +25,8 @@ export function readCacheHitRate(input: number, cacheRead: number): number {
 /** Format USD cost with useful precision for small values. */
 export function fmtCost(usd: number): string {
   if (usd === 0) return "$0";
-  if (usd < 0.0001) return "$0";
-  if (usd < 0.01) return "$" + usd.toFixed(4);
+  if (usd < 0.000001) return "<$0.000001";
+  if (usd < 0.01) return "$" + usd.toFixed(6);
   return "$" + usd.toFixed(2);
 }
 
