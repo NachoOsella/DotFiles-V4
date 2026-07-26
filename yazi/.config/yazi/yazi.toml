@@ -125,10 +125,9 @@ rules = [
 
 
 [mgr]
-# sort_by = "mtime"
-# sort_reverse = true
-sort_by = "natural"
-sort_reverse = false
+sort_by = "mtime"
+sort_reverse = true
+# sort_by = "natural"
 sort_dir_first = true
 sort_sensitive = false
 sort_translit = false

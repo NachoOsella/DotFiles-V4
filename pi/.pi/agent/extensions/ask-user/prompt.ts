@@ -1,45 +1,57 @@
-/** Model-facing schema descriptions for the ask_user question and answer options. */
+/** Model-facing schema descriptions for ask_user questions and answer options. */
 export const ASK_USER_PARAMETER_DESCRIPTIONS = {
   optionLabel: "Short display label for this option",
   optionDescription: "Optional one-line description shown below the label",
   question: "The question to ask the user",
+  questions: "Between 1 and 5 questions to present in one interaction",
   options:
     "Between 2 and 5 answer options. A free-form 'write my own answer' option is always appended automatically - never include one yourself.",
 };
 
-/** Describes the ask_user tool's question shape and dismissible free-form fallback. */
+/** Describes the ask_user tool's batched question flow. */
 export const ASK_USER_TOOL_DESCRIPTION =
-  "Ask the user a single multiple-choice question (2-5 options). A free-form 'write my own answer' option is always added automatically, and the user may dismiss the question without answering. Ask exactly one question per call.";
+  "Ask the user one or more multiple-choice questions in a single interaction. Accepts 1-5 questions with 2-5 options each. A free-form answer is added to every question, and the user may dismiss the interaction without answering.";
 
-/** Adds ask_user's multiple-choice capability to the model's available-tools prompt. */
+/** Adds ask_user's batched multiple-choice capability to the available-tools prompt. */
 export const ASK_USER_PROMPT_SNIPPET =
-  "Ask the user a multiple-choice question (2-5 options plus a free-form answer)";
+  "Ask 1-5 multiple-choice questions in one interaction (2-5 options each plus free-form answers)";
 
-/** Guides the model to use ask_user for enumerable answers and one question at a time. */
+/** Guides the model to group related questions into one ask_user call. */
 export const ASK_USER_PROMPT_GUIDELINES = [
-  "When asking the user a question whose likely answers can be enumerated, use the ask_user tool instead of asking in plain text.",
-  "Ask one question per ask_user call; ask follow-up questions in subsequent calls.",
+  "When asking questions whose likely answers can be enumerated, use the ask_user tool instead of asking in plain text.",
+  "Group related questions into one ask_user call when their answers do not determine which follow-up questions are needed.",
 ];
 
-/** Builds the behavioral tool-result message returned to the parent model for an ask_user outcome. */
+interface AnswerSummary {
+  question: string;
+  answer: string;
+  wasCustom: boolean;
+  index?: number;
+}
+
+/** Builds the behavioral tool-result message returned to the parent model. */
 export function buildAskUserResultMessage(
   outcome:
     | { kind: "no-ui" }
     | { kind: "cancelled" }
     | { kind: "dismissed" }
-    | { kind: "custom"; answer: string }
-    | { kind: "selected"; answer: string; index: number | undefined },
+    | { kind: "answered"; answers: AnswerSummary[] },
 ) {
   switch (outcome.kind) {
     case "no-ui":
-      return "No interactive UI is available, so the question could not be shown. Ask the user in plain text instead.";
+      return "No interactive UI is available, so the questions could not be shown. Ask the user in plain text instead.";
     case "cancelled":
       return "Cancelled";
     case "dismissed":
-      return "User dismissed the question without answering. Do not assume an answer; proceed accordingly or ask differently.";
-    case "custom":
-      return `User wrote their own answer: ${outcome.answer}`;
-    case "selected":
-      return `User selected option ${outcome.index}: ${outcome.answer}`;
+      return "User dismissed the questions without submitting all answers. Do not assume any answers; proceed accordingly or ask differently.";
+    case "answered":
+      return outcome.answers
+        .map((answer, index) => {
+          const value = answer.wasCustom
+            ? `wrote their own answer: ${answer.answer}`
+            : `selected option ${answer.index}: ${answer.answer}`;
+          return `Question ${index + 1} (${answer.question}): user ${value}`;
+        })
+        .join("\n");
   }
 }

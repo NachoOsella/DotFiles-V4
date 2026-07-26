@@ -1,13 +1,13 @@
 {
-  "lastChangelogVersion": "0.81.1",
+  "lastChangelogVersion": "0.82.1",
   "theme": "gruvbox-material-dark-hard",
-  "defaultThinkingLevel": "high",
+  "defaultThinkingLevel": "xhigh",
   "hideThinkingBlock": false,
   "quietStartup": false,
   "enableSkillCommands": true,
   "extensions": [],
-  "defaultProvider": "opencode-go",
-  "defaultModel": "deepseek-v4-flash",
+  "defaultProvider": "zen-free",
+  "defaultModel": "deepseek-v4-flash-free",
   "steeringMode": "one-at-a-time",
   "terminal": {
     "showTerminalProgress": false

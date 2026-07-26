@@ -11,6 +11,8 @@ export interface ServerConfig {
     readonly command: readonly string[]
     readonly extensions: readonly string[]
     readonly rootMarkers: readonly string[]
+    /** Higher values win when multiple servers support the same file. */
+    readonly priority?: number
     readonly requiresRootMarker?: boolean
     readonly env?: Readonly<Record<string, string>>
     readonly initialization?: unknown
@@ -21,6 +23,8 @@ export interface LspConfig {
     readonly enabled: boolean
     readonly diagnosticsAfterEdit: boolean
     readonly warmOnRead: boolean
+    /** Shut down clients after this much inactivity to avoid orphaned servers. */
+    readonly idleTimeoutMs: number
     readonly servers: Readonly<Record<string, ServerConfig>>
 }
 
@@ -52,6 +56,9 @@ export interface LspRequest {
     readonly line?: number
     readonly character?: number
     readonly query?: string
+    readonly limit?: number
+    readonly offset?: number
+    readonly contextLines?: number
 }
 
 export interface LspLocationResult {

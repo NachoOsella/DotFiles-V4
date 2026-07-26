@@ -5,40 +5,49 @@ import type { LspDiagnostic } from '../types.ts'
 const MAX_PER_FILE = 20
 const MAX_TOTAL = 50
 
+export type DiagnosticSeverityFilter = 'error' | 'warning' | 'all'
+
 export function formatDiagnostics(
     items: readonly LspDiagnostic[],
-    cwd: string
+    cwd: string,
+    severity: DiagnosticSeverityFilter = 'error'
 ): string {
-    const errors = items
-        .filter((item) => (item.severity ?? 1) === 1)
-        .sort((left, right) => left.filePath.localeCompare(right.filePath))
-    if (errors.length === 0) return ''
+    const selected = items
+        .filter((item) => matchesSeverity(item.severity, severity))
+        .sort(
+            (left, right) =>
+                left.filePath.localeCompare(right.filePath) ||
+                left.range.start.line - right.range.start.line ||
+                left.range.start.character - right.range.start.character
+        )
+    if (selected.length === 0) return ''
 
     const grouped = new Map<string, LspDiagnostic[]>()
-    for (const item of errors) {
+    for (const item of selected) {
         const values = grouped.get(item.filePath) ?? []
-        if (values.length < MAX_PER_FILE) values.push(item)
+        values.push(item)
         grouped.set(item.filePath, values)
     }
 
     const lines: string[] = []
-    let total = 0
+    let printedTotal = 0
     for (const [filePath, fileItems] of grouped) {
-        if (total >= MAX_TOTAL) break
+        if (printedTotal >= MAX_TOTAL) break
+        const printable = fileItems.slice(
+            0,
+            Math.min(MAX_PER_FILE, MAX_TOTAL - printedTotal)
+        )
         const relativePath = relative(cwd, filePath) || filePath
         lines.push(`<diagnostics file="${relativePath}">`)
-        for (const item of fileItems.slice(0, MAX_TOTAL - total)) {
-            lines.push(formatDiagnostic(item))
-            total += 1
-        }
-        const omitted =
-            errors.filter((candidate) => candidate.filePath === filePath)
-                .length - fileItems.length
-        if (omitted > 0) lines.push(`... and ${omitted} more`)
+        for (const item of printable) lines.push(formatDiagnostic(item))
+        const omitted = fileItems.length - printable.length
+        if (omitted > 0) lines.push(`... ${omitted} more in this file`)
         lines.push('</diagnostics>')
+        printedTotal += printable.length
     }
-    if (errors.length > total)
-        lines.push(`... and ${errors.length - total} more diagnostics`)
+    const omittedTotal = selected.length - printedTotal
+    if (omittedTotal > 0)
+        lines.push(`... ${omittedTotal} more diagnostics total`)
     return lines.join('\n')
 }
 
@@ -55,4 +64,14 @@ export function formatDiagnostic(item: Diagnostic): string {
     const character = item.range.start.character + 1
     const code = item.code === undefined ? '' : ` ${String(item.code)}`
     return `${severity}${code} [${line}:${character}] ${item.message}`
+}
+
+function matchesSeverity(
+    severity: Diagnostic['severity'],
+    filter: DiagnosticSeverityFilter
+) {
+    const value = severity ?? 1
+    if (filter === 'error') return value === 1
+    if (filter === 'warning') return value <= 2
+    return true
 }

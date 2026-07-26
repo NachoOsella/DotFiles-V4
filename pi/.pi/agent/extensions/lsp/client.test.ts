@@ -1,9 +1,19 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, writeFile, rm } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
+import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { startClient } from './src/client.ts'
+
+async function waitForFile(path: string, timeoutMs = 2_000): Promise<boolean> {
+    const deadline = Date.now() + timeoutMs
+    while (Date.now() < deadline) {
+        if (existsSync(path)) return true
+        await new Promise((resolve) => setTimeout(resolve, 20))
+    }
+    return existsSync(path)
+}
 
 test('starts an stdio LSP client and receives diagnostics', async () => {
     const root = await mkdtemp(join(tmpdir(), 'pi-lsp-test-'))
@@ -25,7 +35,7 @@ process.stdin.on('data', (chunk) => {
     if (buffer.length < start + length) break
     const message = JSON.parse(buffer.subarray(start, start + length).toString())
     buffer = buffer.subarray(start + length)
-    if (message.method === 'initialize') respond(message.id, { capabilities: {} })
+    if (message.method === 'initialize') respond(message.id, { capabilities: { textDocumentSync: { openClose: true, change: 1 } } })
     if (message.method === 'textDocument/didOpen') {
       notify('textDocument/publishDiagnostics', {
         uri: message.params.textDocument.uri,
@@ -60,6 +70,124 @@ function notify(method, params) { send({ jsonrpc: '2.0', method, params }) }
         assert.equal(diagnostics[0]?.message, 'test diagnostic')
     } finally {
         await client.shutdown()
+        await rm(root, { recursive: true, force: true })
+    }
+})
+
+test('serializes touches and skips unchanged document updates', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'pi-lsp-touch-'))
+    const server = join(root, 'server.mjs')
+    const log = join(root, 'messages.log')
+    const filePath = join(root, 'example.ts')
+    await writeFile(filePath, 'export const value = 1\n')
+    await writeFile(
+        server,
+        `
+import { appendFileSync } from 'node:fs'
+let buffer = Buffer.alloc(0)
+process.stdin.on('data', (chunk) => {
+  buffer = Buffer.concat([buffer, chunk])
+  while (true) {
+    const separator = buffer.indexOf('\\r\\n\\r\\n')
+    if (separator < 0) break
+    const header = buffer.subarray(0, separator).toString()
+    const length = Number(header.match(/Content-Length: (\\d+)/i)?.[1] ?? 0)
+    const start = separator + 4
+    if (buffer.length < start + length) break
+    const message = JSON.parse(buffer.subarray(start, start + length).toString())
+    buffer = buffer.subarray(start + length)
+    if (message.method === 'initialize') respond(message.id, { capabilities: { textDocumentSync: { openClose: true, change: 1 } } })
+    if (message.method === 'textDocument/didOpen') appendFileSync(process.argv[2], 'open:0\\n')
+    if (message.method === 'textDocument/didChange') appendFileSync(process.argv[2], 'change:' + message.params.textDocument.version + '\\n')
+    if (message.method === 'shutdown') respond(message.id, null)
+  }
+})
+function respond(id, result) {
+  const body = JSON.stringify({ jsonrpc: '2.0', id, result })
+  process.stdout.write('Content-Length: ' + Buffer.byteLength(body) + '\\r\\n\\r\\n' + body)
+}
+`
+    )
+    const client = await startClient({
+        serverId: 'test',
+        config: {
+            command: [process.execPath, server, log],
+            extensions: ['.ts'],
+            rootMarkers: [],
+        },
+        root,
+    })
+    try {
+        await Promise.all([
+            client.touchFile(filePath, false),
+            client.touchFile(filePath, false),
+        ])
+        await writeFile(filePath, 'export const value = 2\n')
+        await Promise.all([
+            client.touchFile(filePath, false),
+            client.touchFile(filePath, false),
+        ])
+        const messages = await readFile(log, 'utf8')
+        assert.deepEqual(messages.trim().split('\n'), ['open:0', 'change:1'])
+    } finally {
+        await client.shutdown()
+        await rm(root, { recursive: true, force: true })
+    }
+})
+
+test('reports spawn errors immediately', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'pi-lsp-spawn-error-'))
+    try {
+        await assert.rejects(
+            startClient({
+                serverId: 'missing',
+                config: {
+                    command: [join(root, 'missing-language-server')],
+                    extensions: ['.ts'],
+                    rootMarkers: [],
+                },
+                root,
+            }),
+            /Failed to start LSP missing/
+        )
+    } finally {
+        await rm(root, { recursive: true, force: true })
+    }
+})
+
+test('aborts initialization and terminates the server process group', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'pi-lsp-abort-'))
+    const server = join(root, 'server.mjs')
+    const terminated = join(root, 'terminated')
+    await writeFile(
+        server,
+        `
+import { writeFileSync } from 'node:fs'
+process.on('SIGTERM', () => {
+  writeFileSync(process.argv[2], 'terminated')
+  process.exit(0)
+})
+process.stdin.resume()
+`
+    )
+
+    const controller = new AbortController()
+    const started = startClient({
+        serverId: 'test',
+        config: {
+            command: [process.execPath, server, terminated],
+            extensions: ['.ts'],
+            rootMarkers: [],
+        },
+        root,
+        signal: controller.signal,
+    })
+    setTimeout(() => controller.abort(), 50)
+
+    try {
+        await assert.rejects(started, /initialization aborted/)
+        assert.equal(await waitForFile(terminated), true)
+    } finally {
         await rm(root, { recursive: true, force: true })
     }
 })

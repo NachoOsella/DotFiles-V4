@@ -27,3 +27,15 @@ test('formats errors and excludes warnings', () => {
     assert.match(output, /ERROR \[2:3\] Type error/)
     assert.doesNotMatch(output, /WARN/)
 })
+
+test('can include warnings without duplicating truncation counts', () => {
+    const items = Array.from({ length: 55 }, (_, index) => ({
+        ...diagnostic(index % 2 === 0 ? 1 : 2, '/workspace/src/app.ts'),
+        message: `Issue ${index}`,
+    }))
+    const output = formatDiagnostics(items, '/workspace', 'all')
+
+    assert.match(output, /WARN/)
+    assert.match(output, /35 more in this file/)
+    assert.match(output, /35 more diagnostics total/)
+})

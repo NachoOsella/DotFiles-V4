@@ -30,4 +30,24 @@ export const LspParameters = Type.Object({
     query: Type.Optional(
         Type.String({ description: LSP_PARAMETER_DESCRIPTIONS.query })
     ),
+    limit: Type.Optional(
+        Type.Integer({
+            minimum: 1,
+            maximum: 50,
+            description: LSP_PARAMETER_DESCRIPTIONS.limit,
+        })
+    ),
+    offset: Type.Optional(
+        Type.Integer({
+            minimum: 0,
+            description: LSP_PARAMETER_DESCRIPTIONS.offset,
+        })
+    ),
+    contextLines: Type.Optional(
+        Type.Integer({
+            minimum: 0,
+            maximum: 3,
+            description: LSP_PARAMETER_DESCRIPTIONS.contextLines,
+        })
+    ),
 })

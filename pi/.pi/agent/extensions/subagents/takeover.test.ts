@@ -1,9 +1,25 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  preserveScrolledOffset,
   reconcileDashboardSelection,
   type DashboardSelection,
 } from "./src/ui/takeover.ts";
+
+test("keeps scrolled transcript content anchored as streamed output grows", () => {
+  const previousLineCount = 100;
+  const nextLineCount = 125;
+  const previousOffset = 30;
+  const nextOffset = preserveScrolledOffset(
+    previousOffset,
+    previousLineCount,
+    nextLineCount,
+  );
+
+  assert.equal(nextOffset, 55);
+  assert.equal(previousLineCount - previousOffset, nextLineCount - nextOffset);
+  assert.equal(preserveScrolledOffset(0, previousLineCount, nextLineCount), 0);
+});
 
 test("dashboard selection follows its subagent id and falls back by row", () => {
   const selection: DashboardSelection = { id: "sa-7", index: 6 };

@@ -106,6 +106,18 @@ export function reconcileDashboardSelection(
   selection.id = subs[selection.index]?.id;
 }
 
+/** Keep the same transcript lines visible when new output arrives above the tail. */
+export function preserveScrolledOffset(
+  scrollOffset: number,
+  previousLineCount: number | undefined,
+  nextLineCount: number,
+): number {
+  if (scrollOffset === 0 || previousLineCount === undefined) {
+    return scrollOffset;
+  }
+  return Math.max(0, scrollOffset + nextLineCount - previousLineCount);
+}
+
 class SubagentDashboard implements Component {
   private tui: TUI;
   private theme: Theme;
@@ -358,6 +370,9 @@ class TakeoverView implements Component, Focusable {
   private input = new Input();
   /** Scroll offset in lines from the bottom of the transcript. 0 = pinned to bottom. */
   private scrollOffset = 0;
+  private previousTranscriptLineCount?: number;
+  private previousTranscriptWidth?: number;
+  private hasPendingSnapshotUpdate = false;
   private unsubscribe: () => void;
   private renderTimer?: ReturnType<typeof setTimeout>;
   private ticker: ReturnType<typeof setInterval>;
@@ -386,7 +401,10 @@ class TakeoverView implements Component, Focusable {
     this.id = id;
     this.view = view;
     this.done = done;
-    this.unsubscribe = view.subscribeTo(id, () => this.scheduleRender());
+    this.unsubscribe = view.subscribeTo(id, () => {
+      this.hasPendingSnapshotUpdate = true;
+      this.scheduleRender();
+    });
     // Elapsed time in the header ticks along at 1Hz.
     this.ticker = setInterval(() => this.tui.requestRender(), 1000);
     this.input.onSubmit = (value: string) => {
@@ -529,6 +547,22 @@ class TakeoverView implements Component, Focusable {
     // Fixed-height transcript viewport. Error and scroll status consume rows
     // inside the viewport so streaming/scrolling never changes overlay height.
     const transcript = buildTranscriptLines(snap, contentWidth, theme);
+    // The offset is tail-relative. Compensate for appended streamed lines so a
+    // reader who scrolled up stays on the exact output they were inspecting.
+    if (
+      this.hasPendingSnapshotUpdate &&
+      this.previousTranscriptWidth === contentWidth
+    ) {
+      this.scrollOffset = preserveScrolledOffset(
+        this.scrollOffset,
+        this.previousTranscriptLineCount,
+        transcript.length,
+      );
+    }
+    this.previousTranscriptLineCount = transcript.length;
+    this.previousTranscriptWidth = contentWidth;
+    this.hasPendingSnapshotUpdate = false;
+
     const viewport = this.viewportHeight();
     const errorRows = snap.errorText ? 1 : 0;
     const scrollRows = this.scrollOffset > 0 ? 1 : 0;
@@ -552,27 +586,14 @@ class TakeoverView implements Component, Focusable {
 
     if (this.scrollOffset > 0) {
       body.push(
-        theme.fg("dim", `↓ ${this.scrollOffset} newer lines · down/page down`),
+        theme.fg(
+          "warning",
+          `paused · ${this.scrollOffset} newer lines · ↓/pgdn follow`,
+        ),
       );
     }
     while (body.length < viewport) body.push("");
-    // Card lines (from buildTranscriptLines) already have their own box-drawing
-    // borders — pad without adding extra framing. Plain lines get the framed
-    // treatment.
-    const isCardLine = (s: string) => {
-      const plain = s.replace(/\x1b\[[0-9;]*m/g, "");
-      const ch = plain[0];
-      return ch === "\u256d" || ch === "\u2502" || ch === "\u2570" || ch === "\u251c";
-    };
-    lines.push(
-      ...body.slice(0, viewport).map((line) => {
-        if (isCardLine(line)) {
-          const clipped = truncateToWidth(line, contentWidth);
-          return clipped + " ".repeat(Math.max(0, contentWidth - visibleWidth(clipped)));
-        }
-        return framed(line);
-      }),
-    );
+    lines.push(...body.slice(0, viewport).map(framed));
 
     lines.push(horizontal("├", "─", "┤"));
     const inputLines = this.input.render(Math.max(1, contentWidth - 2));

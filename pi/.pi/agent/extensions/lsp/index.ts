@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs'
-import { resolve } from 'node:path'
+import { isAbsolute, relative, resolve } from 'node:path'
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent'
 import { Text } from '@earendil-works/pi-tui'
 import { Effect } from 'effect'
@@ -22,17 +22,24 @@ export default function lspExtension(pi: ExtensionAPI) {
     let loaded: LoadedConfig | undefined
     let cwd = process.cwd()
 
-    const getRuntime = (nextCwd: string, trusted: boolean) => {
-        if (!runtime || cwd !== nextCwd) {
-            void runtime?.dispose()
+    let runtimeTransition: Promise<LspRuntime> | undefined
+    const getRuntime = async (nextCwd: string, trusted: boolean) => {
+        if (runtime && cwd === nextCwd) return runtime
+        if (runtimeTransition) return runtimeTransition
+        runtimeTransition = (async () => {
+            await runtime?.dispose()
             cwd = nextCwd
             loaded = loadConfig(cwd, trusted)
             runtime = createRuntime(loaded.config, cwd)
-        }
-        return runtime
+            return runtime
+        })().finally(() => {
+            runtimeTransition = undefined
+        })
+        return runtimeTransition
     }
 
     pi.on('session_start', async (_event, ctx) => {
+        await runtimeTransition
         await runtime?.dispose()
         runtime = undefined
         cwd = ctx.cwd
@@ -42,6 +49,7 @@ export default function lspExtension(pi: ExtensionAPI) {
     })
 
     pi.on('session_shutdown', async (_event, ctx) => {
+        await runtimeTransition
         await runtime?.dispose()
         runtime = undefined
         if (ctx.hasUI) ctx.ui.setStatus('lsp', undefined)
@@ -54,8 +62,8 @@ export default function lspExtension(pi: ExtensionAPI) {
         promptSnippet: LSP_PROMPT_SNIPPET,
         parameters: LspParameters,
         renderCall(args, theme, context) {
-            const path = args.filePath.startsWith(context.cwd)
-                ? args.filePath.slice(context.cwd.length + 1)
+            const path = isAbsolute(args.filePath)
+                ? relative(context.cwd, args.filePath)
                 : args.filePath
             const label = `${args.operation} ${path}`
             return new Text(
@@ -75,7 +83,7 @@ export default function lspExtension(pi: ExtensionAPI) {
             const details = result.details as CompactLspDetails | undefined
             if (!details)
                 return new Text(theme.fg('muted', 'No LSP result.'), 0, 0)
-            const lines = details.summary.split('\\n')
+            const lines = details.summary.split('\n')
             const visible = expanded ? lines : lines.slice(0, 4)
             let text = visible.join('\\n')
             if (!expanded && lines.length > visible.length)
@@ -98,9 +106,19 @@ export default function lspExtension(pi: ExtensionAPI) {
                 )
             }
 
+            if (
+                operation === 'workspaceSymbols' &&
+                !params.query?.trim()
+            ) {
+                throw new Error('workspaceSymbols requires a non-empty query.')
+            }
+            const serviceRuntime = await getRuntime(
+                ctx.cwd,
+                ctx.isProjectTrusted()
+            )
             const service = LspService
             const effect = importService(
-                getRuntime(ctx.cwd, ctx.isProjectTrusted()),
+                serviceRuntime,
                 service,
                 (lsp) =>
                     lsp.request({
@@ -109,10 +127,13 @@ export default function lspExtension(pi: ExtensionAPI) {
                         line: params.line,
                         character: params.character,
                         query: params.query,
+                        limit: params.limit,
+                        offset: params.offset,
+                        contextLines: params.contextLines,
                     })
             )
             const result = await runLsp(
-                getRuntime(ctx.cwd, ctx.isProjectTrusted()),
+                serviceRuntime,
                 effect,
                 {
                     signal,
@@ -121,9 +142,14 @@ export default function lspExtension(pi: ExtensionAPI) {
             )
             await publishRuntimeStatus(
                 pi,
-                getRuntime(ctx.cwd, ctx.isProjectTrusted())
+                serviceRuntime,
+                loaded?.config.enabled
             )
-            const details = compactLspResult(operation, result, ctx.cwd)
+            const details = await compactLspResult(operation, result, ctx.cwd, {
+                limit: params.limit,
+                offset: params.offset,
+                contextLines: params.contextLines,
+            })
             return {
                 content: [{ type: 'text' as const, text: details.summary }],
                 details,
@@ -133,7 +159,10 @@ export default function lspExtension(pi: ExtensionAPI) {
 
     pi.on('tool_result', async (event, ctx) => {
         if (event.isError) return
-        const serviceRuntime = getRuntime(ctx.cwd, ctx.isProjectTrusted())
+        const serviceRuntime = await getRuntime(
+            ctx.cwd,
+            ctx.isProjectTrusted()
+        )
 
         if (
             EDIT_TOOLS.has(event.toolName) &&
@@ -160,7 +189,11 @@ export default function lspExtension(pi: ExtensionAPI) {
                         interruptMessage: 'LSP diagnostics cancelled.',
                     }
                 )
-                await publishRuntimeStatus(pi, serviceRuntime)
+                await publishRuntimeStatus(
+                    pi,
+                    serviceRuntime,
+                    loaded?.config.enabled
+                )
                 const text = formatDiagnostics(diagnostics, ctx.cwd)
                 if (!text) return
                 return {
@@ -177,6 +210,11 @@ export default function lspExtension(pi: ExtensionAPI) {
                     },
                 }
             } catch {
+                await publishRuntimeStatus(
+                    pi,
+                    serviceRuntime,
+                    loaded?.config.enabled
+                )
                 return
             }
         }
@@ -193,8 +231,20 @@ export default function lspExtension(pi: ExtensionAPI) {
                 ),
                 { signal: ctx.signal }
             )
-                .then(() => publishRuntimeStatus(pi, serviceRuntime))
-                .catch(() => undefined)
+                .then(() =>
+                    publishRuntimeStatus(
+                        pi,
+                        serviceRuntime,
+                        loaded?.config.enabled
+                    )
+                )
+                .catch(() =>
+                    publishRuntimeStatus(
+                        pi,
+                        serviceRuntime,
+                        loaded?.config.enabled
+                    )
+                )
         }
     })
 
@@ -202,10 +252,14 @@ export default function lspExtension(pi: ExtensionAPI) {
         description: 'Show configured and active language servers',
         handler: async (_args, ctx) => {
             const current = loadConfig(ctx.cwd, ctx.isProjectTrusted())
+            const serviceRuntime = await getRuntime(
+                ctx.cwd,
+                ctx.isProjectTrusted()
+            )
             const active = await runLsp(
-                getRuntime(ctx.cwd, ctx.isProjectTrusted()),
+                serviceRuntime,
                 importService(
-                    getRuntime(ctx.cwd, ctx.isProjectTrusted()),
+                    serviceRuntime,
                     LspService,
                     (lsp) => lsp.status
                 )
@@ -215,6 +269,7 @@ export default function lspExtension(pi: ExtensionAPI) {
             const lines = [
                 `LSP: ${current.config.enabled ? 'enabled' : 'disabled'}`,
                 `Config: ${current.path ?? 'default settings'}`,
+                ...(current.error ? [`Config warning: ${current.error}`] : []),
                 `Configured servers: ${configured}`,
                 active.length === 0
                     ? 'Active clients: none'
@@ -231,14 +286,21 @@ export default function lspExtension(pi: ExtensionAPI) {
     pi.registerCommand('lsp-restart', {
         description: 'Restart active language server clients',
         handler: async (args, ctx) => {
-            const serviceRuntime = getRuntime(ctx.cwd, ctx.isProjectTrusted())
+            const serviceRuntime = await getRuntime(
+                ctx.cwd,
+                ctx.isProjectTrusted()
+            )
             await runLsp(
                 serviceRuntime,
                 importService(serviceRuntime, LspService, (lsp) =>
                     lsp.restart(args.trim() || undefined)
                 )
             )
-            await publishRuntimeStatus(pi, serviceRuntime)
+            await publishRuntimeStatus(
+                pi,
+                serviceRuntime,
+                loaded?.config.enabled
+            )
             ctx.ui.notify(
                 args.trim()
                     ? `Restarted LSP server ${args.trim()}.`
@@ -251,16 +313,19 @@ export default function lspExtension(pi: ExtensionAPI) {
     pi.registerCommand('lsp-diagnostics', {
         description: 'Show current language-server diagnostics',
         handler: async (args, ctx) => {
-            const serviceRuntime = getRuntime(ctx.cwd, ctx.isProjectTrusted())
+            const serviceRuntime = await getRuntime(
+                ctx.cwd,
+                ctx.isProjectTrusted()
+            )
             const diagnostics = await runLsp(
                 serviceRuntime,
                 importService(serviceRuntime, LspService, (lsp) =>
                     lsp.diagnostics(args.trim() || undefined)
                 )
             )
-            const text = formatDiagnostics(diagnostics, ctx.cwd)
+            const text = formatDiagnostics(diagnostics, ctx.cwd, 'all')
             ctx.ui.notify(
-                text || 'No LSP errors found.',
+                text || 'No LSP diagnostics found.',
                 text ? 'warning' : 'info'
             )
         },
@@ -283,14 +348,15 @@ function publishLspStatus(
 
 async function publishRuntimeStatus(
     pi: ExtensionAPI,
-    currentRuntime: LspRuntime
+    currentRuntime: LspRuntime,
+    enabled = true
 ) {
     try {
         const statuses = await runLsp(
             currentRuntime,
             importService(currentRuntime, LspService, (lsp) => lsp.status)
         )
-        publishLspStatus(pi, true, statuses)
+        publishLspStatus(pi, enabled, statuses)
     } catch {
         // Status reporting must never affect LSP requests or editing.
     }

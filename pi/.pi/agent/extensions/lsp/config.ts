@@ -12,6 +12,7 @@ const DEFAULT_SERVERS: Readonly<Record<string, ServerConfig>> = {
         extensions: ['.ts', '.tsx', '.html'],
         rootMarkers: ['angular.json', 'project.json'],
         requiresRootMarker: true,
+        priority: 50,
     },
     typescript: {
         command: ['typescript-language-server', '--stdio'],
@@ -26,6 +27,7 @@ const DEFAULT_SERVERS: Readonly<Record<string, ServerConfig>> = {
             '.cts',
         ],
         rootMarkers: ['tsconfig.json', 'package.json'],
+        priority: 100,
     },
     jdtls: {
         command: ['jdtls'],
@@ -147,6 +149,7 @@ const DEFAULT_SERVERS: Readonly<Record<string, ServerConfig>> = {
 export interface LoadedConfig {
     readonly config: LspConfig
     readonly path: string | undefined
+    readonly error?: string
 }
 
 export function loadConfig(cwd: string, trusted: boolean): LoadedConfig {
@@ -155,11 +158,22 @@ export function loadConfig(cwd: string, trusted: boolean): LoadedConfig {
     const base: LspConfig = {
         enabled: Object.keys(detectedServers).length > 0,
         diagnosticsAfterEdit: true,
-        warmOnRead: true,
+        // Reads are frequent and should not leave a server running for every
+        // incidental file type. Servers still start on explicit LSP requests
+        // and post-edit diagnostics.
+        warmOnRead: false,
+        idleTimeoutMs: 180_000,
         servers: detectedServers,
     }
 
-    if (!trusted || !existsSync(path)) return { config: base, path: undefined }
+    if (!trusted) {
+        return {
+            config: { ...base, enabled: false },
+            path: undefined,
+            error: 'Project is not trusted; LSP process execution is disabled.',
+        }
+    }
+    if (!existsSync(path)) return { config: base, path: undefined }
 
     try {
         const value = JSON.parse(readFileSync(path, 'utf8')) as unknown
@@ -182,13 +196,18 @@ export function loadConfig(cwd: string, trusted: boolean): LoadedConfig {
                 enabled:
                     value.enabled !== false && Object.keys(servers).length > 0,
                 diagnosticsAfterEdit: value.diagnosticsAfterEdit !== false,
-                warmOnRead: value.warmOnRead !== false,
+                warmOnRead: value.warmOnRead === true,
+                idleTimeoutMs: positiveInteger(value.idleTimeoutMs) ?? 180_000,
                 servers,
             },
             path,
         }
-    } catch {
-        return { config: base, path }
+    } catch (error) {
+        return {
+            config: base,
+            path,
+            error: error instanceof Error ? error.message : String(error),
+        }
     }
 }
 
@@ -209,10 +228,19 @@ function parseServer(
             typeof value.requiresRootMarker === 'boolean'
                 ? value.requiresRootMarker
                 : fallback?.requiresRootMarker,
+        priority: positiveInteger(value.priority) ?? fallback?.priority,
         env: isRecord(value.env) ? stringRecord(value.env) : fallback?.env,
         initialization: value.initialization ?? fallback?.initialization,
         disabled: false,
     }
+}
+
+function positiveInteger(value: unknown): number | undefined {
+    return typeof value === 'number' &&
+        Number.isSafeInteger(value) &&
+        value > 0
+        ? value
+        : undefined
 }
 
 function stringArray(value: unknown): readonly string[] | undefined {
@@ -240,19 +268,29 @@ function detectAvailableServers(): Readonly<Record<string, ServerConfig>> {
     )
 }
 
+const commandAvailability = new Map<string, boolean>()
+
 function commandAvailable(command: string | undefined): boolean {
     if (!command) return false
+    const cacheKey = `${process.platform}:${process.env.PATH ?? ''}:${command}`
+    const cached = commandAvailability.get(cacheKey)
+    if (cached !== undefined) return cached
     if (isAbsolute(command)) {
         try {
             accessSync(command, constants.X_OK)
+            commandAvailability.set(cacheKey, true)
             return true
         } catch {
+            commandAvailability.set(cacheKey, false)
             return false
         }
     }
 
     const lookup = process.platform === 'win32' ? 'where' : 'which'
-    return spawnSync(lookup, [command], { stdio: 'ignore' }).status === 0
+    const available =
+        spawnSync(lookup, [command], { stdio: 'ignore' }).status === 0
+    commandAvailability.set(cacheKey, available)
+    return available
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

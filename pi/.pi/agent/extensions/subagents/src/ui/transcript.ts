@@ -7,20 +7,13 @@
  *   User messages      →  > text (accent prefix)
  *   Thinking            →  ~ italic muted  (dim prefix)
  *   Assistant text      →  plain wrapped (default text)
- *   Tool calls+results  →  framed cards with status
+ *   Tool calls+results  →  compact activity rows with a one-line preview
  *
- * ── Tool cards ──────────────────────────────────────────────
+ * ── Tool activity ───────────────────────────────────────────
  *
- *   ╭─ read  /path/to/file ─────────────────╮
- *   │ file content here                      │
- *   ╰● done ────────────────────────────────╯
- *
- *   ╭─ write ───────────────────────────────╮
- *   ╰● error ───────────────────────────────╯
- *
- *   ╭─ bash ────────────────────────────────╮
- *   │ total 15G ...                          │
- *   ╰● running ─────────────────────────────╯
+ *   ✓ read  /path/to/file
+ *     ↳ file content preview
+ *   ◌ bash  npm test
  */
 
 import type { Theme } from "@earendil-works/pi-coding-agent";
@@ -47,67 +40,59 @@ export function sanitizeText(text: string): string {
     .replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, "");
 }
 
-// ── Tool card primitives ────────────────────────────────────────────────────
-// Each card is exactly `inner` columns wide.
+// ── Tool activity primitives ────────────────────────────────────────────────
 
-function cardTop(
-  t: Theme,
+function summarizeToolDetail(detail: string | undefined): string {
+  const cleanDetail = detail ? sanitizeText(detail).trim() : "";
+  if (!cleanDetail.startsWith("{")) return cleanDetail;
+
+  try {
+    const input = JSON.parse(cleanDetail) as Record<string, unknown>;
+    for (const key of ["path", "command", "query", "url"]) {
+      if (typeof input[key] === "string") return input[key];
+    }
+  } catch {
+    // Keep an unparseable argument preview intact rather than hiding it.
+  }
+
+  return cleanDetail;
+}
+
+function toolActivity(
+  theme: Theme,
+  status: "done" | "error" | "running",
   name: string,
   detail: string | undefined,
-  inner: number,
+  width: number,
 ): string {
-  const tag = ` ${name}${detail ? ` ${truncateToWidth(detail, Math.max(0, inner - name.length - 6))}` : ""} `;
-  const tagW = visibleWidth(tag);
-  const fill = Math.max(0, inner - tagW - 2);
-  return (
-    t.fg("border", "╭─") +
-    t.fg("toolTitle", tag) +
-    t.fg("border", "─".repeat(fill) + "╮")
-  );
+  const [glyph, color] =
+    status === "done"
+      ? ["✓", "success"]
+      : status === "error"
+        ? ["✗", "error"]
+        : ["◌", "warning"];
+  const cleanDetail = summarizeToolDetail(detail);
+  const prefix =
+    `${theme.fg(color as any, glyph)} ${theme.fg("toolTitle", name)}`;
+  const available = Math.max(0, width - visibleWidth(prefix) - 2);
+  const suffix = cleanDetail
+    ? theme.fg("muted", `  ${truncateToWidth(cleanDetail, available)}`)
+    : "";
+  return truncateToWidth(prefix + suffix, width);
 }
 
-function cardMid(
-  t: Theme,
-  text: string,
-  inner: number,
-  fg: string = "toolOutput",
-): string {
-  const clipped = truncateToWidth(text, inner - 2);
-  const pad = Math.max(0, inner - visibleWidth(clipped) - 2);
-  return (
-    t.fg("border", "│") +
-    " " +
-    t.fg(fg as any, clipped) +
-    " ".repeat(pad) +
-    t.fg("border", "│")
-  );
-}
-
-function cardBot(
-  t: Theme,
-  status: "done" | "error" | "running",
-  inner: number,
-): string {
-  const color =
-    status === "done" ? "success" : status === "error" ? "error" : "warning";
-  const bullet = "\u25cf"; // ●
-  const label = ` ${bullet} ${status} `;
-  const labelW = visibleWidth(label);
-  const fill = Math.max(0, inner - labelW - 2);
-  return (
-    t.fg("border", "\u2570\u2500") + // ╰─
-    t.fg(color as any, label) +
-    t.fg("border", "\u2500".repeat(fill) + "\u256f") // ──╯
-  );
-}
-
-function cardEmpty(t: Theme, inner: number): string {
-  return (
-    t.fg("border", "\u2502") +
-    " " +
-    t.fg("dim", truncateToWidth("(no output)", inner - 2)) +
-    " ".repeat(Math.max(0, inner - visibleWidth("(no output)") - 2)) +
-    t.fg("border", "\u2502")
+function toolPreview(
+  theme: Theme,
+  output: string | undefined,
+  width: number,
+): string | undefined {
+  const firstLine = output
+    ? sanitizeText(output).split("\n").find((line) => line.trim())
+    : undefined;
+  if (!firstLine) return undefined;
+  return truncateToWidth(
+    theme.fg("dim", "  ↳ ") + theme.fg("toolOutput", firstLine.trim()),
+    width,
   );
 }
 
@@ -170,7 +155,8 @@ function addSeparator(t: Theme, width: number, out: string[]) {
 
 /**
  * Render a subagent's conversation as visually distinct lines, wrapped to
- * `width`. Tool calls and their results are grouped into framed cards.
+ * `width`. Tool calls and results share compact rows to keep the transcript
+ * scan-friendly during busy subagent runs.
  */
 export function buildTranscriptLines(
   snap: SubagentSnapshot,
@@ -178,36 +164,26 @@ export function buildTranscriptLines(
   theme: Theme,
 ): string[] {
   const out: string[] = [];
-  // Track tool call cards opened by an assistant part and not yet closed by
-  // a toolResult. Multiple cards may be open at once (parallel tool calls).
-  const openCards = new Map<
-    string,
-    { name: string; argsPreview?: string }
-  >();
-  // Tracks the number of consecutive tool-result lines so we can suppress the
-  // spacer between them (they belong to the same logical card).
-  let lastWasToolResult = false;
+  // Keep enough call metadata to render its matching result as one activity
+  // row. Multiple tools can remain open while parallel calls are in flight.
+  const openTools = new Map<string, { name: string; argsPreview?: string }>();
 
-  const closeOpenCards = (forceEmpty = false) => {
-    if (openCards.size === 0) return;
-    for (const [toolId] of openCards) {
-      if (forceEmpty) {
-        out.push(cardEmpty(theme, width));
-      }
-      out.push(cardBot(theme, "error", width));
-      openCards.delete(toolId);
+  const closeOpenTools = () => {
+    for (const [toolId, tool] of openTools) {
+      out.push(
+        toolActivity(theme, "error", tool.name, tool.argsPreview, width),
+      );
+      openTools.delete(toolId);
     }
-    lastWasToolResult = false;
   };
 
   for (const item of snap.transcript) {
     if (item.kind === "user") {
-      closeOpenCards();
+      closeOpenTools();
       addSeparator(theme, width, out);
       renderUserText(theme, item.text, width, out);
-      lastWasToolResult = false;
     } else if (item.kind === "assistant") {
-      closeOpenCards();
+      closeOpenTools();
       addSeparator(theme, width, out);
 
       for (const part of item.parts) {
@@ -221,74 +197,35 @@ export function buildTranscriptLines(
             out,
           );
         } else if (part.type === "toolCall") {
-          // Start a card. The matching toolResult will fill in the body and
-          // close it. If no result arrives (e.g., parallel error), the card
-          // stays open and gets closed with an error footer before the next
-          // non-result item.
-          openCards.set(part.toolId, {
+          openTools.set(part.toolId, {
             name: part.name,
-            argsPreview: part.argsPreview,
+            argsPreview:
+              part.argsPreview && part.argsPreview !== "{}"
+                ? part.argsPreview
+                : undefined,
           });
-          const preview =
-            part.argsPreview && part.argsPreview !== "{}"
-              ? sanitizeText(part.argsPreview).slice(0, 120)
-              : undefined;
-          out.push(cardTop(theme, part.name, preview, width));
         }
       }
-      lastWasToolResult = false;
     } else {
-      // toolResult — fill in the matching card body and close it.
-      const info = openCards.get(item.toolId);
-      if (info) {
-
-        const output = item.outputPreview
-          ? sanitizeText(item.outputPreview)
-          : "";
-        const lines = output.split("\n").filter(Boolean);
-        const maxLines = 12;
-        const shown = lines.slice(0, maxLines);
-
-        for (const line of shown) {
-          out.push(cardMid(theme, line, width));
-        }
-        if (lines.length > maxLines) {
-          out.push(
-            cardMid(
-              theme,
-              `... ${lines.length - maxLines} more lines`,
-              width,
-            ),
-          );
-        }
-        if (!output) {
-          out.push(cardEmpty(theme, width));
-        }
-        out.push(
-          cardBot(theme, item.isError ? "error" : "done", width),
-        );
-        openCards.delete(item.toolId);
-      } else {
-        // Orphan result (no matching call in transcript — edge case).
-        addSeparator(theme, width, out);
-        out.push(cardTop(theme, item.name, undefined, width));
-        const preview = item.outputPreview
-          ? sanitizeText(item.outputPreview)
-          : "";
-        if (preview) {
-          const first = preview.split("\n")[0] || "";
-          out.push(cardMid(theme, first, width));
-        } else {
-          out.push(cardEmpty(theme, width));
-        }
-        out.push(cardBot(theme, item.isError ? "error" : "done", width));
-      }
-      lastWasToolResult = true;
+      const tool = openTools.get(item.toolId);
+      if (!tool) addSeparator(theme, width, out);
+      out.push(
+        toolActivity(
+          theme,
+          item.isError ? "error" : "done",
+          tool?.name ?? item.name,
+          tool?.argsPreview,
+          width,
+        ),
+      );
+      const preview = toolPreview(theme, item.outputPreview, width);
+      if (preview) out.push(preview);
+      openTools.delete(item.toolId);
     }
   }
 
-  // Close any cards left open (run ended mid-tool with no result).
-  closeOpenCards(true);
+  // Close any calls that ended without a matching result.
+  closeOpenTools();
 
   // Trim trailing blank lines.
   while (out.length > 0 && out[out.length - 1] === "") out.pop();
@@ -310,22 +247,18 @@ export function buildTranscriptLines(
     if (out.length > 0 && out[out.length - 1] !== "") out.push("");
     const detail =
       tool.outputPreview && sanitizeText(tool.outputPreview).split("\n")[0];
-    out.push(cardTop(theme, tool.name, detail, width));
+    out.push(
+      toolActivity(
+        theme,
+        tool.done ? (tool.isError ? "error" : "done") : "running",
+        tool.name,
+        detail,
+        width,
+      ),
+    );
     if (tool.done) {
-      // ToolEnd already landed but the transcript hasn't been flushed yet.
-      const preview = tool.outputPreview
-        ? sanitizeText(tool.outputPreview)
-        : "";
-      const firstLine = preview.split("\n").find((l) => l.trim());
-      if (firstLine) {
-        out.push(cardMid(theme, firstLine, width));
-      } else {
-        out.push(cardEmpty(theme, width));
-      }
-      out.push(cardBot(theme, tool.isError ? "error" : "done", width));
-    } else {
-      // Still running — show a live card.
-      out.push(cardBot(theme, "running", width));
+      const preview = toolPreview(theme, tool.outputPreview, width);
+      if (preview) out.push(preview);
     }
   }
 
