@@ -1,6 +1,7 @@
 export const MODEL_INFO_CHANNEL = "dashboard:model-info";
 export const GIT_INFO_CHANNEL = "dashboard:git-info";
 export const LSP_INFO_CHANNEL = "dashboard:lsp-info";
+export const DISCORD_ACTIVITY_CHANNEL = "dashboard:discord-activity";
 export const REFRESH_CHANNEL = "dashboard:refresh";
 
 export interface ModelInfoState {
@@ -33,6 +34,10 @@ export interface GitInfoState {
   branch: string | null;
   changedFiles: number;
   pullRequest: PullRequestInfo | null;
+}
+
+export interface DiscordActivityState {
+  active: boolean;
 }
 
 export function emptyModelInfoState(): ModelInfoState {
@@ -73,6 +78,12 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isNullableNumber(value: unknown) {
   return value === null || typeof value === "number";
+}
+
+export function isDiscordActivityState(
+  value: unknown,
+): value is DiscordActivityState {
+  return isRecord(value) && typeof value.active === "boolean";
 }
 
 export function isLspInfoState(value: unknown): value is LspInfoState {

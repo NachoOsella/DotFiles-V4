@@ -12,6 +12,7 @@ import {
   visibleWidth,
 } from "@earendil-works/pi-tui";
 import {
+  DISCORD_ACTIVITY_CHANNEL,
   emptyGitInfoState,
   emptyLspInfoState,
   emptyModelInfoState,
@@ -19,6 +20,7 @@ import {
   LSP_INFO_CHANNEL,
   MODEL_INFO_CHANNEL,
   REFRESH_CHANNEL,
+  isDiscordActivityState,
   isGitInfoState,
   isLspInfoState,
   isModelInfoState,
@@ -44,7 +46,6 @@ const TITLE_LINES = [
 ];
 const ANSI_PATTERN =
   /[\u001B\u009B][[\]()#;?]*(?:(?:(?:[a-zA-Z\d]*(?:;[a-zA-Z\d]*)*)?\u0007)|(?:(?:\d{1,4}(?:;\d{0,4})*)?[\dA-PR-TZcf-nq-uy=><~]))/g;
-
 
 function hasChildren(
   component: RenderableNode,
@@ -130,6 +131,7 @@ export default function uiCustomization(pi: ExtensionAPI) {
   let modelInfo = emptyModelInfoState();
   let gitInfo = emptyGitInfoState();
   let lspInfo = emptyLspInfoState();
+  let discordActivityActive = false;
   let requestRender: (() => void) | undefined;
   let activeTui: DashboardTui | undefined;
   let themeRemovalTimers: Array<ReturnType<typeof setTimeout>> = [];
@@ -151,6 +153,15 @@ export default function uiCustomization(pi: ExtensionAPI) {
     lspInfo = value;
     requestRender?.();
   });
+
+  const stopDiscordActivityListener = pi.events.on(
+    DISCORD_ACTIVITY_CHANNEL,
+    (value) => {
+      if (!isDiscordActivityState(value)) return;
+      discordActivityActive = value.active;
+      requestRender?.();
+    },
+  );
 
   function scheduleThemeRemoval(tui: DashboardTui) {
     for (const timer of themeRemovalTimers) clearTimeout(timer);
@@ -179,7 +190,10 @@ export default function uiCustomization(pi: ExtensionAPI) {
           const logo = TITLE_LINES.map((line, row) =>
             center(theme.fg("borderAccent", line), width),
           );
-          const subtitle = center(theme.bold(theme.fg("borderAccent", title)), width);
+          const subtitle = center(
+            theme.bold(theme.fg("borderAccent", title)),
+            width,
+          );
           return ["", ...logo, subtitle, ""];
         },
         invalidate() {},
@@ -222,9 +236,15 @@ export default function uiCustomization(pi: ExtensionAPI) {
           const model = modelInfo.provider
             ? `${modelInfo.provider}/${modelInfo.modelId} · ${modelInfo.thinking}`
             : modelInfo.modelId;
+          const discordActivityDot = discordActivityActive
+            ? theme.fg("borderAccent", "●")
+            : "";
+          const modelStatus = discordActivityDot
+            ? `${theme.fg("muted", model)} ${discordActivityDot}`
+            : theme.fg("muted", model);
 
           const lines = [
-            columns(directory, theme.fg("muted", model), width),
+            columns(directory, modelStatus, width),
             columns(theme.fg("muted", usage), theme.fg("muted", git), width),
             truncateToWidth(
               theme.fg("dim", lspInfo.message),
@@ -258,6 +278,7 @@ export default function uiCustomization(pi: ExtensionAPI) {
     modelInfo = emptyModelInfoState();
     gitInfo = emptyGitInfoState();
     lspInfo = emptyLspInfoState();
+    discordActivityActive = false;
     install(ctx);
   });
 
@@ -269,6 +290,7 @@ export default function uiCustomization(pi: ExtensionAPI) {
     stopModelListener();
     stopGitListener();
     stopLspListener();
+    stopDiscordActivityListener();
     for (const timer of themeRemovalTimers) clearTimeout(timer);
     themeRemovalTimers = [];
     activeTui = undefined;
