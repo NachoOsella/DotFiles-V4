@@ -1,5 +1,7 @@
 {
     "layer": "top",
+    "height": 38,
+    "spacing": 0,
     "modules-left": [
         "custom/arch",
         "hyprland/workspaces",
@@ -11,20 +13,23 @@
     "modules-right": [
         "network",
         "pulseaudio",
-        "battery",
         "memory",
+        "battery",
         "tray",
         "clock",
         "custom/power"
     ],
     "custom/arch": {
-        "format": "",
+        "format": "<span font_family='Symbols Nerd Font' size='19000' rise='-2600'></span>",
+        "align": 0.5,
+        "justify": "center",
         "tooltip": false,
         "on-click": "rofi -show drun -theme ~/.config/rofi/config.rasi"
     },
     "hyprland/workspaces": {
         "format": "{icon}",
         "all-outputs": true,
+        "sort-by-number": true,
         "format-icons": {
             "1": "1",
             "2": "2",
@@ -47,14 +52,90 @@
         }
     },
     "hyprland/window": {
-        "format": "{initialClass}",
-        "max-length": 28
+        "format": "{title}",
+        "max-length": 36,
+        "separate-outputs": true,
+        "tooltip": false
+    },
+    "custom/spotify": {
+        "exec": "python3 ~/.config/waybar/scripts/mediaplayer.py --player spotify",
+        "format": "<span font_family='Symbols Nerd Font' rise='1000'></span>  {}",
+        "return-type": "json",
+        "on-click": "playerctl play-pause --player spotify",
+        "on-scroll-up": "playerctl next --player spotify",
+        "on-scroll-down": "playerctl previous --player spotify",
+        "max-length": 48,
+        "tooltip": true
+    },
+    "network": {
+        "format-wifi": "<span font_family='Symbols Nerd Font' rise='1000'>󰤨</span> {signalStrength}%",
+        "format-ethernet": "<span font_family='Symbols Nerd Font' rise='1000'>󰈀</span>",
+        "format-disconnected": "<span font_family='Symbols Nerd Font' rise='1000'>󰤮</span>",
+        "interval": 5,
+        "tooltip": true,
+        "tooltip-format": "Interface: {ifname}",
+        "tooltip-format-wifi": "Wi-Fi: {essid}\nSignal: {signalStrength}%\nAddress: {ipaddr}",
+        "tooltip-format-ethernet": "Ethernet: {ifname}\nAddress: {ipaddr}",
+        "tooltip-format-disconnected": "Network disconnected",
+        "on-click": "~/.config/rofi/rofi-wifi-menu.sh"
+    },
+    "pulseaudio": {
+        "on-click": "pactl set-sink-mute @DEFAULT_SINK@ toggle",
+        "on-click-right": "pavucontrol",
+        "format": "{icon} {volume}%",
+        "format-bluetooth": "{icon} <span font_family='Symbols Nerd Font' rise='1000'>󰂰</span> {volume}%",
+        "format-muted": "<span font_family='Symbols Nerd Font' rise='1000'>󰖁</span>",
+        "format-icons": {
+            "headphone": "<span font_family='Symbols Nerd Font' rise='1000'></span>",
+            "hands-free": "<span font_family='Symbols Nerd Font' rise='1000'></span>",
+            "headset": "<span font_family='Symbols Nerd Font' rise='1000'></span>",
+            "phone": "<span font_family='Symbols Nerd Font' rise='1000'></span>",
+            "portable": "<span font_family='Symbols Nerd Font' rise='1000'></span>",
+            "car": "<span font_family='Symbols Nerd Font' rise='1000'></span>",
+            "default": [
+                "<span font_family='Symbols Nerd Font' rise='1000'></span>",
+                "<span font_family='Symbols Nerd Font' rise='1000'></span>",
+                "<span font_family='Symbols Nerd Font' rise='1000'>󰕾</span>",
+                "<span font_family='Symbols Nerd Font' rise='1000'></span>"
+            ]
+        },
+        "scroll-step": 5,
+        "tooltip": true
+    },
+    "memory": {
+        "interval": 10,
+        "format": "<span font_family='Symbols Nerd Font' rise='1000'></span> {percentage}%",
+        "tooltip-format": "Memory: {used:0.1f} GiB / {total:0.1f} GiB",
+        "on-click": "kitty -e btop"
+    },
+    "battery": {
+        "states": {
+            "warning": 30,
+            "critical": 15
+        },
+        "format": "{icon} {capacity}%",
+        "format-charging": "<span font_family='Symbols Nerd Font' rise='1000'></span> {capacity}%",
+        "format-plugged": "<span font_family='Symbols Nerd Font' rise='1000'></span> {capacity}%",
+        "format-icons": [
+            "<span font_family='Symbols Nerd Font' rise='1000'></span>",
+            "<span font_family='Symbols Nerd Font' rise='1000'></span>",
+            "<span font_family='Symbols Nerd Font' rise='1000'></span>",
+            "<span font_family='Symbols Nerd Font' rise='1000'></span>",
+            "<span font_family='Symbols Nerd Font' rise='1000'></span>"
+        ],
+        "interval": 30,
+        "tooltip": true,
+        "tooltip-format": "Remaining: {timeTo}\nCharge: {capacity}%"
+    },
+    "tray": {
+        "spacing": 6,
+        "show-passive-items": true
     },
     "clock": {
         "timezone": "America/Argentina/Cordoba",
-        "interval": 1,
-        "format": " {:%H:%M}",
-        "format-alt": " {:%H:%M  %Y-%m-%d %a}",
+        "interval": 60,
+        "format": "{:%H:%M}",
+        "format-alt": "{:%a, %d %b  %H:%M}",
         "tooltip-format": "<tt><small>{calendar}</small></tt>",
         "calendar": {
             "mode": "year",
@@ -77,80 +158,11 @@
             "on-scroll-down": "shift_down"
         }
     },
-    "pulseaudio": {
-        "on-click": "pactl set-sink-mute @DEFAULT_SINK@ toggle",
-        "on-click-right": "pavucontrol",
-        "format": "{icon} {volume}%",
-        "format-bluetooth": "{icon} 󰂰 {volume}%",
-        "format-muted": "󰖁",
-        "format-icons": {
-            "headphone": "",
-            "hands-free": "",
-            "headset": "",
-            "phone": "",
-            "portable": "",
-            "car": "",
-            "default": [
-                "",
-                "",
-                "󰕾",
-                ""
-            ]
-        },
-        "scroll-step": 5
-    },
-    "network": {
-        "format-wifi": "󰤢 {bandwidthDownBits}",
-        "format-ethernet": "󰈀 {bandwidthDownBits}",
-        "format-disconnected": "󰤠 No network",
-        "interval": 5,
-        "tooltip": true,
-        "tooltip-format": "Red: {ifname}",
-        "tooltip-format-wifi": "Wi-Fi: {essid}\nSignal: {signalStrength}%\nIP: {ipaddr}",
-        "tooltip-format-ethernet": "Ethernet: {ifname}\nIP: {ipaddr}",
-        "tooltip-format-disconnected": "Disconnected",
-        "on-click": "~/.config/rofi/rofi-wifi-menu.sh"
-    },
-    "custom/spotify": {
-        "exec": "python ~/.config/waybar/scripts/mediaplayer.py --player spotify",
-        "format": "{} ",
-        "return-type": "json",
-        "on-click": "playerctl play-pause --player spotify",
-        "on-scroll-up": "playerctl next --player spotify",
-        "on-scroll-down": "playerctl previous --player spotify",
-        "max-length": 55
-    },
-    "tray": {
-        "spacing": 4,
-        "show-passive-items": true
-    },
-    "memory": {
-        "interval": 10,
-        "format": " {percentage}%",
-        "max-length": 30,
-        "on-click": "kitty -e btop"
-    },
-    "battery": {
-        "states": {
-            "warning": 30,
-            "critical": 15
-        },
-        "format": "{icon} {capacity}%",
-        "format-charging": " {capacity}%",
-        "format-plugged": " {capacity}%",
-        "format-icons": [
-            "",
-            "",
-            "",
-            "",
-            ""
-        ],
-        "interval": 30,
-        "tooltip": true,
-        "tooltip-format": "{timeTo}\n{capacity}%"
-    },
     "custom/power": {
-        "format": "⏻",
+        "format": "<span font_family='Symbols Nerd Font' rise='1000'></span>",
+        "align": 0.5,
+        "justify": "center",
+        "tooltip": false,
         "on-click": "~/.config/rofi/rofi-power-menu.sh"
     }
 }

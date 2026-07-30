@@ -1,161 +1,201 @@
 @define-color base #1d2021;
 @define-color surface0 #282828;
 @define-color surface1 #32302f;
-@define-color surface2 #3a3735;
-@define-color border #665c54;
+@define-color surface2 #3c3836;
+@define-color border #504945;
 @define-color foreground #d4be98;
-@define-color muted #928374;
+@define-color foreground-strong #ddc7a1;
+@define-color muted #a89984;
+@define-color dim #928374;
 
 @define-color green #a9b665;
 @define-color yellow #d8a657;
 @define-color red #ea6962;
 @define-color blue #7daea3;
-@define-color orange #e78a4e;
-@define-color purple #d3869b;
 @define-color aqua #89b482;
 
 * {
-  font-family: "JetBrainsMono Nerd Font", "JetBrains Mono", "Iosevka Nerd Font", monospace;
-  font-size: 15px;
-  font-weight: 500;
   min-height: 0;
+  border: none;
   border-radius: 0;
   box-shadow: none;
+  font-family: "JetBrainsMono Nerd Font";
+  font-size: 15px;
+  font-weight: 600;
 }
 
 window#waybar {
-  background: @base;
+  background: alpha(@base, 0.96);
   color: @foreground;
-  border: 0;
-}
-
-#custom-arch,
-#workspaces,
-#window,
-#custom-spotify,
-#network,
-#pulseaudio,
-#battery,
-#memory,
-#tray,
-#clock,
-#custom-power {
-  background: @surface0;
-  color: @foreground;
-  border: 1px solid @border;
-  border-radius: 0;
-  margin: 4px 2px;
-  padding: 3px 8px;
-  min-height: 18px;
+  border-bottom: 1px solid @surface2;
 }
 
 #custom-arch {
-  margin-left: 6px;
-  min-width: 18px;
-  padding-left: 7px;
-  padding-right: 7px;
-}
-
-#window {
-  margin-right: 7px;
-}
-
-#custom-spotify {
+  min-width: 28px;
+  margin: 4px 0 4px 6px;
+  padding: 0 7px;
   background: @green;
   color: @base;
-  border-color: @green;
-  margin-left: 7px;
-  margin-right: 7px;
-}
-
-#network {
-  margin-left: 7px;
-}
-
-#custom-power {
-  margin-right: 6px;
-  min-width: 18px;
-  padding-left: 7px;
-  padding-right: 7px;
-}
-
-window#waybar.empty #window {
-  background: transparent;
-  border: 0;
-  margin: 0;
-  padding: 0;
-  min-width: 0;
-  min-height: 0;
-}
-
-#custom-spotify.empty,
-#custom-spotify.paused {
-  background: @surface0;
-  color: @muted;
-  border-color: @border;
+  font-size: 18px;
 }
 
 #workspaces {
-  padding: 0;
+  margin: 4px 0;
+  padding: 0 3px;
+  background: @surface0;
 }
 
 #workspaces button {
+  min-width: 25px;
+  margin: 0;
+  padding: 0 6px;
   background: transparent;
   color: @muted;
-  border: 1px solid @border;
-  border-radius: 0;
-  margin: 0;
-  padding: 3px 8px;
+  border-bottom: 2px solid transparent;
+  transition: background-color 120ms ease, color 120ms ease, border-color 120ms ease;
 }
 
 #workspaces button:hover {
   background: @surface1;
-  color: @foreground;
+  color: @foreground-strong;
 }
 
 #workspaces button.active {
-  background: @surface2;
-  color: @foreground;
-  border-color: @aqua;
+  background: @surface1;
+  color: @foreground-strong;
+  border-bottom-color: @green;
 }
 
 #workspaces button.urgent {
-  background: transparent;
+  background: @surface1;
   color: @red;
-  border-color: @red;
+  border-bottom-color: @red;
 }
 
-#custom-arch:hover,
-#window:hover,
-#network:hover,
-#pulseaudio:hover,
-#battery:hover,
-#memory:hover,
-#tray:hover,
-#clock:hover,
-#custom-power:hover {
-  background: @surface1;
+#window {
+  margin: 4px 0;
+  padding: 0 11px;
+  color: @muted;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+window#waybar.empty #window {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+}
+
+#custom-spotify {
+  margin: 4px 8px;
+  padding: 0 13px;
+  background: @surface0;
+  color: @foreground;
+  border: 1px solid @surface2;
+  border-bottom: 2px solid @green;
+  font-size: 15px;
+  font-weight: 600;
+  transition: background-color 120ms ease, color 120ms ease, border-color 120ms ease;
 }
 
 #custom-spotify:hover {
-  background: @aqua;
-  border-color: @aqua;
+  background: @surface1;
+  color: @foreground-strong;
+  border-bottom-color: @aqua;
+}
+
+#custom-spotify.paused {
+  color: @dim;
+  border-bottom-color: @border;
+}
+
+#custom-spotify.empty {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+#network,
+#pulseaudio,
+#memory,
+#battery,
+#tray,
+#clock,
+#custom-power {
+  margin: 4px 0;
+  padding: 0 9px;
+  background: transparent;
+  color: @foreground;
+  transition: background-color 120ms ease, color 120ms ease;
+}
+
+#network,
+#tray,
+#clock,
+#custom-power {
+  border-left: 1px solid @surface2;
+}
+
+#network:hover,
+#pulseaudio:hover,
+#memory:hover,
+#battery:hover,
+#tray:hover,
+#clock:hover {
+  background: @surface0;
+  color: @foreground-strong;
+}
+
+#network {
+  color: @aqua;
+}
+
+#pulseaudio {
+  color: @yellow;
+}
+
+#memory {
+  color: @muted;
+}
+
+#battery {
+  color: @green;
+}
+
+#tray {
+  padding-left: 10px;
+  padding-right: 10px;
+}
+
+#clock {
+  min-width: 52px;
+  padding-left: 11px;
+  padding-right: 11px;
+  background: @surface0;
+  color: @foreground-strong;
+  font-weight: 600;
+}
+
+#custom-power {
+  min-width: 19px;
+  margin-right: 0;
+  padding-left: 8px;
+  padding-right: 8px;
+  background: @surface0;
+  color: @muted;
+  font-size: 17px;
+}
+
+#custom-power:hover {
+  background: @red;
   color: @base;
 }
 
-#custom-spotify.empty:hover,
-#custom-spotify.paused:hover {
-  background: @surface1;
-  border-color: @border;
-  color: @muted;
-}
-
-#pulseaudio.muted {
-  color: @muted;
-}
-
+#pulseaudio.muted,
 #network.disconnected {
-  color: @red;
+  color: @dim;
 }
 
 #battery.charging,
@@ -171,29 +211,17 @@ window#waybar.empty #window {
   color: @red;
 }
 
-#temperature.warning,
-#cpu.warning,
-#memory.warning {
-  color: @yellow;
-}
-
-#temperature.critical,
-#cpu.critical,
-#memory.critical {
-  color: @red;
-}
-
 #tray > .passive,
 #tray > .needs-attention {
   -gtk-icon-effect: none;
 }
 
 tooltip {
+  padding: 5px 7px;
   background: @surface0;
   color: @foreground;
   border: 1px solid @border;
   border-radius: 0;
-  padding: 4px 6px;
 }
 
 tooltip label {
