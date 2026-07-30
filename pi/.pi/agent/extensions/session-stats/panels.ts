@@ -56,7 +56,7 @@ export function buildModelRows(
   const rows = [color(theme, "dim", header)];
   for (const model of visible) {
     const modelName = truncateToWidth(`${model.provider}/${model.modelId}`, nameWidth, "…", false);
-    const tokens = model.input + model.output + model.cacheRead;
+    const tokens = model.input + model.output + model.cacheRead + model.cacheWrite;
     const cost =
       model.pricingSource === "unknown"
         ? "?"

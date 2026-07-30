@@ -38,6 +38,7 @@ import { Markdown, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import {
   formatElapsed,
+  formatModelWithThinking,
   latestText,
   REASONING_EFFORTS,
   type SubagentSnapshot,
@@ -76,7 +77,7 @@ const WAIT_PER_AGENT_MAX_BYTES = 16 * 1024;
 
 function describeSubagent(snap: SubagentSnapshot) {
   const details = [
-    `${snap.backend}: ${snap.meta.modelLabel ?? "?"}`,
+    `${snap.backend}: ${formatModelWithThinking(snap.meta)}`,
     formatContextUtilization(snap.usage),
     formatElapsed(snap),
     snap.cwd,
@@ -266,6 +267,7 @@ export default function (pi: ExtensionAPI) {
           reasoningEffort: params.reasoning_effort,
           parent: {
             parentCwd: ctx.cwd,
+            parentSession: ctx.sessionManager.getSessionFile(),
             projectTrusted: resolveChildProjectTrust({
               parentCwd: ctx.cwd,
               childCwd: cwd,
@@ -287,7 +289,7 @@ export default function (pi: ExtensionAPI) {
             text: buildSubagentSpawnResult({
               id: snap.id,
               title: snap.title,
-              modelLabel: snap.meta.modelLabel ?? "?",
+              modelLabel: formatModelWithThinking(snap.meta),
               cwd,
             }),
           },
@@ -296,7 +298,7 @@ export default function (pi: ExtensionAPI) {
           id: snap.id,
           title: snap.title,
           cwd,
-          model: snap.meta.modelLabel,
+          model: formatModelWithThinking(snap.meta),
         },
       };
     },

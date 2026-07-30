@@ -271,6 +271,10 @@ export default function (pi: ExtensionAPI) {
 
     // --- Session start: connect to Discord and show activity ---
     pi.on('session_start', async (_event, ctx) => {
+        // Headless print sessions include in-process subagents and must not
+        // compete with the interactive parent for Discord RPC activity.
+        if (ctx.mode === 'print') return
+
         const clientId =
             process.env.DISCORD_CLIENT_ID?.trim() || DEFAULT_DISCORD_CLIENT_ID
         const generation = ++sessionGeneration

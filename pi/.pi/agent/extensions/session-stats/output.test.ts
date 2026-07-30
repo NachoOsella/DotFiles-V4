@@ -2,9 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { mergeSessionStats } from "./aggregate.ts";
-import { fmtCost } from "./format.ts";
+import { fmtCost, readCacheHitRate } from "./format.ts";
 import {
   buildAllStatsOutput,
+  buildCurrentSessionOutput,
   buildProjectStatsOutput,
   buildProjectSummaries,
   calculateAllSessionTotals,
@@ -38,6 +39,10 @@ function session(overrides: Partial<SessionStats> = {}): SessionStats {
 test("fmtCost does not hide small non-zero estimates", () => {
   assert.equal(fmtCost(0.00001), "$0.000010");
   assert.equal(fmtCost(0.0000001), "<$0.000001");
+});
+
+test("cache hit rate includes newly written prompt tokens", () => {
+  assert.equal(readCacheHitRate(100, 200, 25), (200 / 325) * 100);
 });
 
 test("model rows distinguish unknown pricing from free pricing", () => {
@@ -99,6 +104,7 @@ test("aggregate totals separate conversation messages from tool calls", () => {
   assert.equal(totals.toolCalls, 8);
   assert.equal(totals.averageDurationMs, 90_000);
   assert.equal(totals.cacheWrite, 50);
+  assert.equal(totals.totalTokens, 750);
 });
 
 test("mergeSessionStats combines the parent session and subagents", () => {
@@ -156,6 +162,35 @@ test("mergeSessionStats combines the parent session and subagents", () => {
   assert.equal(merged.durationMs, 150_000);
   assert.deepEqual(merged.toolCalls, [{ name: "read", count: 8 }]);
   assert.equal(merged.models[0]?.count, 3);
+});
+
+test("current dashboard separates main-thread and subagent usage", () => {
+  const mainThread = session();
+  const agent = session({
+    totalTokens: {
+      input: 40,
+      output: 20,
+      cacheRead: 80,
+      cacheWrite: 10,
+      totalTokens: 150,
+      cost: { total: 0.04 },
+    },
+    userMessages: 1,
+    assistantMessages: 2,
+  });
+  const output = buildCurrentSessionOutput(
+    mergeSessionStats([mainThread, agent], "merged.jsonl"),
+    60,
+    undefined,
+    { mainThread, subagents: [agent] },
+  );
+
+  assert.ok(output.includes("THREAD SPLIT"));
+  assert.ok(output.includes("Main thread"));
+  assert.ok(output.includes("Subagents (1)"));
+  for (const line of output.split("\n")) {
+    assert.ok(visibleWidth(line) <= 60, `line exceeded width: ${line}`);
+  }
 });
 
 test("project summaries group sessions and sort by cost", () => {

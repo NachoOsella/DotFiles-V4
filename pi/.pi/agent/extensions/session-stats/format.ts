@@ -16,9 +16,9 @@ export function formatPercent(value: number): string {
   return value.toFixed(value >= 10 || value === 0 ? 0 : 1) + "%";
 }
 
-/** Calculate read cache hit rate as a percentage. */
-export function readCacheHitRate(input: number, cacheRead: number): number {
-  const promptTokens = input + cacheRead;
+/** Calculate read cache hit rate as a percentage of all prompt tokens. */
+export function readCacheHitRate(input: number, cacheRead: number, cacheWrite: number): number {
+  const promptTokens = input + cacheRead + cacheWrite;
   return promptTokens > 0 ? (cacheRead / promptTokens) * 100 : 0;
 }
 
@@ -82,13 +82,22 @@ export function progressBar(
 }
 
 /** Format cache hit rate with a bar. */
-export function formatCacheHit(input: number, cacheRead: number, theme?: Theme): string {
-  const hitRate = readCacheHitRate(input, cacheRead);
+export function formatCacheHit(
+  input: number,
+  cacheRead: number,
+  cacheWrite: number,
+  theme?: Theme,
+): string {
+  const hitRate = readCacheHitRate(input, cacheRead, cacheWrite);
   return formatPercent(hitRate).padStart(5) + " " + progressBar(hitRate, 100, 10, theme, "success");
 }
 
 /** Finalize total token count from component counters and reported provider totals. */
 export function finalizeTotalTokens(stats: Pick<SessionStats, "totalTokens">, fallbackTotalTokens = 0): void {
-  const computedTotal = stats.totalTokens.input + stats.totalTokens.output + stats.totalTokens.cacheRead;
+  const computedTotal =
+    stats.totalTokens.input +
+    stats.totalTokens.output +
+    stats.totalTokens.cacheRead +
+    stats.totalTokens.cacheWrite;
   stats.totalTokens.totalTokens = Math.max(computedTotal, fallbackTotalTokens);
 }

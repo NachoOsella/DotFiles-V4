@@ -1,5 +1,6 @@
 /** Session statistics command backed by bounded, fault-tolerant Effect pipelines. */
 
+import { resolve } from "node:path";
 import {
   SessionManager,
   type ExtensionAPI,
@@ -213,12 +214,12 @@ async function showCurrentSessionStats(ctx: ExtensionCommandContext): Promise<vo
   const currentFile = ctx.sessionManager.getSessionFile() ?? "ephemeral";
   const pricing = createModelPricingResolver(ctx);
   const currentStats = parseCurrentBranch(
-    ctx.sessionManager.getBranch() as SessionEntryLike[],
+    ctx.sessionManager.getEntries() as SessionEntryLike[],
     currentFile,
     ctx.sessionManager.getSessionName() ?? undefined,
     pricing,
   );
-  const subagentStats = await loadCurrentWorkspaceSubagentStats(ctx, currentFile, pricing);
+  const subagentStats = await loadCurrentSessionSubagentStats(ctx, currentFile, pricing);
   const stats = mergeSessionStats(
     [currentStats, ...subagentStats],
     currentFile,
@@ -226,24 +227,43 @@ async function showCurrentSessionStats(ctx: ExtensionCommandContext): Promise<vo
   );
 
   await showStatsModal(
-    (width, theme) => buildCurrentSessionOutput(stats, width, theme),
+    (width, theme) =>
+      buildCurrentSessionOutput(stats, width, theme, {
+        mainThread: currentStats,
+        subagents: subagentStats,
+      }),
     ctx,
   );
 }
 
-/** Load persisted subagent sessions belonging to the current workspace. */
-async function loadCurrentWorkspaceSubagentStats(
+/** Load child sessions belonging to the current Pi session. */
+async function loadCurrentSessionSubagentStats(
   ctx: ExtensionCommandContext,
   currentFile: string,
   pricing: ModelPricingResolver,
 ): Promise<SessionStats[]> {
+  if (currentFile === "ephemeral") return [];
+
   try {
-    const sessions = await SessionManager.list(ctx.cwd);
-    const subagentSessions = sessions.filter(
-      (session) =>
-        session.path !== currentFile &&
-        session.name?.startsWith(SUBAGENT_SESSION_PREFIX),
-    );
+    const sessions = await SessionManager.listAll();
+    const currentPath = resolve(currentFile);
+    const currentStart = ctx.sessionManager.getHeader()?.timestamp;
+    const currentStartTime = currentStart ? Date.parse(currentStart) : Number.NaN;
+    const subagentSessions = sessions.filter((session) => {
+      if (resolve(session.path) === currentPath) return false;
+      if (session.parentSessionPath && resolve(session.parentSessionPath) === currentPath) {
+        return true;
+      }
+
+      // Keep compatibility with child sessions created before parent links were added.
+      return (
+        !session.parentSessionPath &&
+        session.cwd &&
+        resolve(session.cwd) === resolve(ctx.cwd) &&
+        session.name?.startsWith(SUBAGENT_SESSION_PREFIX) &&
+        (Number.isNaN(currentStartTime) || session.created.getTime() >= currentStartTime)
+      );
+    });
     const parsed = await Effect.runPromise(
       Effect.forEach(
         subagentSessions,

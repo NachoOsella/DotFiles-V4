@@ -1,6 +1,6 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth } from "@earendil-works/pi-tui";
-import { buildModelStats, buildToolUsage } from "./aggregate.ts";
+import { buildModelStats, buildToolUsage, mergeSessionStats } from "./aggregate.ts";
 import { createDashboardFrame } from "./box.ts";
 import {
   color,
@@ -188,14 +188,24 @@ function buildProjectRow(
   return `${color(theme, selected ? "accent" : "text", marker)} ${color(theme, "text", project.project)} ${color(theme, "muted", metrics)}`;
 }
 
+/** Main-thread and subagent usage shown in the current-session dashboard. */
+export interface CurrentSessionBreakdown {
+  mainThread: SessionStats;
+  subagents: readonly SessionStats[];
+}
+
 /** Build the current-session `/stats` dashboard. */
 export function buildCurrentSessionOutput(
   stats: SessionStats,
   width: number,
   theme?: Theme,
+  breakdown?: CurrentSessionBreakdown,
 ): string {
   const frame = createDashboardFrame(width, theme);
   const contentWidth = frame.innerWidth - 2;
+  const mainThread = breakdown?.mainThread ?? stats;
+  const subagents = breakdown?.subagents ?? [];
+  const subagentStats = mergeSessionStats(subagents, "subagents");
   const conversationMessages = stats.userMessages + stats.assistantMessages;
   const toolCalls = stats.toolCalls.reduce((sum, tool) => sum + tool.count, 0);
   const models: AggregatedModelUsage[] = stats.models.map((model) => ({
@@ -209,7 +219,12 @@ export function buildCurrentSessionOutput(
     cost: model.cost,
     pricingSource: model.pricingSource,
   }));
-  const lines: string[] = [frame.top("SESSION STATS", "current")];
+  const lines: string[] = [
+    frame.top(
+      "SESSION STATS",
+      subagents.length > 0 ? `current · ${subagents.length} subagents` : "current",
+    ),
+  ];
 
   lines.push(frame.section("Activity"));
   lines.push(
@@ -218,12 +233,56 @@ export function buildCurrentSessionOutput(
     frame.metricPair("Tool calls", formatNumber(toolCalls), "Results", formatNumber(stats.toolResults)),
   );
 
+  lines.push(frame.section("Thread split"));
+  lines.push(
+    frame.row(
+      buildThreadSplitRow(
+        "Main thread",
+        mainThread.totalTokens.totalTokens,
+        mainThread.totalTokens.totalTokens + subagentStats.totalTokens.totalTokens,
+        "accent",
+        contentWidth,
+        theme,
+      ),
+    ),
+    frame.row(
+      buildThreadSplitRow(
+        `Subagents (${subagents.length})`,
+        subagentStats.totalTokens.totalTokens,
+        mainThread.totalTokens.totalTokens + subagentStats.totalTokens.totalTokens,
+        "success",
+        contentWidth,
+        theme,
+      ),
+    ),
+    frame.metricPair(
+      "Main messages",
+      formatNumber(mainThread.userMessages + mainThread.assistantMessages),
+      "Agent messages",
+      formatNumber(subagentStats.userMessages + subagentStats.assistantMessages),
+    ),
+    frame.metricPair(
+      "Main cost",
+      fmtCost(mainThread.totalTokens.cost.total),
+      "Agent cost",
+      fmtCost(subagentStats.totalTokens.cost.total),
+    ),
+  );
+
   lines.push(frame.section("Usage"));
   lines.push(
     frame.metricPair("Tokens", formatNumber(stats.totalTokens.totalTokens), "Cost", fmtCost(stats.totalTokens.cost.total)),
     frame.metricPair("Input", formatNumber(stats.totalTokens.input), "Output", formatNumber(stats.totalTokens.output)),
     frame.metricPair("Cache read", formatNumber(stats.totalTokens.cacheRead), "Cache write", formatNumber(stats.totalTokens.cacheWrite)),
-    frame.metric("Cache hit", formatCacheHit(stats.totalTokens.input, stats.totalTokens.cacheRead, theme)),
+    frame.metric(
+      "Cache hit",
+      formatCacheHit(
+        stats.totalTokens.input,
+        stats.totalTokens.cacheRead,
+        stats.totalTokens.cacheWrite,
+        theme,
+      ),
+    ),
   );
 
   lines.push(frame.section("Models"));
@@ -233,6 +292,24 @@ export function buildCurrentSessionOutput(
   lines.push(...buildToolRows(stats.toolCalls, contentWidth, theme).map(frame.row));
   lines.push(frame.footer("enter / esc / q  close"));
   return lines.join("\n");
+}
+
+function buildThreadSplitRow(
+  label: string,
+  value: number,
+  total: number,
+  fillToken: Parameters<Theme["fg"]>[0],
+  contentWidth: number,
+  theme?: Theme,
+): string {
+  const labelWidth = Math.min(14, Math.max(8, Math.floor(contentWidth * 0.28)));
+  const barWidth = Math.max(6, Math.min(18, contentWidth - labelWidth - 8));
+  const percentage = total > 0 ? (value / total) * 100 : 0;
+  const fittedLabel = padRightVisible(
+    truncateToWidth(label, labelWidth, "…", false),
+    labelWidth,
+  );
+  return `${color(theme, "text", fittedLabel)} ${progressBar(value, total, barWidth, theme, fillToken)} ${color(theme, "muted", formatPercent(percentage).padStart(5))}`;
 }
 
 /** Aggregate values used by the all-session dashboard. */
@@ -261,7 +338,10 @@ export function calculateAllSessionTotals(sessions: readonly SessionStats[]) {
 
     const sessionTokens = Math.max(
       session.totalTokens.totalTokens,
-      session.totalTokens.input + session.totalTokens.output + session.totalTokens.cacheRead,
+      session.totalTokens.input +
+        session.totalTokens.output +
+        session.totalTokens.cacheRead +
+        session.totalTokens.cacheWrite,
     );
     totalTokens += sessionTokens;
     sessionTokenTotals.push(sessionTokens);
@@ -284,7 +364,7 @@ export function calculateAllSessionTotals(sessions: readonly SessionStats[]) {
     cacheRead,
     cacheWrite,
     totalTokens,
-    cacheHitRate: readCacheHitRate(input, cacheRead),
+    cacheHitRate: readCacheHitRate(input, cacheRead, cacheWrite),
     averageDurationMs: durationCount > 0 ? Math.round(durationTotal / durationCount) : -1,
     averageMessagesPerSession: Math.round(conversationMessages / Math.max(1, sessions.length)),
     averageTokensPerSession: Math.round(totalTokens / Math.max(1, sessions.length)),

@@ -98,6 +98,43 @@ function toolPreview(
 
 // ── Content renderers ───────────────────────────────────────────────────────
 
+function sectionLabel(t: Theme, label: string, out: string[]) {
+  out.push(t.fg("dim", t.bold(label.toUpperCase())));
+}
+
+function renderInlineMarkdown(t: Theme, text: string) {
+  return text
+    .replace(/\*\*([^*]+)\*\*/g, (_match, content: string) => t.bold(content))
+    .replace(/`([^`]+)`/g, (_match, content: string) =>
+      t.fg("mdCode", content),
+    )
+    .replace(/\*([^*]+)\*/g, (_match, content: string) => t.italic(content));
+}
+
+function renderIndentedText(
+  t: Theme,
+  text: string,
+  width: number,
+  prefix: string,
+  color: "userMessageText" | "muted" | "text",
+  out: string[],
+) {
+  const prefixWidth = visibleWidth(prefix);
+  const wrapped = wrapTextWithAnsi(
+    renderInlineMarkdown(t, text),
+    Math.max(10, width - prefixWidth),
+  );
+  for (let i = 0; i < wrapped.length; i++) {
+    out.push(
+      truncateToWidth(
+        (i === 0 ? prefix : " ".repeat(prefixWidth)) +
+          t.fg(color, wrapped[i]),
+        width,
+      ),
+    );
+  }
+}
+
 function renderUserText(
   t: Theme,
   text: string,
@@ -106,13 +143,15 @@ function renderUserText(
 ) {
   const clean = sanitizeText(text).trim();
   if (!clean) return;
-  const wrapped = wrapTextWithAnsi(clean, Math.max(10, width - 2));
-  for (let i = 0; i < wrapped.length; i++) {
-    const prefix = i === 0 ? t.fg("accent", "> ") : "  ";
-    out.push(
-      truncateToWidth(prefix + t.fg("userMessageText", wrapped[i]), width),
-    );
-  }
+  sectionLabel(t, "request", out);
+  renderIndentedText(
+    t,
+    clean,
+    width,
+    t.fg("accent", "│ "),
+    "userMessageText",
+    out,
+  );
 }
 
 function renderThinking(
@@ -123,26 +162,82 @@ function renderThinking(
 ) {
   const reasoning = sanitizeText(text).trim();
   if (!reasoning) return;
-  const prefix = t.fg("dim", "~ ");
+  sectionLabel(t, "reasoning", out);
+  const guide = t.fg("borderMuted", "│ ");
   const wrapped = wrapTextWithAnsi(reasoning, Math.max(10, width - 2));
-  for (let i = 0; i < wrapped.length; i++) {
+  for (const line of wrapped) {
     out.push(
       truncateToWidth(
-        (i === 0 ? prefix : "  ") +
-          t.fg("muted", t.italic(wrapped[i])),
+        guide + t.fg("muted", t.italic(line)),
         width,
       ),
     );
   }
 }
 
-function renderAssistantText(t: Theme, text: string, width: number, out: string[]) {
+function renderAssistantText(
+  t: Theme,
+  text: string,
+  width: number,
+  out: string[],
+) {
   const clean = sanitizeText(text).trim();
   if (!clean) return;
-  // Assistant body text is the default conversation content — keep it clean
-  // and readable without extra decoration.
-  const wrapped = wrapTextWithAnsi(clean, width);
-  out.push(...wrapped);
+  sectionLabel(t, "response", out);
+
+  for (const rawLine of clean.split("\n")) {
+    const line = rawLine.trimEnd();
+    if (!line.trim()) {
+      if (out[out.length - 1] !== "") out.push("");
+      continue;
+    }
+
+    const heading = line.match(/^#{1,6}\s+(.+)$/);
+    if (heading) {
+      out.push(
+        truncateToWidth(
+          "  " +
+            t.fg("accent", "◆ ") +
+            t.fg("text", t.bold(renderInlineMarkdown(t, heading[1]))),
+          width,
+        ),
+      );
+      continue;
+    }
+
+    if (/^\s*(?:---+|___+|\*\*\*+)\s*$/.test(line)) {
+      out.push(t.fg("borderMuted", `  ${"─".repeat(Math.max(1, width - 2))}`));
+      continue;
+    }
+
+    const bullet = line.match(/^\s*[-*+]\s+(.+)$/);
+    if (bullet) {
+      renderIndentedText(
+        t,
+        bullet[1],
+        width,
+        `  ${t.fg("accent", "• ")}`,
+        "text",
+        out,
+      );
+      continue;
+    }
+
+    const numbered = line.match(/^\s*(\d+)[.)]\s+(.+)$/);
+    if (numbered) {
+      renderIndentedText(
+        t,
+        numbered[2],
+        width,
+        `  ${t.fg("accent", `${numbered[1]}. `)}`,
+        "text",
+        out,
+      );
+      continue;
+    }
+
+    renderIndentedText(t, line.trim(), width, "  ", "text", out);
+  }
 }
 
 function addSeparator(t: Theme, width: number, out: string[]) {

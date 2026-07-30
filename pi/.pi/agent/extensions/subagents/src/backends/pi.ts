@@ -348,7 +348,9 @@ const makePiSession = (
         );
         const { session } = await createAgentSession({
           cwd: task.cwd,
-          sessionManager: SessionManager.create(task.cwd),
+          sessionManager: SessionManager.create(task.cwd, undefined, {
+            parentSession: task.parent.parentSession,
+          }),
           settingsManager,
           resourceLoader: loader,
           modelRegistry: registry,
@@ -410,6 +412,7 @@ const makePiSession = (
       return {
         backend: "pi",
         modelLabel: m ? `${m.provider}/${m.id}` : undefined,
+        thinkingLevel: session.thinkingLevel,
         contextWindow: m?.contextWindow,
         sessionFilePath: session.sessionFile,
       };
@@ -538,6 +541,9 @@ const makePiSession = (
               })),
             ],
           });
+          break;
+        case "thinking_level_changed":
+          emit({ _tag: "MetaChanged", meta: currentMeta() });
           break;
         case "agent_settled":
           settle();

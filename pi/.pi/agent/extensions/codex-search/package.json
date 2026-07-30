@@ -1,0 +1,71 @@
+{
+  "name": "nacho-codex-search",
+  "version": "0.1.6",
+  "description": "Personal Pi extension for web search through an existing OpenAI Codex subscription",
+  "keywords": [
+    "chatgpt",
+    "chatgpt-plus",
+    "chatgpt-pro",
+    "codex",
+    "coding-agent",
+    "oauth",
+    "openai",
+    "openai-codex",
+    "pi",
+    "pi-coding-agent",
+    "pi-extension",
+    "pi-mono",
+    "pi-package",
+    "responses-api",
+    "subscription",
+    "tool-extension",
+    "web-search",
+    "web_search"
+  ],
+  "license": "MIT",
+  "author": "Nacho",
+  "files": [
+    "index.ts",
+    "src",
+    "scripts/codex-e2e.ts",
+    "package.json",
+    "README.md",
+    "LICENSE"
+  ],
+  "type": "module",
+  "scripts": {
+    "clean": "echo 'nothing to clean'",
+    "build": "echo 'nothing to build'",
+    "check": "tsc --noEmit",
+    "test": "node --test --experimental-strip-types tests/*.test.ts",
+    "lint": "oxlint .",
+    "format": "oxfmt . --write",
+    "format:check": "oxfmt . --check",
+    "pre-commit": "prek run",
+    "e2e:codex": "node scripts/codex-e2e.ts"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-ai": "^0.82.0",
+    "@earendil-works/pi-coding-agent": "^0.82.0",
+    "@earendil-works/pi-tui": "^0.82.0",
+    "@j178/prek": "^0.3.8",
+    "@types/node": "^24.0.0",
+    "oxfmt": "^0.44.0",
+    "oxlint": "^1.59.0",
+    "typescript": "^5.9.0"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "private": true
+}

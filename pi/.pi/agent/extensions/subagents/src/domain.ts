@@ -29,6 +29,8 @@ export type SubagentStatus = "running" | "done" | "error";
 /** Parent-session context resolved by the tool layer and passed opaquely. */
 export interface ParentContext {
   readonly parentCwd: string;
+  /** Persisted parent session path used to associate child usage with /stats. */
+  readonly parentSession?: string;
   readonly projectTrusted: boolean;
   /** Parent pi model, for the pi backend's "inherit" default. */
   readonly inheritedModel?: { readonly provider: string; readonly id: string };
@@ -52,6 +54,8 @@ export interface SubagentMeta {
   readonly backend: BackendName;
   /** Display label, e.g. "provider/model-id". */
   readonly modelLabel?: string;
+  /** Effective thinking level used by the child session. */
+  readonly thinkingLevel?: string;
   /** Context window capacity for utilization display, when known. */
   readonly contextWindow?: number;
   /** Pi session file path. */
@@ -193,6 +197,15 @@ export interface SubagentSnapshot {
   readonly finalText: string;
   /** Count of finalized assistant messages (for subagent_check). */
   readonly turns: number;
+}
+
+/** Format the model and effective thinking level for compact status displays. */
+export function formatModelWithThinking(
+  meta: Pick<SubagentMeta, "modelLabel" | "thinkingLevel">,
+  fallback = "?",
+): string {
+  const model = meta.modelLabel ?? fallback;
+  return meta.thinkingLevel ? `${model} (${meta.thinkingLevel})` : model;
 }
 
 /** Final text, or the live streaming buffer while a run is active (v1 `latestOutput`). */

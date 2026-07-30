@@ -58,7 +58,7 @@ export function parseSessionFile(
   return Effect.runPromise(parseSessionFileEffect(filePath, pricing));
 }
 
-/** Parse the current in-memory branch from Pi's session manager. */
+/** Parse in-memory entries from Pi's current session. */
 export function parseCurrentBranch(
   entries: readonly SessionEntryLike[],
   file: string,
@@ -132,6 +132,14 @@ function collectEntry(
   entry: SessionEntryLike,
   pricing?: ModelPricingResolver,
 ): void {
+  if (entry.type === "compaction" || entry.type === "branch_summary") {
+    if (isRecord(entry.usage)) collectUnattributedUsage(stats, collectors, entry.usage);
+    return;
+  }
+  if (entry.type === "custom_message") {
+    stats.customMessages += 1;
+    return;
+  }
   if (entry.type !== "message" || !isRecord(entry.message)) return;
   const message = entry.message;
 
@@ -144,6 +152,9 @@ function collectEntry(
       break;
     case "toolResult":
       stats.toolResults += 1;
+      if (isRecord(message.usage)) {
+        collectUnattributedUsage(stats, collectors, message.usage);
+      }
       break;
     case "custom":
       stats.customMessages += 1;
@@ -158,7 +169,8 @@ function collectAssistantMessage(
   pricingResolver?: ModelPricingResolver,
 ): void {
   stats.assistantMessages += 1;
-  const model = ensureMessageModel(collectors.models, message);
+  const modelId = effectiveModelId(message);
+  const model = ensureMessageModel(collectors.models, message, modelId);
   const usage = isRecord(message.usage) ? message.usage : undefined;
 
   if (usage) {
@@ -169,7 +181,6 @@ function collectAssistantMessage(
     const cacheWrite1h = finiteNumber(usage.cacheWrite1h);
     const reportedCost = isRecord(usage.cost) ? finiteNumber(usage.cost.total) : 0;
     const provider = typeof message.provider === "string" ? message.provider : undefined;
-    const modelId = typeof message.model === "string" ? message.model : undefined;
     const pricing =
       provider && modelId ? pricingResolver?.(provider, modelId) : undefined;
     const pricingSource: PricingSource =
@@ -184,13 +195,7 @@ function collectAssistantMessage(
             pricing,
           );
 
-    stats.totalTokens.input += input;
-    stats.totalTokens.output += output;
-    stats.totalTokens.cacheRead += cacheRead;
-    stats.totalTokens.cacheWrite += cacheWrite;
-    stats.totalTokens.cost.total += cost;
-    collectors.reportedTotalTokens += finiteNumber(usage.totalTokens);
-
+    addUsageTotals(stats, collectors, usage, cost);
     if (model) {
       model.input += input;
       model.output += output;
@@ -211,12 +216,43 @@ function collectAssistantMessage(
   }
 }
 
+function collectUnattributedUsage(
+  stats: SessionStats,
+  collectors: Collectors,
+  usage: Record<string, unknown>,
+): void {
+  const reportedCost = isRecord(usage.cost) ? finiteNumber(usage.cost.total) : 0;
+  addUsageTotals(stats, collectors, usage, reportedCost);
+}
+
+function addUsageTotals(
+  stats: SessionStats,
+  collectors: Collectors,
+  usage: Record<string, unknown>,
+  cost: number,
+): void {
+  stats.totalTokens.input += finiteNumber(usage.input);
+  stats.totalTokens.output += finiteNumber(usage.output);
+  stats.totalTokens.cacheRead += finiteNumber(usage.cacheRead);
+  stats.totalTokens.cacheWrite += finiteNumber(usage.cacheWrite);
+  stats.totalTokens.cost.total += cost;
+  collectors.reportedTotalTokens += finiteNumber(usage.totalTokens);
+}
+
+function effectiveModelId(message: Record<string, unknown>): string | undefined {
+  if (typeof message.responseModel === "string" && message.responseModel) {
+    return message.responseModel;
+  }
+  return typeof message.model === "string" ? message.model : undefined;
+}
+
 function ensureMessageModel(
   models: Map<string, ModelUsage>,
   message: Record<string, unknown>,
+  modelId: string | undefined,
 ): ModelUsage | undefined {
-  if (typeof message.provider !== "string" || typeof message.model !== "string") return undefined;
-  const key = `${message.provider}/${message.model}`;
+  if (typeof message.provider !== "string" || !modelId) return undefined;
+  const key = `${message.provider}/${modelId}`;
   const existing = models.get(key);
   if (existing) {
     existing.count += 1;
@@ -225,7 +261,7 @@ function ensureMessageModel(
 
   const model: ModelUsage = {
     provider: message.provider,
-    modelId: message.model,
+    modelId,
     count: 1,
     input: 0,
     output: 0,

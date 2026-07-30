@@ -1,10 +1,22 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { formatModelWithThinking } from "./src/domain.ts";
 import {
   preserveScrolledOffset,
   reconcileDashboardSelection,
   type DashboardSelection,
 } from "./src/ui/takeover.ts";
+
+test("formats the model together with the thinking level", () => {
+  assert.equal(
+    formatModelWithThinking({
+      modelLabel: "openai/gpt-test",
+      thinkingLevel: "high",
+    }),
+    "openai/gpt-test (high)",
+  );
+  assert.equal(formatModelWithThinking({ modelLabel: "openai/gpt-test" }), "openai/gpt-test");
+});
 
 test("keeps scrolled transcript content anchored as streamed output grows", () => {
   const previousLineCount = 100;

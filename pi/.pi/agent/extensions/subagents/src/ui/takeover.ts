@@ -13,10 +13,18 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import type { Component, Focusable, TUI } from "@earendil-works/pi-tui";
 import { Input, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-import { formatElapsed, type SubagentSnapshot } from "../domain.ts";
+import {
+  formatElapsed,
+  formatModelWithThinking,
+  type SubagentSnapshot,
+} from "../domain.ts";
 import { formatContextUtilization } from "../format.ts";
 import type { SubagentReadModel } from "../manager.ts";
-import { buildTranscriptLines } from "./transcript.ts";
+import { buildTranscriptLines, sanitizeText } from "./transcript.ts";
+
+function oneLine(text: string) {
+  return sanitizeText(text.replace(/\s+/g, " ")).trim();
+}
 
 function configuredKeys(
   keybindings: KeybindingsManager,
@@ -66,7 +74,11 @@ export async function openSubagentPicker(
         new SubagentDashboard(tui, theme, keybindings, view, selection, done),
       {
         overlay: true,
-        overlayOptions: { anchor: "center", width: "100%", maxHeight: "100%" },
+        overlayOptions: {
+          anchor: "center",
+          width: 150,
+          maxHeight: "100%",
+        },
       },
     );
 
@@ -78,7 +90,11 @@ export async function openSubagentPicker(
         new TakeoverView(tui, theme, keybindings, picked, view, done),
       {
         overlay: true,
-        overlayOptions: { anchor: "center", width: "100%", maxHeight: "100%" },
+        overlayOptions: {
+          anchor: "center",
+          width: 144,
+          maxHeight: "100%",
+        },
       },
     );
     // After leaving the takeover view, fall back to the dashboard.
@@ -326,7 +342,7 @@ class SubagentDashboard implements Component {
       const dot = theme.fg("dim", " · ");
       const rightParts = [
         theme.fg("muted", snap.backend),
-        theme.fg("muted", snap.meta.modelLabel ?? "?"),
+        theme.fg("muted", formatModelWithThinking(snap.meta)),
         ...(utilization ? [theme.fg("muted", utilization)] : []),
         theme.fg("muted", formatElapsed(snap)),
         statusWord(snap, theme),
@@ -503,46 +519,69 @@ class TakeoverView implements Component, Focusable {
     const theme = this.theme;
     const frameWidth = Math.max(1, width - 2);
     const contentWidth = Math.max(1, frameWidth - 2);
-    const horizontal = (left: string, fill: string, right: string) =>
-      theme.fg("borderAccent", left + fill.repeat(frameWidth) + right);
+    const horizontal = (
+      left: string,
+      right: string,
+      label?: string,
+    ) => {
+      if (!label) {
+        return (
+          theme.fg("border", left) +
+          theme.fg("borderMuted", "─".repeat(frameWidth)) +
+          theme.fg("border", right)
+        );
+      }
+      const safeLabel = truncateToWidth(label, Math.max(1, frameWidth - 4));
+      const used = visibleWidth(safeLabel) + 3;
+      return (
+        theme.fg("border", left) +
+        theme.fg("borderMuted", "─ ") +
+        theme.fg("accent", theme.bold(safeLabel)) +
+        theme.fg("borderMuted", ` ${"─".repeat(Math.max(0, frameWidth - used))}`) +
+        theme.fg("border", right)
+      );
+    };
     const framed = (content: string) => {
       const clipped = truncateToWidth(content, contentWidth);
       return (
-        theme.fg("borderAccent", "│") +
+        theme.fg("border", "│") +
         " " +
         clipped +
         " ".repeat(Math.max(0, contentWidth - visibleWidth(clipped) + 1)) +
-        theme.fg("borderAccent", "│")
+        theme.fg("border", "│")
       );
     };
+    const metadata = (label: string, value: string) =>
+      theme.fg("dim", `${label.toUpperCase()} `) + theme.fg("muted", value);
     const lines: string[] = [];
     const snap = this.snap();
 
     if (!snap) {
       return [
-        horizontal("╭", "─", "╮"),
+        horizontal("╭", "╮", "SUBAGENT"),
         framed(theme.fg("dim", `${this.id} is no longer tracked`)),
-        horizontal("╰", "─", "╯"),
+        horizontal("╰", "╯"),
       ];
     }
 
     const utilization = formatContextUtilization(snap.usage);
     const title =
       `${statusGlyph(snap, theme)} ` +
-      theme.fg("accent", theme.bold(snap.title)) +
-      theme.fg("dim", `  ${snap.id}`);
-    const metadata = [
-      statusWord(snap, theme),
-      theme.fg("muted", formatElapsed(snap)),
-      theme.fg("muted", snap.meta.modelLabel ?? "unknown model"),
-      utilization ? theme.fg("muted", utilization) : "",
-    ]
-      .filter(Boolean)
-      .join(theme.fg("dim", "  ·  "));
-    lines.push(horizontal("╭", "─", "╮"));
+      theme.fg("text", theme.bold(oneLine(snap.title))) +
+      theme.fg("dim", `  ${snap.id}`) +
+      theme.fg("dim", "  ·  ") +
+      statusWord(snap, theme);
+    const detailSegments = [
+      metadata("model", oneLine(formatModelWithThinking(snap.meta, "unknown"))),
+      utilization ? metadata("context", utilization) : "",
+      metadata("runtime", formatElapsed(snap)),
+      metadata("turns", String(snap.turns)),
+    ].filter(Boolean);
+
+    lines.push(horizontal("╭", "╮", "SUBAGENT"));
     lines.push(framed(title));
-    lines.push(framed(metadata));
-    lines.push(horizontal("├", "─", "┤"));
+    lines.push(framed(detailSegments.join(theme.fg("dim", "  ·  "))));
+    lines.push(horizontal("├", "┤", "ACTIVITY"));
 
     // Fixed-height transcript viewport. Error and scroll status consume rows
     // inside the viewport so streaming/scrolling never changes overlay height.
@@ -572,7 +611,10 @@ class TakeoverView implements Component, Focusable {
 
     const body: string[] = [];
     if (snap.errorText) {
-      body.push(theme.fg("error", `error: ${snap.errorText}`));
+      body.push(
+        theme.fg("error", "✗ ") +
+          theme.fg("error", truncateToWidth(oneLine(snap.errorText), contentWidth - 2)),
+      );
     }
 
     const capacity = Math.max(
@@ -581,30 +623,39 @@ class TakeoverView implements Component, Focusable {
     );
     const end = transcript.length - this.scrollOffset;
     const visible = transcript.slice(Math.max(0, end - capacity), end);
-    if (visible.length === 0) body.push(theme.fg("dim", "Waiting for output..."));
-    else body.push(...visible);
+    if (visible.length === 0) {
+      body.push(
+        theme.fg("warning", "◌ ") + theme.fg("dim", "Waiting for activity"),
+      );
+    } else {
+      body.push(...visible);
+    }
 
     if (this.scrollOffset > 0) {
       body.push(
-        theme.fg(
-          "warning",
-          `paused · ${this.scrollOffset} newer lines · ↓/pgdn follow`,
-        ),
+        theme.fg("warning", "↑ PAUSED") +
+          theme.fg(
+            "dim",
+            `  ${this.scrollOffset} newer lines  ·  ↓/pgdn to follow`,
+          ),
       );
     }
     while (body.length < viewport) body.push("");
     lines.push(...body.slice(0, viewport).map(framed));
 
-    lines.push(horizontal("├", "─", "┤"));
+    lines.push(horizontal("├", "┤", "MESSAGE"));
     const inputLines = this.input.render(Math.max(1, contentWidth - 2));
-    lines.push(framed(theme.fg("accent", "› ") + (inputLines[0] ?? "")));
+    lines.push(
+      framed(theme.fg("accent", "› ") + (inputLines[0] ?? "")),
+    );
     const hints =
       `${configuredKeys(this.keybindings, "tui.input.submit")} send  ·  ` +
       `${configuredKeys(this.keybindings, "tui.editor.cursorUp")}/${configuredKeys(this.keybindings, "tui.editor.cursorDown")} scroll  ·  ` +
-      `${configuredKeys(this.keybindings, "app.clear")} abort  ·  ` +
+      `${configuredKeys(this.keybindings, "tui.editor.pageUp")}/${configuredKeys(this.keybindings, "tui.editor.pageDown")} page  ·  ` +
+      `${configuredKeys(this.keybindings, "app.clear")} stop  ·  ` +
       `${configuredKeys(this.keybindings, "app.interrupt")} back`;
     lines.push(framed(theme.fg("dim", hints)));
-    lines.push(horizontal("╰", "─", "╯"));
+    lines.push(horizontal("╰", "╯"));
     return lines;
   }
 

@@ -81,6 +81,7 @@ const makeStubSession = (
       meta: {
         backend: profile.backend,
         modelLabel: task.model ?? profile.defaultModelLabel,
+        thinkingLevel: task.reasoningEffort ?? task.parent.inheritedThinkingLevel,
         contextWindow: profile.contextWindow,
         sessionFilePath: sessionFile,
       } satisfies SubagentMeta as SubagentMeta,

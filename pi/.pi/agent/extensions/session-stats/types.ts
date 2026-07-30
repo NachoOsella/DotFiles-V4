@@ -86,4 +86,5 @@ export interface SessionEntryLike {
   timestamp?: unknown;
   name?: unknown;
   message?: unknown;
+  usage?: unknown;
 }
