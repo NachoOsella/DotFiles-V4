@@ -1,13 +1,13 @@
 {
   "lastChangelogVersion": "0.83.0",
   "theme": "gruvbox-material-dark-hard",
-  "defaultThinkingLevel": "xhigh",
+  "defaultThinkingLevel": "medium",
   "hideThinkingBlock": false,
   "quietStartup": false,
   "enableSkillCommands": true,
   "extensions": [],
-  "defaultProvider": "openai-codex",
-  "defaultModel": "gpt-5.6-luna",
+  "defaultProvider": "zen-free",
+  "defaultModel": "deepseek-v4-flash-free",
   "steeringMode": "one-at-a-time",
   "terminal": {
     "showTerminalProgress": false

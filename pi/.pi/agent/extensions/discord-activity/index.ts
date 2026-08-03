@@ -239,15 +239,8 @@ const sessionEffect = (
                 yield* waitForDisconnect(client)
             })
         ),
-        Effect.catch((error: unknown) =>
-            Effect.sync(() => {
-                onUnavailable()
-                console.warn(
-                    '[pi-discord] Discord unavailable; activity extension stopped:',
-                    error
-                )
-            })
-        )
+        // Discord is optional, so an unavailable desktop client should not surface as a Pi error.
+        Effect.catch(() => Effect.sync(onUnavailable))
     )
 
 // ---------------------------------------------------------------------------
