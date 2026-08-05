@@ -1,0 +1,20 @@
+# Keep repository metadata out of the home directory.
+\.git
+\.gitignore
+\.gitmodules
+^/README.*
+^/LICENSE.*
+^/COPYING
+
+# Keep runtime dependencies outside the Stow package.
+node_modules
+
+# Keep Pi runtime state and machine-specific data outside the package.
+sessions
+git
+cache
+auth.json
+.env
+models-store.json
+trust.json
+pi-crash.log
