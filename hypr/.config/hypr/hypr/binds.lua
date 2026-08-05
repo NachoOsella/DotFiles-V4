@@ -33,23 +33,21 @@ bind(mod .. " + T", hl.dsp.layout("togglesplit"))
 bind(mod .. " + F", hl.dsp.window.fullscreen({ mode = "maximized", action = "toggle" }))
 exec(mod .. " + N", "kitty nvim")
 
--- Move windows with vim-style keys.
-bind("SUPER + H", hl.dsp.window.move({ direction = "l" }))
-bind("SUPER + L", hl.dsp.window.move({ direction = "r" }))
-bind("SUPER + K", hl.dsp.window.move({ direction = "u" }))
-bind("SUPER + J", hl.dsp.window.move({ direction = "d" }))
+-- Vim-style window navigation: focus, move, then resize with increasing modifiers.
+bind(mod .. " + h", hl.dsp.focus({ direction = "l" }))
+bind(mod .. " + l", hl.dsp.focus({ direction = "r" }))
+bind(mod .. " + k", hl.dsp.focus({ direction = "u" }))
+bind(mod .. " + j", hl.dsp.focus({ direction = "d" }))
 
--- Resize windows with vim-style keys.
-bind(mod .. " + SHIFT + h", hl.dsp.window.resize({ x = -100, y = 0, relative = true }))
-bind(mod .. " + SHIFT + l", hl.dsp.window.resize({ x = 100, y = 0, relative = true }))
-bind(mod .. " + SHIFT + k", hl.dsp.window.resize({ x = 0, y = -100, relative = true }))
-bind(mod .. " + SHIFT + j", hl.dsp.window.resize({ x = 0, y = 100, relative = true }))
+bind(mod .. " + SHIFT + h", hl.dsp.window.move({ direction = "l" }))
+bind(mod .. " + SHIFT + l", hl.dsp.window.move({ direction = "r" }))
+bind(mod .. " + SHIFT + k", hl.dsp.window.move({ direction = "u" }))
+bind(mod .. " + SHIFT + j", hl.dsp.window.move({ direction = "d" }))
 
--- Move focus with arrow keys.
-bind(mod .. " + left", hl.dsp.focus({ direction = "l" }))
-bind(mod .. " + right", hl.dsp.focus({ direction = "r" }))
-bind(mod .. " + up", hl.dsp.focus({ direction = "u" }))
-bind(mod .. " + down", hl.dsp.focus({ direction = "d" }))
+bind(mod .. " + CTRL + h", hl.dsp.window.resize({ x = -100, y = 0, relative = true }))
+bind(mod .. " + CTRL + l", hl.dsp.window.resize({ x = 100, y = 0, relative = true }))
+bind(mod .. " + CTRL + k", hl.dsp.window.resize({ x = 0, y = -100, relative = true }))
+bind(mod .. " + CTRL + j", hl.dsp.window.resize({ x = 0, y = 100, relative = true }))
 bind(mod .. " + Tab", hl.dsp.focus({ workspace = "previous" }))
 
 -- Switch workspaces and move windows to workspaces.
@@ -59,8 +57,15 @@ for workspace = 1, 10 do
     bind(mod .. " + SHIFT + " .. key, hl.dsp.window.move({ workspace = workspace }))
 end
 
--- Scratchpad workspace.
-bind(mod .. " + B", hl.dsp.workspace.toggle_special("magic"))
+-- Scratchpad workspace. Open it directly, and create a terminal only when it is empty.
+bind(mod .. " + B", function()
+    local special_windows = hl.get_workspace_windows("special:magic")
+    hl.dispatch(hl.dsp.workspace.toggle_special("magic"))
+
+    if #special_windows == 0 then
+        hl.exec_cmd("kitty --app-id=scratchpad -T scratchpad")
+    end
+end)
 bind(mod .. " + SHIFT + S", hl.dsp.window.move({ workspace = "special:magic" }))
 
 -- Scroll through existing workspaces.
