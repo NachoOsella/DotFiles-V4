@@ -1,0 +1,13 @@
+Bar 1.0 Bar.qml
+LauncherButton 1.0 LauncherButton.qml
+Workspaces 1.0 Workspaces.qml
+ActiveWindow 1.0 ActiveWindow.qml
+MediaIndicator 1.0 MediaIndicator.qml
+NetworkIndicator 1.0 NetworkIndicator.qml
+AudioIndicator 1.0 AudioIndicator.qml
+MemoryIndicator 1.0 MemoryIndicator.qml
+BatteryIndicator 1.0 BatteryIndicator.qml
+Tray 1.0 Tray.qml
+NotificationIndicator 1.0 NotificationIndicator.qml
+Clock 1.0 Clock.qml
+PowerButton 1.0 PowerButton.qml

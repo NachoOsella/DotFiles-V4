@@ -1,5 +1,5 @@
 {
-  "lastChangelogVersion": "0.83.0",
+  "lastChangelogVersion": "0.84.1",
   "theme": "gruvbox-material-dark-hard",
   "defaultThinkingLevel": "xhigh",
   "hideThinkingBlock": false,
@@ -14,5 +14,10 @@
     "showImages": true
   },
   "showCacheMissNotices": true,
-  "defaultProjectTrust": "always"
+  "defaultProjectTrust": "always",
+  "tuiMode": "fullscreen",
+  "markdown": {
+    "mermaid": "streaming"
+  },
+  "fullscreenScrollbar": "always"
 }

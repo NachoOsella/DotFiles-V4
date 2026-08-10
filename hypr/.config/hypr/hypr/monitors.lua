@@ -66,8 +66,8 @@ local function bind_workspace_range(first, last, monitor_name, default_workspace
 end
 
 local function restart_layer_clients()
-    -- These clients may not rebind after an output is removed.
-    hl.exec_cmd("pkill -x waybar 2>/dev/null || true; pkill -x hyprpaper 2>/dev/null || true; uwsm app -- waybar >/dev/null 2>&1 & uwsm app -- hyprpaper >/dev/null 2>&1 &")
+    -- Quickshell handles outputs reactively; only Hyprpaper needs a restart here.
+    hl.exec_cmd("pkill -x hyprpaper 2>/dev/null || true; uwsm app -- hyprpaper >/dev/null 2>&1 &")
 end
 
 local function apply_laptop_profile()

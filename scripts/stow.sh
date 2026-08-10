@@ -31,6 +31,7 @@ PACKAGES=(
 	"fish"
 	"nvim"
 	"waybar"
+	"quickshell"
 	"rofi"
 	"dunst"
 	"lazygit"

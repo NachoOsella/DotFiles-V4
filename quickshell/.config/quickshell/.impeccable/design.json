@@ -1,0 +1,183 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-08-09T20:17:09-03:00",
+  "title": "Design System: Quickshell",
+  "extensions": {
+    "colorMeta": {
+      "bg-0": {
+        "role": "neutral",
+        "displayName": "Deep Shell",
+        "canonical": "#1d2021",
+        "tonalRamp": ["#141617", "#1d2021", "#242627", "#2b2d2e", "#333536", "#3b3d3e", "#444647", "#4d4f50"]
+      },
+      "bg-1": {
+        "role": "neutral",
+        "displayName": "Popup Brown",
+        "canonical": "#282828",
+        "tonalRamp": ["#181818", "#202020", "#282828", "#303030", "#383838", "#414141", "#494949", "#525252"]
+      },
+      "bg-3": {
+        "role": "neutral",
+        "displayName": "Raised Brown-Grey",
+        "canonical": "#3c3836",
+        "tonalRamp": ["#211f1e", "#2b2826", "#35312f", "#3c3836", "#494441", "#554f4c", "#625a56", "#6e6661"]
+      },
+      "bg-5": {
+        "role": "neutral",
+        "displayName": "Pressed Brown-Grey",
+        "canonical": "#504945",
+        "tonalRamp": ["#292522", "#37312e", "#443e3a", "#504945", "#5c544f", "#69605a", "#756c65", "#827871"]
+      },
+      "statusline": {
+        "role": "neutral",
+        "displayName": "Statusline",
+        "canonical": "#32302f",
+        "tonalRamp": ["#211f1e", "#292725", "#32302f", "#3a3735", "#443f3c", "#4d4844", "#57504b", "#615a54"]
+      },
+      "fg-0": {
+        "role": "neutral",
+        "displayName": "Warm Foreground",
+        "canonical": "#d4be98",
+        "tonalRamp": ["#4a4031", "#66563f", "#826d4e", "#9e865f", "#b39a70", "#c4ab82", "#d4be98", "#e2d2b3"]
+      },
+      "fg-1": {
+        "role": "neutral",
+        "displayName": "Strong Warm Foreground",
+        "canonical": "#ddc7a1",
+        "tonalRamp": ["#4e4333", "#6b5b43", "#89734f", "#a78c62", "#bca375", "#cdb68a", "#ddc7a1", "#e8dcc5"]
+      },
+      "grey-1": {
+        "role": "neutral",
+        "displayName": "Muted Grey",
+        "canonical": "#928374",
+        "tonalRamp": ["#302b27", "#49413a", "#62574d", "#786b5e", "#928374", "#a99d91", "#beb6ae", "#d4cfca"]
+      },
+      "grey-2": {
+        "role": "neutral",
+        "displayName": "Secondary Grey",
+        "canonical": "#a89984",
+        "tonalRamp": ["#37312a", "#51483b", "#6c5e4e", "#877661", "#a89984", "#b9ab96", "#c9bdab", "#d9d0c3"]
+      },
+      "red": {
+        "role": "error",
+        "displayName": "Muted Red",
+        "canonical": "#ea6962",
+        "tonalRamp": ["#4b1c1b", "#702a28", "#963936", "#bd4845", "#d45652", "#ea6962", "#f18b85", "#f6b0ab"]
+      },
+      "orange": {
+        "role": "warning",
+        "displayName": "Muted Orange",
+        "canonical": "#e78a4e",
+        "tonalRamp": ["#4b2a16", "#704021", "#96552d", "#bc6f3d", "#d97e46", "#e78a4e", "#efa473", "#f5c1a0"]
+      },
+      "yellow": {
+        "role": "tertiary",
+        "displayName": "Muted Yellow",
+        "canonical": "#d8a657",
+        "tonalRamp": ["#493516", "#6b4e20", "#8c672b", "#ad8038", "#c69649", "#d8a657", "#e2bb7b", "#ecd0a3"]
+      },
+      "green": {
+        "role": "primary",
+        "displayName": "Muted Green",
+        "canonical": "#a9b665",
+        "tonalRamp": ["#303719", "#485124", "#606b30", "#7b883e", "#94a452", "#a9b665", "#beca8b", "#d3dcb1"]
+      },
+      "aqua": {
+        "role": "secondary",
+        "displayName": "Muted Aqua",
+        "canonical": "#89b482",
+        "tonalRamp": ["#203a2a", "#2f563c", "#3e704d", "#528e61", "#70a977", "#89b482", "#a8c9a1", "#c8ddc3"]
+      },
+      "blue": {
+        "role": "tertiary",
+        "displayName": "Muted Blue",
+        "canonical": "#7daea3",
+        "tonalRamp": ["#1c3535", "#294f4e", "#376967", "#488582", "#659f99", "#7daea3", "#9fc4bd", "#c1d9d4"]
+      },
+      "purple": {
+        "role": "tertiary",
+        "displayName": "Muted Purple",
+        "canonical": "#d3869b",
+        "tonalRamp": ["#461f2d", "#682e42", "#8a3d56", "#aa4e6b", "#c36d85", "#d3869b", "#e0a7b7", "#edc4d0"]
+      }
+    },
+    "typographyMeta": {
+      "body": { "displayName": "JetBrainsMono Nerd Font", "purpose": "Primary shell labels and values." },
+      "icon": { "displayName": "Symbols Nerd Font", "purpose": "Compact status and action glyphs." }
+    },
+    "shadows": [],
+    "motion": [
+      { "name": "animation-fast", "value": "140ms cubic-bezier(0.33, 1, 0.68, 1)", "purpose": "Hover, pressed, selected, and focus color changes." },
+      { "name": "animation-normal", "value": "180ms cubic-bezier(0.33, 1, 0.68, 1)", "purpose": "Normal shell transitions." },
+      { "name": "popup-dismiss", "value": "700ms hover-leave delay", "purpose": "Closes a popup after the pointer leaves both popup and anchor." }
+    ],
+    "breakpoints": []
+  },
+  "components": [
+    {
+      "name": "Bar",
+      "kind": "nav",
+      "refersTo": "bar",
+      "description": "Persistent 38px status bar with left, centered, and right module groups.",
+      "html": "<nav class=\"ds-bar\"><span>Workspaces</span><span class=\"ds-bar-center\">Media</span><span>12:00</span></nav>",
+      "css": ".ds-bar { display: flex; align-items: center; height: 38px; padding: 0 6px; background: rgba(29, 32, 33, 0.96); color: #d4be98; font: 600 16px/1 \"JetBrainsMono Nerd Font\"; border-bottom: 1px solid #3c3836; } .ds-bar-center { margin: 0 auto; background: #282828; }"
+    },
+    {
+      "name": "Accent Button",
+      "kind": "button",
+      "refersTo": "accent-button",
+      "description": "Compact launcher-style action with a green base and dark glyph or label.",
+      "html": "<button class=\"ds-accent-button\">Launch</button>",
+      "css": ".ds-accent-button { height: 30px; padding: 0 7px; border: 0; border-radius: 2px; background: #a9b665; color: #1d2021; font: 600 14px/1 \"JetBrainsMono Nerd Font\"; transition: background 140ms cubic-bezier(0.33, 1, 0.68, 1); } .ds-accent-button:hover { background: #89b482; } .ds-accent-button:focus-visible { outline: 1px solid #89b482; outline-offset: 1px; } .ds-accent-button:active { background: #d8a657; }"
+    },
+    {
+      "name": "Popup Surface",
+      "kind": "card",
+      "refersTo": "popup-surface",
+      "description": "Large contextual surface anchored below a bar module.",
+      "html": "<section class=\"ds-popup-surface\"><h2>Control center</h2><div class=\"ds-popup-row\">Network <span>Connected</span></div></section>",
+      "css": ".ds-popup-surface { width: 410px; padding: 14px; background: #282828; color: #ddc7a1; border: 1px solid #3c3836; border-radius: 4px; font-family: \"JetBrainsMono Nerd Font\"; } .ds-popup-surface h2 { margin: 0 0 8px; font-size: 16px; font-weight: 700; } .ds-popup-row { display: flex; justify-content: space-between; align-items: center; height: 38px; padding: 0 7px; border-radius: 2px; color: #d4be98; font-size: 14px; } .ds-popup-row:hover { background: #32302f; } .ds-popup-row span { color: #a89984; }"
+    },
+    {
+      "name": "Input",
+      "kind": "input",
+      "refersTo": "input-field",
+      "description": "Password field used when a protected network needs credentials.",
+      "html": "<input class=\"ds-input\" type=\"password\" placeholder=\"Password\">",
+      "css": ".ds-input { box-sizing: border-box; width: 100%; height: 38px; padding: 0 8px; border: 1px solid #3c3836; border-radius: 4px; background: #1d2021; color: #ddc7a1; font: 14px \"JetBrainsMono Nerd Font\"; } .ds-input:focus-visible { border-color: #89b482; outline: none; }"
+    },
+    {
+      "name": "Slider",
+      "kind": "custom",
+      "refersTo": "slider-track",
+      "description": "Restrained 4px track with semantic fill and a small handle.",
+      "html": "<div class=\"ds-slider\" role=\"slider\" aria-valuenow=\"60\"><span></span><i></i></div>",
+      "css": ".ds-slider { position: relative; height: 22px; padding-top: 9px; } .ds-slider::before, .ds-slider span { display: block; height: 4px; border-radius: 2px; content: \"\"; } .ds-slider::before { background: #504945; } .ds-slider span { width: 60%; margin-top: -4px; background: #a9b665; } .ds-slider i { position: absolute; top: 6px; left: calc(60% - 5px); width: 10px; height: 10px; border-radius: 5px; background: #ddc7a1; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Compact Status Instrument",
+    "overview": "This is a compact, flat desktop shell built in Gruvbox Material Dark Hard. The 38px top bar keeps workspace, window, media, and system state readable at a glance; larger contextual popups provide depth only when opened. The supplied captures show the bar sitting quietly over active applications rather than competing with them.\n\nJetBrainsMono Nerd Font, one-pixel separators, tonal dark surfaces, straight corners, and semantic status colors make the system feel utilitarian and restrained. Interactions are short, local color changes and separate popup windows, not blocking overlays.",
+    "keyCharacteristics": [
+      "38px flat bar with 30px modules.",
+      "Larger 340-440px popups with 14px internal padding.",
+      "Gruvbox Material dark neutrals with restrained semantic accents.",
+      "Nonblocking, context-first interaction."
+    ],
+    "rules": [
+      { "name": "The Semantic Accent Rule", "body": "Accents identify state or action; they do not decorate whole surfaces.", "section": "colors" },
+      { "name": "The Flat-By-Default Rule", "body": "Keep the bar and controls flat at rest; use tonal state changes instead of shadows or gradients.", "section": "elevation" }
+    ],
+    "dos": [
+      "Do preserve the 38px bar and 30px module rhythm.",
+      "Do keep popup surfaces larger than bar modules, padded by 14px, and anchored to the triggering module.",
+      "Do use green, aqua, yellow, orange, and red only for their observed state or action meanings.",
+      "Do keep interactions nonblocking: local hover/press feedback, Escape dismissal, and separate contextual popups."
+    ],
+    "donts": [
+      "Don't introduce pill shapes, large rounded cards, gradients, or drop shadows into the shell.",
+      "Don't turn the persistent bar into a dashboard or full-screen control surface.",
+      "Don't use saturated accents as general backgrounds; reserve them for state and action."
+    ]
+  }
+}

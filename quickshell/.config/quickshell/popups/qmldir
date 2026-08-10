@@ -1,0 +1,8 @@
+MediaPopup 1.0 MediaPopup.qml
+AudioPopup 1.0 AudioPopup.qml
+NetworkPopup 1.0 NetworkPopup.qml
+BluetoothPopup 1.0 BluetoothPopup.qml
+ControlCenter 1.0 ControlCenter.qml
+CalendarPopup 1.0 CalendarPopup.qml
+NotificationCenter 1.0 NotificationCenter.qml
+PowerMenu 1.0 PowerMenu.qml

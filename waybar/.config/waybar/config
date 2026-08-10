@@ -68,9 +68,16 @@
         "tooltip": true
     },
     "network": {
-        "format-wifi": "<span font_family='Symbols Nerd Font' rise='1000'>󰤨</span> {signalStrength}%",
+        "format-wifi": "{icon} {bandwidthDownBits}",
         "format-ethernet": "<span font_family='Symbols Nerd Font' rise='1000'>󰈀</span>",
         "format-disconnected": "<span font_family='Symbols Nerd Font' rise='1000'>󰤮</span>",
+        "format-icons": [
+            "<span font_family='Symbols Nerd Font' rise='1000'>󰤯</span>",
+            "<span font_family='Symbols Nerd Font' rise='1000'>󰤟</span>",
+            "<span font_family='Symbols Nerd Font' rise='1000'>󰤢</span>",
+            "<span font_family='Symbols Nerd Font' rise='1000'>󰤥</span>",
+            "<span font_family='Symbols Nerd Font' rise='1000'>󰤨</span>"
+        ],
         "interval": 5,
         "tooltip": true,
         "tooltip-format": "Interface: {ifname}",

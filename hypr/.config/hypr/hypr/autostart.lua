@@ -1,7 +1,7 @@
 -- Session startup commands. These replace exec-once entries from hyprland.conf.
 
 hl.on("hyprland.start", function()
-    hl.exec_cmd("pgrep -x waybar >/dev/null || waybar")
+    hl.exec_cmd("pgrep -x qs >/dev/null || qs -p ~/.config/quickshell --no-duplicate")
     hl.exec_cmd("dbus-update-activation-environment --systemd WAYLAND_DISPLAY XDG_CURRENT_DESKTOP")
     hl.exec_cmd("pgrep -x hyprpaper >/dev/null || hyprpaper")
     hl.exec_cmd("sleep 5; pgrep -x spotify >/dev/null || spotify-launcher")

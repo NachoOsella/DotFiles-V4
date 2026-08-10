@@ -1,0 +1,7 @@
+StyledText 1.0 StyledText.qml
+ModuleButton 1.0 ModuleButton.qml
+IconButton 1.0 IconButton.qml
+Separator 1.0 Separator.qml
+StyledSlider 1.0 StyledSlider.qml
+PopupSurface 1.0 PopupSurface.qml
+PopupRow 1.0 PopupRow.qml

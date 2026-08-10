@@ -30,6 +30,10 @@ export function buildModelConfigs(
       id,
       name: info.name ?? id,
       reasoning: info.reasoning ?? false,
+      // DeepSeek requires reasoning_content on replayed assistant messages during thinking.
+      compat: id.includes("deepseek")
+        ? { requiresReasoningContentOnAssistantMessages: true }
+        : undefined,
       thinkingLevelMap,
       input: info.modalities?.input?.includes("image") ? ["text", "image"] : ["text"],
       // Keep provider pricing metadata instead of assuming every zero-input model is free.
