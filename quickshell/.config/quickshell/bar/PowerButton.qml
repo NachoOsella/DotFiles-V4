@@ -9,6 +9,7 @@ ModuleButton {
     required property string screenName
 
     implicitWidth: 36
+    contentHorizontalOffset: 1
     baseColor: Theme.bg1
     hoverColor: Theme.red
     horizontalPadding: 8
@@ -17,7 +18,7 @@ ModuleButton {
         text: ""
         color: root.hovered ? Theme.bg0 : Theme.grey2
         font.family: Theme.iconFontFamily
-        font.pixelSize: 17
+        font.pixelSize: 20
     }
 
     onClicked: PopupManager.toggle("power", screenName)

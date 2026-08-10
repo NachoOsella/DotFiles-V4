@@ -51,9 +51,12 @@ Rectangle {
 
                 Rectangle {
                     anchors.left: parent.left
+                    anchors.leftMargin: 4
                     anchors.right: parent.right
+                    anchors.rightMargin: 4
                     anchors.bottom: parent.bottom
-                    height: 2
+                    anchors.bottomMargin: 3
+                    height: 3
                     color: workspaceButton.urgent ? Theme.red : workspaceButton.focused ? Theme.green : Theme.transparent
                 }
 
@@ -75,7 +78,9 @@ Rectangle {
 
     MouseArea {
         anchors.fill: parent
+        hoverEnabled: true
         acceptedButtons: Qt.NoButton
+        cursorShape: Qt.PointingHandCursor
         onWheel: wheel => Hyprland.dispatch(wheel.angleDelta.y > 0 ? "workspace e-1" : "workspace e+1")
     }
 }

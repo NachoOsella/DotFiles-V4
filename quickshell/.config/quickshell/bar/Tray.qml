@@ -26,8 +26,8 @@ Item {
                 id: trayDelegate
 
                 required property var modelData
-                width: 18
-                height: 18
+                width: 20
+                height: 20
 
                 IconImage {
                     anchors.fill: parent

@@ -25,11 +25,11 @@ colors:
 typography:
   body:
     fontFamily: "JetBrainsMono Nerd Font"
-    fontSize: "16px"
+    fontSize: "17px"
     fontWeight: 600
   label:
     fontFamily: "JetBrainsMono Nerd Font"
-    fontSize: "14px"
+    fontSize: "15px"
   title:
     fontFamily: "JetBrainsMono Nerd Font"
     fontSize: "17px"
@@ -42,7 +42,7 @@ rounded:
   sm: "2px"
   md: "4px"
 spacing:
-  module: "30px"
+  module: "38px"
   bar: "38px"
   xs: "4px"
   sm: "6px"
@@ -96,7 +96,7 @@ This is a compact, flat desktop shell built in Gruvbox Material Dark Hard. The 3
 JetBrainsMono Nerd Font, one-pixel separators, tonal dark surfaces, straight corners, and semantic status colors make the system feel utilitarian and restrained. Interactions are short, local color changes and separate popup windows, not blocking overlays.
 
 **Key Characteristics:**
-- 38px flat bar with 30px modules.
+- 38px flat bar with full-height modules.
 - Larger 340-440px popups with 14px internal padding.
 - Gruvbox Material dark neutrals with restrained semantic accents.
 - Nonblocking, context-first interaction.
@@ -135,15 +135,15 @@ The palette is warm, low-contrast Gruvbox Material dark: dark brown-grey surface
 
 ### Hierarchy
 - **Title** (bold, 17px): Media track titles and popup headings.
-- **Body** (demi-bold, 16px): Main labels and values.
-- **Label** (regular, 14px): Compact module text and popup rows.
-- **Icon** (19px, Symbols Nerd Font): Status and action glyphs; individual controls vary from 17-28px.
+- **Body** (demi-bold, 17px): Main labels and values.
+- **Label** (regular, 15px): Compact module text and popup rows.
+- **Icon** (20px, Symbols Nerd Font): Status and action glyphs; individual controls vary from 20-28px.
 
 ## Layout
 
-The bar is 38px high, spans each monitor, and reserves its full height. Left modules begin 6px from the edge; the right modules form a compact status row with one-pixel separators. Workspaces, active window, and launcher sit left; media is centered per monitor; network, audio, memory, battery, tray, clock, and power sit right. Notifications remain available from Control Center rather than occupying a persistent bar module.
+The bar is 38px high, spans each monitor, and reserves its full height. Left modules begin at the screen edge; the right modules form a compact status row with one-pixel separators. Workspaces, active window, and launcher sit left; media is centered per monitor; network, audio, memory, battery, tray, clock, and power sit right. Notifications remain available from Control Center rather than occupying a persistent bar module.
 
-Modules are 30px high. Popups are anchored below their triggering module with a 7px top margin and auto-adjust to screen edges. Main popup widths are 340px (power), 380px (calendar), 410px (default), 430px (control/media), and 440px (network). No responsive breakpoint system is present; the shell is instantiated per monitor.
+Modules fill the 38px bar height. Popups are anchored below their triggering module with a 7px top margin and auto-adjust to screen edges. Main popup widths are 340px (power), 380px (calendar), 410px (default), 430px (control/media), and 440px (network). No responsive breakpoint system is present; the shell is instantiated per monitor.
 
 ## Elevation & Depth
 
@@ -179,7 +179,7 @@ The form language is square and controlled. Bar modules have no radius; compact 
 - **Error / Disabled:** Errors use orange; disabled controls reduce opacity to 45% and use muted greys.
 
 ### Navigation
-- **Style:** The top bar is persistent, non-focusable, and split into left, centered, and right module groups. Workspace buttons are 29px wide when visible, with a 2px green focused underline or red urgent underline.
+- **Style:** The top bar is persistent, non-focusable, and split into left, centered, and right module groups. Workspace buttons are 29px wide when visible, with a 3px inset green focused indicator or red urgent indicator.
 
 ### Sliders
 - **Style:** A 4px neutral track carries a 4px semantic fill and a 10px circular handle. Audio uses yellow, brightness uses warm foreground, and media uses green.
@@ -187,7 +187,7 @@ The form language is square and controlled. Bar modules have no radius; compact 
 ## Do's and Don'ts
 
 ### Do:
-- **Do** preserve the 38px bar and 30px module rhythm.
+- **Do** preserve the 38px bar and full-height module rhythm.
 - **Do** keep popup surfaces larger than bar modules, padded by 14px, and anchored to the triggering module.
 - **Do** use green, aqua, yellow, orange, and red only for their observed state or action meanings.
 - **Do** keep interactions nonblocking: local hover/press feedback, Escape dismissal, and separate contextual popups.

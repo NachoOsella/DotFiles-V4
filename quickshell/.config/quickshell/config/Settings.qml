@@ -4,9 +4,9 @@ import Quickshell
 
 Singleton {
     readonly property int barHeight: 38
-    readonly property int moduleHeight: 30
-    readonly property int fontSize: 16
-    readonly property int smallFontSize: 14
+    readonly property int moduleHeight: barHeight
+    readonly property int fontSize: 17
+    readonly property int smallFontSize: 15
     readonly property int activeWindowMaxWidth: 310
     readonly property int mediaMaxWidth: 500
     readonly property int popupWidth: 410

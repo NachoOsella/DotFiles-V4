@@ -10,6 +10,8 @@ Rectangle {
     property color hoverColor: Theme.hoverBackground
     property color pressedColor: Theme.bg3
     property int horizontalPadding: 9
+    property int contentHorizontalOffset: 0
+    property int contentVerticalOffset: 0
     property bool interactive: true
     property color bottomAccentColor: Theme.transparent
     property int bottomAccentHeight: 0
@@ -25,10 +27,7 @@ Rectangle {
 
     Rectangle {
         id: surface
-        anchors.left: parent.left
-        anchors.right: parent.right
-        anchors.verticalCenter: parent.verticalCenter
-        height: Settings.moduleHeight
+        anchors.fill: parent
         color: !root.interactive ? root.baseColor : pointer.pressed ? root.pressedColor : pointer.containsMouse ? root.hoverColor : root.baseColor
 
         Behavior on color {
@@ -39,8 +38,10 @@ Rectangle {
     RowLayout {
         id: content
         anchors.horizontalCenter: parent.horizontalCenter
+        anchors.horizontalCenterOffset: root.contentHorizontalOffset
         anchors.verticalCenter: parent.verticalCenter
-        height: parent.height
+        anchors.verticalCenterOffset: root.contentVerticalOffset
+        height: implicitHeight
         spacing: 6
     }
 

@@ -35,9 +35,8 @@ PanelWindow {
     Row {
         id: leftModules
         anchors.left: parent.left
-        anchors.leftMargin: 6
-        anchors.verticalCenter: parent.verticalCenter
-        height: Settings.barHeight
+        anchors.top: parent.top
+        anchors.bottom: parent.bottom
 
         LauncherButton { }
         Workspaces { }
@@ -47,16 +46,16 @@ PanelWindow {
     MediaIndicator {
         id: centeredMedia
         anchors.horizontalCenter: parent.horizontalCenter
-        anchors.verticalCenter: parent.verticalCenter
-        height: Settings.barHeight
+        anchors.top: parent.top
+        anchors.bottom: parent.bottom
         screenName: root.screen.name
     }
 
     Row {
         id: rightModules
         anchors.right: parent.right
-        anchors.verticalCenter: parent.verticalCenter
-        height: Settings.barHeight
+        anchors.top: parent.top
+        anchors.bottom: parent.bottom
 
         Separator { vertical: true; height: parent.height }
         NetworkIndicator { id: networkIndicator; screenName: root.screen.name }

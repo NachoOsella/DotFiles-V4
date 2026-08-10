@@ -16,7 +16,7 @@ ModuleButton {
         text: ""
         color: Theme.bg0
         font.family: Theme.iconFontFamily
-        font.pixelSize: 19
+        font.pixelSize: 22
         font.weight: Font.DemiBold
     }
 

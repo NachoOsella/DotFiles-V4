@@ -46,7 +46,7 @@ Item {
         anchors.rightMargin: 11
         text: root.title
         color: Theme.grey2
-        font.pixelSize: 15
+        font.pixelSize: Settings.fontSize
         elide: Text.ElideRight
     }
 }
