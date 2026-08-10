@@ -1,0 +1,17 @@
+@import "~/.config/rofi/config.rasi"
+
+window {
+    width: 620px;
+}
+
+mainbox {
+    children: [ "inputbar" ];
+}
+
+prompt {
+    str: "";
+}
+
+entry {
+    placeholder: "paste a video link";
+}

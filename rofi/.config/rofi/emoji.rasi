@@ -1,0 +1,22 @@
+@import "~/.config/rofi/config.rasi"
+
+configuration {
+    display-emoji: "󰞅";
+}
+
+window {
+    width: 720px;
+}
+
+entry {
+    placeholder: "search emoji";
+}
+
+listview {
+    lines: 7;
+    fixed-height: false;
+}
+
+element {
+    padding: 9px 12px;
+}

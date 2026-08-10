@@ -1,16 +1,16 @@
 @import "~/.config/rofi/config.rasi"
 
 window {
-    width: 760px;
+    width: 620px;
 }
 
 mainbox {
-    padding: 22px;
+    padding: 14px;
 }
 
 inputbar {
     border: 1px solid;
-    border-color: @aqua;
+    border-color: @green;
 }
 
 textbox-prompt-colon {
@@ -20,16 +20,16 @@ textbox-prompt-colon {
 
 entry {
     padding: 0px;
-    placeholder: "select network...";
+    placeholder: "search networks";
 }
 
 listview {
-    lines: 12;
+    lines: 9;
     fixed-height: false;
 }
 
 element {
-    padding: 8px 10px;
+    padding: 9px 10px;
 }
 
 element-text {

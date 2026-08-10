@@ -6,7 +6,7 @@ configuration {
 @import "~/.config/rofi/fonts.rasi"
 
 * {
-    border-colour:               @aqua;
+    border-colour:               @green;
     background-colour:           @bg;
     foreground-colour:           @fg;
     normal-background:           transparent;
@@ -20,7 +20,7 @@ window {
     location:         center;
     anchor:           center;
     fullscreen:       false;
-    width:            340px;
+    width:            420px;
     enabled:          true;
     margin:           0px;
     padding:          0px;
@@ -36,24 +36,33 @@ mainbox {
     children:         [ "inputbar", "listview" ];
     spacing:          14px;
     margin:           0px;
-    padding:          22px;
-    border:           2px solid;
+    padding:          14px;
+    border:           1px solid;
     border-radius:    0px;
     border-color:     @border-soft;
-    background-color: @bg;
+    background-color: @bg-alt;
 }
 
 inputbar {
     enabled:          true;
-    children:         [ "entry" ];
+    children:         [ "prompt", "entry" ];
     spacing:          0px;
     margin:           0px;
-    padding:          9px 12px;
+    padding:          12px;
     border:           1px solid;
     border-radius:    0px;
-    border-color:     @aqua;
-    background-color: @surface;
+    border-color:     @green;
+    background-color: @bg;
     text-color:       @foreground-colour;
+}
+
+prompt {
+    enabled:          true;
+    expand:           false;
+    padding:          0px 12px 0px 0px;
+    background-color: transparent;
+    text-color:       @green;
+    font:             "JetBrainsMono Nerd Font 16";
 }
 
 textbox-prompt-colon {
@@ -73,8 +82,9 @@ entry {
     background-color:  transparent;
     text-color:        @foreground-colour;
     cursor:            text;
-    placeholder:       "power action...";
+    placeholder:       "choose a session action";
     placeholder-color: @fg-muted;
+    font:              "JetBrainsMono Nerd Font 14";
 }
 
 listview {
@@ -82,7 +92,7 @@ listview {
     columns:          1;
     lines:            6;
     cycle:            true;
-    dynamic:          true;
+    dynamic:          false;
     scrollbar:        false;
     layout:           vertical;
     reverse:          false;
@@ -101,9 +111,9 @@ listview {
 
 element {
     enabled:          true;
-    spacing:          0px;
+    spacing:          12px;
     margin:           0px;
-    padding:          8px 10px;
+    padding:          9px 10px;
     border:           1px solid;
     border-radius:    0px;
     border-color:     transparent;
@@ -113,13 +123,13 @@ element {
 }
 
 element selected.normal {
-    border-color:     @hover-border;
+    border-color:     @green;
     background-color: var(selected-normal-background);
     text-color:       var(selected-normal-foreground);
 }
 
 element-text {
-    font:             "JetBrainsMono Nerd Font Bold 13";
+    font:             "JetBrainsMono Nerd Font 13";
     background-color: transparent;
     text-color:       inherit;
     highlight:        inherit;

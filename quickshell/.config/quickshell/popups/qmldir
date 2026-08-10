@@ -6,3 +6,4 @@ ControlCenter 1.0 ControlCenter.qml
 CalendarPopup 1.0 CalendarPopup.qml
 NotificationCenter 1.0 NotificationCenter.qml
 PowerMenu 1.0 PowerMenu.qml
+MemoryPopup 1.0 MemoryPopup.qml

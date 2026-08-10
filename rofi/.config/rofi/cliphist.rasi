@@ -1,0 +1,34 @@
+@import "~/.config/rofi/config.rasi"
+
+window {
+    width: 620px;
+}
+
+mainbox {
+    padding: 14px;
+}
+
+prompt {
+    str: "";
+}
+
+entry {
+    placeholder: "search clipboard history";
+}
+
+listview {
+    lines: 7;
+    spacing: 6px;
+}
+
+element {
+    padding: 8px 10px;
+}
+
+element-icon {
+    size: 40px;
+}
+
+element-text {
+    font: "JetBrainsMono Nerd Font 13";
+}

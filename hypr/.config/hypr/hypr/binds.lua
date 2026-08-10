@@ -16,9 +16,10 @@ end
 -- Session utilities.
 exec(mod .. " + Space", "hyprctl switchxkblayout current next")
 exec(mod .. " + S", "fish -i -c \"hyprshot -m region --freeze\"")
-exec(mod .. " + SHIFT + V", "cliphist list | rofi -dmenu | cliphist decode | wl-copy")
-exec(mod .. " + period", "rofi -show emoji")
+exec(mod .. " + SHIFT + V", "~/.config/rofi/rofi-cliphist.sh")
+exec(mod .. " + period", "rofi -show emoji -theme ~/.config/rofi/emoji.rasi")
 exec(mod .. " + SHIFT + W", "~/.config/rofi/rofi-wifi-menu.sh")
+exec(mod .. " + SHIFT + Y", "~/.config/rofi/rofi-yt-dlp.sh")
 
 -- Application launchers and window actions.
 exec(mod .. " + Return", programs.terminal)

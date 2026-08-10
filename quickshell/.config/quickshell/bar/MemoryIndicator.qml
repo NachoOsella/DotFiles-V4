@@ -7,6 +7,14 @@ import "../services"
 ModuleButton {
     id: root
 
+    required property string screenName
+    property var memoryPopup
+
+    onHoveredChanged: {
+        if (memoryPopup)
+            memoryPopup.setAnchorHovered(hovered);
+    }
+
     StyledText {
         text: ""
         color: Theme.grey2
@@ -19,7 +27,10 @@ ModuleButton {
     }
 
     onClicked: function(mouse) {
-        if (mouse.button === Qt.LeftButton)
+        if (mouse.button === Qt.LeftButton) {
+            if (memoryPopup)
+                memoryPopup.hide();
             Quickshell.execDetached(["kitty", "-e", "btop"]);
+        }
     }
 }

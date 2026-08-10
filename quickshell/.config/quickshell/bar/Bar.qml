@@ -60,7 +60,11 @@ PanelWindow {
         Separator { vertical: true; height: parent.height }
         NetworkIndicator { id: networkIndicator; screenName: root.screen.name }
         AudioIndicator { id: audioIndicator; screenName: root.screen.name }
-        MemoryIndicator { }
+        MemoryIndicator {
+            id: memoryIndicator
+            screenName: root.screen.name
+            memoryPopup: memoryPopup
+        }
         BatteryIndicator { id: batteryIndicator; screenName: root.screen.name }
         Separator { vertical: true; height: parent.height; visible: tray.visible }
         Tray { id: tray; barWindow: root }
@@ -68,6 +72,11 @@ PanelWindow {
         Clock { id: clockIndicator; screenName: root.screen.name }
         Separator { vertical: true; height: parent.height }
         PowerButton { id: powerIndicator; screenName: root.screen.name }
+    }
+
+    MemoryPopup {
+        id: memoryPopup
+        anchorItem: memoryIndicator
     }
 
     MediaPopup {

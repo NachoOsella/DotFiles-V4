@@ -35,7 +35,7 @@ run_logout() {
 }
 
 choice=$(printf '%s\n' "$LOCK" "$LOGOUT" "$SUSPEND" "$HIBERNATE" "$REBOOT" "$SHUTDOWN" \
-    | rofi -dmenu -i -no-custom -p "" -theme "$ROFI_THEME")
+    | rofi -dmenu -i -no-custom -p "" -theme "$ROFI_THEME")
 
 case "$choice" in
     "$LOCK")
