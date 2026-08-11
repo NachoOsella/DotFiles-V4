@@ -1,9 +1,12 @@
 /**
- * Takeover UI for subagents (ported from v1, rendering from the synchronous
- * SubagentReadModel instead of live pi sessions):
- * - SubagentDashboard: full popup (overlay) listing all subagents.
- * - TakeoverView: full interactive view of one subagent with an input line
+ * Takeover UI for subagents (rendered from the synchronous SubagentReadModel):
+ * - SubagentDashboard: compact centered dialog listing all subagents.
+ * - TakeoverView: interactive view of one subagent with an input line
  *   to steer/continue it.
+ *
+ * Rendering contract: render() returns exactly as many lines as the content
+ * needs (the TUI sizes the centered overlay from that), every line must stay
+ * within `width`, and the total must never exceed the terminal height.
  */
 
 import type {
@@ -21,6 +24,10 @@ import {
 import { formatContextUtilization } from "../format.ts";
 import type { SubagentReadModel } from "../manager.ts";
 import { buildTranscriptLines, sanitizeText } from "./transcript.ts";
+
+/** Dialog width; clamped by the TUI to the terminal width. */
+const OVERLAY_WIDTH = 120;
+const TRANSCRIPT_SCROLL_STEP = 6;
 
 function oneLine(text: string) {
   return sanitizeText(text.replace(/\s+/g, " ")).trim();
@@ -55,6 +62,48 @@ function statusWord(snap: SubagentSnapshot, theme: Theme): string {
   }
 }
 
+/**
+ * A dialog bar line: ╭─ <left label> ─<mid> <right label> ─╮ (or ╰…╯).
+ * Labels already carry their own surrounding spaces. The result is exactly
+ * `innerWidth + 2` columns wide (never wider); on narrow terminals the right
+ * label is dropped before the left one is truncated.
+ */
+function bar(
+  theme: Theme,
+  left: "╭" | "╰",
+  right: "╮" | "╯",
+  leftLabel: string,
+  rightLabel: string,
+  innerWidth: number,
+): string {
+  const dash = theme.fg("borderMuted", "─");
+  // Labels carry their own surrounding spaces; mid restores the exact width
+  // (corner + dash + leftLabel + mid + rightLabel + dash + corner).
+  const mid =
+    innerWidth - visibleWidth(leftLabel) - visibleWidth(rightLabel) - 2;
+  if (mid >= 1) {
+    return (
+      theme.fg("border", left) +
+      dash +
+      leftLabel +
+      dash.repeat(mid) +
+      rightLabel +
+      dash +
+      theme.fg("border", right)
+    );
+  }
+  // Not enough room for both labels: keep the left, drop the right.
+  const label = truncateToWidth(leftLabel, Math.max(2, innerWidth - 3));
+  const fill = Math.max(1, innerWidth - visibleWidth(label) - 1);
+  return (
+    theme.fg("border", left) +
+    dash +
+    label +
+    dash.repeat(fill) +
+    theme.fg("border", right)
+  );
+}
+
 // --- Entry point ---------------------------------------------------------------
 
 export async function openSubagentPicker(
@@ -76,7 +125,7 @@ export async function openSubagentPicker(
         overlay: true,
         overlayOptions: {
           anchor: "center",
-          width: 150,
+          width: OVERLAY_WIDTH,
           maxHeight: "100%",
         },
       },
@@ -92,7 +141,7 @@ export async function openSubagentPicker(
         overlay: true,
         overlayOptions: {
           anchor: "center",
-          width: 144,
+          width: OVERLAY_WIDTH,
           maxHeight: "100%",
         },
       },
@@ -101,7 +150,7 @@ export async function openSubagentPicker(
   }
 }
 
-// --- Dashboard (fullscreen overlay) ----------------------------------------------
+// --- Dashboard (centered dialog) ----------------------------------------------
 
 export interface DashboardSelection {
   id?: string;
@@ -122,19 +171,7 @@ export function reconcileDashboardSelection(
   selection.id = subs[selection.index]?.id;
 }
 
-/** Keep the same transcript lines visible when new output arrives above the tail. */
-export function preserveScrolledOffset(
-  scrollOffset: number,
-  previousLineCount: number | undefined,
-  nextLineCount: number,
-): number {
-  if (scrollOffset === 0 || previousLineCount === undefined) {
-    return scrollOffset;
-  }
-  return Math.max(0, scrollOffset + nextLineCount - previousLineCount);
-}
-
-class SubagentDashboard implements Component {
+export class SubagentDashboard implements Component {
   private tui: TUI;
   private theme: Theme;
   private keybindings: KeybindingsManager;
@@ -160,7 +197,7 @@ class SubagentDashboard implements Component {
     this.view = view;
     this.selection = selection;
     this.done = done;
-    // Elapsed times, token counts, and statuses tick along at 1Hz.
+    // Elapsed times and statuses tick along at 1Hz.
     this.ticker = setInterval(() => this.tui.requestRender(), 1000);
     this.unsubChange = view.subscribe(() => this.tui.requestRender());
   }
@@ -227,56 +264,33 @@ class SubagentDashboard implements Component {
     return truncated + " ".repeat(Math.max(0, width - visibleWidth(truncated)));
   }
 
-  private borderSegment(width: number, title: string): string {
-    const theme = this.theme;
-    const label = title
-      ? ` ${truncateToWidth(title, Math.max(0, width - 3))} `
-      : "";
-    const labelWidth = visibleWidth(label);
-    return (
-      theme.fg("border", "─") +
-      (label ? theme.fg("text", label) : "") +
-      theme.fg("border", "─".repeat(Math.max(0, width - 1 - labelWidth)))
-    );
-  }
-
   render(width: number): string[] {
     const theme = this.theme;
     const subs = this.subs();
     reconcileDashboardSelection(this.selection, subs);
 
-    const rows = this.tui.terminal.rows || 30;
-    // Render exactly terminal rows - 1 so the overlay covers the header,
-    // chat, editor, and extra footer lines while leaving pi's final footer
-    // row visible.
-    const bodyHeight = Math.max(6, rows - 5);
-    const innerWidth = width - 2;
+    const rows = this.tui.terminal.rows ?? 30;
+    const innerWidth = Math.max(10, width - 2);
+    // Content-sized dialog: shell (title + summary + bar) plus one row per
+    // agent, but never taller than the terminal minus a small margin.
+    const bodyHeight = Math.min(
+      Math.max(1, subs.length),
+      Math.max(3, rows - 7),
+    );
 
     const lines: string[] = [];
 
-    // Header: title left, count right
-    const headerLeft = theme.fg("accent", theme.bold("Subagents"));
-    const headerRight = theme.fg(
-      "muted",
-      `${subs.length} agent${subs.length === 1 ? "" : "s"}`,
-    );
-    const headerPad = Math.max(
-      1,
-      width - visibleWidth(headerLeft) - visibleWidth(headerRight) - 4,
-    );
+    // Title bar: ╭─ Subagents ──────────── 5 agents ─╮
+    const countLabel = `${subs.length} agent${subs.length === 1 ? "" : "s"}`;
     lines.push(
-      truncateToWidth(
-        `  ${headerLeft}${" ".repeat(headerPad)}${headerRight}  `,
-        width,
+      bar(
+        theme,
+        "╭",
+        "╮",
+        ` ${theme.fg("accent", theme.bold("Subagents"))} `,
+        ` ${theme.fg("muted", countLabel)} `,
+        innerWidth,
       ),
-    );
-
-    // Top border with panel title
-    const settled = subs.filter((s) => s.status !== "running").length;
-    lines.push(
-      theme.fg("border", "╭") +
-        this.borderSegment(innerWidth, `agents · ${settled}/${subs.length}`) +
-        theme.fg("border", "╮"),
     );
 
     // Rows
@@ -286,22 +300,29 @@ class SubagentDashboard implements Component {
       lines.push(divider + this.pad(rowLines[i] ?? "", innerWidth) + divider);
     }
 
-    // Bottom border
+    // Status summary: ■ 2 running · ■ 1 done · ■ 1 failed
+    const running = subs.filter((s) => s.status === "running").length;
+    const done = subs.filter((s) => s.status === "done").length;
+    const failed = subs.length - running - done;
+    const dot = theme.fg("dim", " · ");
+    const counts: string[] = [];
+    if (running > 0) counts.push(theme.fg("warning", `■ ${running} running`));
+    if (done > 0) counts.push(theme.fg("success", `■ ${done} done`));
+    if (failed > 0) counts.push(theme.fg("error", `■ ${failed} failed`));
     lines.push(
-      theme.fg("border", "╰") +
-        theme.fg("border", "─".repeat(innerWidth)) +
-        theme.fg("border", "╯"),
+      divider +
+        this.pad(
+          ` ${counts.length > 0 ? counts.join(dot) : theme.fg("dim", "no subagents")} `,
+          innerWidth,
+        ) +
+        divider,
     );
 
-    // Hints
+    // Bottom bar: ╰─ ───────────── esc close · x stop ─╯
+    const hints =
+      `${configuredKeys(this.keybindings, "tui.select.cancel")} close · x stop `;
     lines.push(
-      truncateToWidth(
-        theme.fg(
-          "dim",
-          `  ${configuredKeys(this.keybindings, "tui.select.up")}/${configuredKeys(this.keybindings, "tui.select.down")}/jk select · ${configuredKeys(this.keybindings, "tui.select.confirm")} take over · x abort · ${configuredKeys(this.keybindings, "tui.select.cancel")} close`,
-        ),
-        width,
-      ),
+      bar(theme, "╰", "╯", theme.fg("dim", ` ${hints}`), "", innerWidth),
     );
 
     return lines;
@@ -333,21 +354,12 @@ class SubagentDashboard implements Component {
       // Left: marker, status square, title, dim id
       const marker = isSelected ? theme.fg("accent", "❯") : " ";
       const title = isSelected
-        ? theme.fg("accent", snap.title)
-        : theme.fg("text", snap.title);
-      const left = ` ${marker} ${statusGlyph(snap, theme)} ${title} ${theme.fg("dim", snap.id)}`;
+        ? theme.fg("accent", oneLine(snap.title))
+        : theme.fg("text", oneLine(snap.title));
+      const left = ` ${marker} ${statusGlyph(snap, theme)} ${title} ${theme.fg("dim", `· ${snap.id}`)}`;
 
-      // Right: backend · model · context utilization · elapsed · status
-      const utilization = formatContextUtilization(snap.usage);
-      const dot = theme.fg("dim", " · ");
-      const rightParts = [
-        theme.fg("muted", snap.backend),
-        theme.fg("muted", formatModelWithThinking(snap.meta)),
-        ...(utilization ? [theme.fg("muted", utilization)] : []),
-        theme.fg("muted", formatElapsed(snap)),
-        statusWord(snap, theme),
-      ];
-      const right = `${rightParts.join(dot)} `;
+      // Right: elapsed · status
+      const right = `${theme.fg("muted", formatElapsed(snap))} ${statusWord(snap, theme)} `;
 
       const rightWidth = visibleWidth(right);
       const leftMax = Math.max(0, width - rightWidth - 2);
@@ -357,11 +369,11 @@ class SubagentDashboard implements Component {
     }
 
     if (start > 0) {
-      out[0] = truncateToWidth(theme.fg("dim", `   ... ${start} more`), width);
+      out[0] = truncateToWidth(theme.fg("dim", `   … ${start} more`), width);
     }
     if (start + height < subs.length) {
       out[out.length - 1] = truncateToWidth(
-        theme.fg("dim", `   ... ${subs.length - start - height} more`),
+        theme.fg("dim", `   … ${subs.length - start - height} more`),
         width,
       );
     }
@@ -371,11 +383,24 @@ class SubagentDashboard implements Component {
   invalidate(): void {}
 }
 
-// --- Takeover view ------------------------------------------------------------
+// --- Takeover view --------------------------------------------------------------
 
-const TRANSCRIPT_SCROLL_STEP = 6;
+/**
+ * Keep the same transcript lines visible when new output arrives above the
+ * tail.
+ */
+export function preserveScrolledOffset(
+  scrollOffset: number,
+  previousLineCount: number | undefined,
+  nextLineCount: number,
+): number {
+  if (scrollOffset === 0 || previousLineCount === undefined) {
+    return scrollOffset;
+  }
+  return Math.max(0, scrollOffset + nextLineCount - previousLineCount);
+}
 
-class TakeoverView implements Component, Focusable {
+export class TakeoverView implements Component, Focusable {
   private tui: TUI;
   private theme: Theme;
   private keybindings: KeybindingsManager;
@@ -389,6 +414,9 @@ class TakeoverView implements Component, Focusable {
   private previousTranscriptLineCount?: number;
   private previousTranscriptWidth?: number;
   private hasPendingSnapshotUpdate = false;
+  /** Fingerprint-keyed transcript lines: streaming re-renders stay cheap. */
+  private transcriptKey = "";
+  private transcriptLines: string[] = [];
   private unsubscribe: () => void;
   private renderTimer?: ReturnType<typeof setTimeout>;
   private ticker: ReturnType<typeof setInterval>;
@@ -465,6 +493,12 @@ class TakeoverView implements Component, Focusable {
     this.cleanup();
   }
 
+  private viewportHeight(rows: number): number {
+    // Chrome: title bar, details, input row, bottom bar = 4 rows. Leave the
+    // terminal footer plus one row of breathing room below the dialog.
+    return Math.max(2, rows - 8);
+  }
+
   handleInput(data: string): void {
     if (this.keybindings.matches(data, "app.clear")) {
       const snap = this.snap();
@@ -492,14 +526,14 @@ class TakeoverView implements Component, Focusable {
       return;
     }
     if (this.keybindings.matches(data, "tui.editor.pageUp")) {
-      this.scrollOffset += this.viewportHeight();
+      this.scrollOffset += this.viewportHeight(this.tui.terminal.rows ?? 30);
       this.tui.requestRender();
       return;
     }
     if (this.keybindings.matches(data, "tui.editor.pageDown")) {
       this.scrollOffset = Math.max(
         0,
-        this.scrollOffset - this.viewportHeight(),
+        this.scrollOffset - this.viewportHeight(this.tui.terminal.rows ?? 30),
       );
       this.tui.requestRender();
       return;
@@ -508,84 +542,94 @@ class TakeoverView implements Component, Focusable {
     this.tui.requestRender();
   }
 
-  private viewportHeight(): number {
-    const rows = this.tui.terminal.rows || 30;
-    // The complete view renders viewport + 8 chrome rows and leaves pi's
-    // final footer row visible.
-    return Math.max(6, rows - 9);
+  /** Cheap identity of everything that changes the rendered transcript. */
+  private currentTranscriptKey(snap: SubagentSnapshot, width: number): string {
+    const items = snap.transcript;
+    const last = items[items.length - 1];
+    return [
+      width,
+      snap.status,
+      snap.turns,
+      items.length,
+      last?.kind ?? "",
+      snap.liveTools
+        .map((t) => `${t.toolId}:${t.outputPreview?.length ?? 0}:${t.done ? 1 : 0}`)
+        .join(","),
+      snap.queued.length,
+      snap.liveAssistant?.text.length ?? 0,
+      snap.liveAssistant?.thinking.length ?? 0,
+      snap.errorText?.length ?? 0,
+      snap.finalText.length,
+    ].join("|");
+  }
+
+  private transcript(snap: SubagentSnapshot, width: number): string[] {
+    const key = this.currentTranscriptKey(snap, width);
+    if (key !== this.transcriptKey) {
+      this.transcriptKey = key;
+      this.transcriptLines = buildTranscriptLines(snap, width, this.theme);
+    }
+    return this.transcriptLines;
   }
 
   render(width: number): string[] {
     const theme = this.theme;
-    const frameWidth = Math.max(1, width - 2);
-    const contentWidth = Math.max(1, frameWidth - 2);
-    const horizontal = (
-      left: string,
-      right: string,
-      label?: string,
-    ) => {
-      if (!label) {
-        return (
-          theme.fg("border", left) +
-          theme.fg("borderMuted", "─".repeat(frameWidth)) +
-          theme.fg("border", right)
-        );
-      }
-      const safeLabel = truncateToWidth(label, Math.max(1, frameWidth - 4));
-      const used = visibleWidth(safeLabel) + 3;
-      return (
-        theme.fg("border", left) +
-        theme.fg("borderMuted", "─ ") +
-        theme.fg("accent", theme.bold(safeLabel)) +
-        theme.fg("borderMuted", ` ${"─".repeat(Math.max(0, frameWidth - used))}`) +
-        theme.fg("border", right)
-      );
-    };
-    const framed = (content: string) => {
-      const clipped = truncateToWidth(content, contentWidth);
-      return (
-        theme.fg("border", "│") +
-        " " +
-        clipped +
-        " ".repeat(Math.max(0, contentWidth - visibleWidth(clipped) + 1)) +
-        theme.fg("border", "│")
-      );
-    };
-    const metadata = (label: string, value: string) =>
-      theme.fg("dim", `${label.toUpperCase()} `) + theme.fg("muted", value);
+    const innerWidth = Math.max(1, width - 2);
+    const divider = theme.fg("border", "│");
+    const rows = this.tui.terminal.rows ?? 30;
     const lines: string[] = [];
     const snap = this.snap();
+    const framed = (content: string) => {
+      const clipped = truncateToWidth(content, Math.max(0, innerWidth - 1));
+      return (
+        divider +
+        " " +
+        clipped +
+        " ".repeat(Math.max(0, innerWidth - visibleWidth(clipped) - 1)) +
+        divider
+      );
+    };
+    const detailLabel = (text: string) => theme.fg("muted", text);
 
     if (!snap) {
-      return [
-        horizontal("╭", "╮", "SUBAGENT"),
-        framed(theme.fg("dim", `${this.id} is no longer tracked`)),
-        horizontal("╰", "╯"),
-      ];
+      lines.push(
+        bar(
+          theme,
+          "╭",
+          "╮",
+          ` ${theme.fg("accent", theme.bold("Subagent"))} `,
+          "",
+          innerWidth,
+        ),
+      );
+      lines.push(framed(theme.fg("dim", `${this.id} is no longer tracked`)));
+      lines.push(bar(theme, "╰", "╯", "", "", innerWidth));
+      return lines;
     }
 
-    const utilization = formatContextUtilization(snap.usage);
-    const title =
-      `${statusGlyph(snap, theme)} ` +
+    // Title bar: ╭─ ■ <title> · <id> ───── running ─╮
+    const titleLabel =
+      ` ${statusGlyph(snap, theme)} ` +
       theme.fg("text", theme.bold(oneLine(snap.title))) +
-      theme.fg("dim", `  ${snap.id}`) +
-      theme.fg("dim", "  ·  ") +
-      statusWord(snap, theme);
-    const detailSegments = [
-      metadata("model", oneLine(formatModelWithThinking(snap.meta, "unknown"))),
-      utilization ? metadata("context", utilization) : "",
-      metadata("runtime", formatElapsed(snap)),
-      metadata("turns", String(snap.turns)),
-    ].filter(Boolean);
+      theme.fg("dim", ` · ${snap.id} `);
+    lines.push(
+      bar(theme, "╭", "╮", titleLabel, ` ${statusWord(snap, theme)} `, innerWidth),
+    );
 
-    lines.push(horizontal("╭", "╮", "SUBAGENT"));
-    lines.push(framed(title));
-    lines.push(framed(detailSegments.join(theme.fg("dim", "  ·  "))));
-    lines.push(horizontal("├", "┤", "ACTIVITY"));
+    // Details: model · context · elapsed · turns (no labels needed)
+    const utilization = formatContextUtilization(snap.usage);
+    const details: string[] = [
+      detailLabel(oneLine(formatModelWithThinking(snap.meta, "unknown"))),
+    ];
+    if (utilization) details.push(detailLabel(utilization));
+    details.push(detailLabel(formatElapsed(snap)));
+    details.push(detailLabel(`${snap.turns} turns`));
+    lines.push(framed(details.join(theme.fg("dim", " · "))));
 
     // Fixed-height transcript viewport. Error and scroll status consume rows
     // inside the viewport so streaming/scrolling never changes overlay height.
-    const transcript = buildTranscriptLines(snap, contentWidth, theme);
+    const contentWidth = Math.max(1, innerWidth - 2);
+    const transcriptLines = this.transcript(snap, contentWidth);
     // The offset is tail-relative. Compensate for appended streamed lines so a
     // reader who scrolled up stays on the exact output they were inspecting.
     if (
@@ -595,71 +639,74 @@ class TakeoverView implements Component, Focusable {
       this.scrollOffset = preserveScrolledOffset(
         this.scrollOffset,
         this.previousTranscriptLineCount,
-        transcript.length,
+        transcriptLines.length,
       );
     }
-    this.previousTranscriptLineCount = transcript.length;
+    this.previousTranscriptLineCount = transcriptLines.length;
     this.previousTranscriptWidth = contentWidth;
     this.hasPendingSnapshotUpdate = false;
 
-    const viewport = this.viewportHeight();
-    const errorRows = snap.errorText ? 1 : 0;
-    const scrollRows = this.scrollOffset > 0 ? 1 : 0;
-    const transcriptCapacity = Math.max(1, viewport - errorRows - scrollRows);
-    const maxOffset = Math.max(0, transcript.length - transcriptCapacity);
-    if (this.scrollOffset > maxOffset) this.scrollOffset = maxOffset;
-
-    const body: string[] = [];
+    const viewport = this.viewportHeight(rows);
+    const noteRows: string[] = [];
     if (snap.errorText) {
-      body.push(
-        theme.fg("error", "✗ ") +
-          theme.fg("error", truncateToWidth(oneLine(snap.errorText), contentWidth - 2)),
+      noteRows.push(
+        truncateToWidth(
+          theme.fg("error", "✗ ") +
+            theme.fg("error", oneLine(snap.errorText)),
+          contentWidth,
+        ),
       );
     }
 
-    const capacity = Math.max(
-      1,
-      viewport - body.length - (this.scrollOffset > 0 ? 1 : 0),
-    );
-    const end = transcript.length - this.scrollOffset;
-    const visible = transcript.slice(Math.max(0, end - capacity), end);
+    const body: string[] = [...noteRows];
+    const paused = this.scrollOffset > 0;
+    const capacity = Math.max(1, viewport - body.length - (paused ? 1 : 0));
+    const maxOffset = Math.max(0, transcriptLines.length - capacity);
+    if (this.scrollOffset > maxOffset) this.scrollOffset = maxOffset;
+
+    const end = transcriptLines.length - this.scrollOffset;
+    const visible = transcriptLines.slice(Math.max(0, end - capacity), end);
     if (visible.length === 0) {
       body.push(
-        theme.fg("warning", "◌ ") + theme.fg("dim", "Waiting for activity"),
+        theme.fg("warning", "◌ ") + theme.fg("dim", "waiting for activity"),
       );
     } else {
       body.push(...visible);
     }
 
-    if (this.scrollOffset > 0) {
+    if (paused) {
       body.push(
-        theme.fg("warning", "↑ PAUSED") +
-          theme.fg(
-            "dim",
-            `  ${this.scrollOffset} newer lines  ·  ↓/pgdn to follow`,
-          ),
+        truncateToWidth(
+          theme.fg("warning", "↑ paused ") +
+            theme.fg(
+              "dim",
+              `· ${this.scrollOffset} newer · down/pageDown to follow`,
+            ),
+          contentWidth,
+        ),
       );
     }
     while (body.length < viewport) body.push("");
     lines.push(...body.slice(0, viewport).map(framed));
 
-    lines.push(horizontal("├", "┤", "MESSAGE"));
-    const inputLines = this.input.render(Math.max(1, contentWidth - 2));
-    lines.push(
-      framed(theme.fg("accent", "› ") + (inputLines[0] ?? "")),
-    );
+    // Input row (Input draws its own "> " prompt)
+    lines.push(framed(this.input.render(contentWidth)[0] ?? ""));
+
+    // Bottom bar: ╰─ ───────────────── esc close · ctrl+c stop ─╯
     const hints =
-      `${configuredKeys(this.keybindings, "tui.input.submit")} send  ·  ` +
-      `${configuredKeys(this.keybindings, "tui.editor.cursorUp")}/${configuredKeys(this.keybindings, "tui.editor.cursorDown")} scroll  ·  ` +
-      `${configuredKeys(this.keybindings, "tui.editor.pageUp")}/${configuredKeys(this.keybindings, "tui.editor.pageDown")} page  ·  ` +
-      `${configuredKeys(this.keybindings, "app.clear")} stop  ·  ` +
-      `${configuredKeys(this.keybindings, "app.interrupt")} back`;
-    lines.push(framed(theme.fg("dim", hints)));
-    lines.push(horizontal("╰", "╯"));
+      `${configuredKeys(this.keybindings, "app.interrupt")} close · ` +
+      `${configuredKeys(this.keybindings, "app.clear")} stop`;
+    lines.push(
+      bar(theme, "╰", "╯", theme.fg("dim", ` ${hints} `), "", innerWidth),
+    );
+
     return lines;
   }
 
   invalidate(): void {
+    // Drop cached transcript lines so the next render rebuilds with the
+    // current theme (the key mismatch forces the rebuild).
+    this.transcriptKey = "";
     this.input.invalidate();
   }
 }

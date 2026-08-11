@@ -26,17 +26,22 @@ export const SUBAGENT_SPAWN_PARAMETER_DESCRIPTIONS = {
     "Pi reasoning effort. Omit to inherit the current thinking level.",
 };
 
-/** Builds the subagent_spawn result that tells the parent model how to continue or inspect the child. */
+/** Builds the subagent_spawn result: what was spawned (model, name, prompt) and how to follow up. */
 export function buildSubagentSpawnResult(options: {
   id: string;
   title: string;
   modelLabel: string;
-  cwd: string;
+  prompt: string;
 }) {
+  const prompt = options.prompt.trim();
+  const promptLine = prompt.includes("\n")
+    ? `Prompt:\n${prompt}`
+    : `Prompt: ${prompt}`;
   return (
-    `Spawned Pi subagent ${options.id} "${options.title}" (${options.modelLabel}, ${options.cwd}).\n` +
-    `It runs in the background. Its result will be delivered to you when it finishes, ` +
-    `or use subagent_wait(ids: ["${options.id}"]) to block for it, subagent_cancel to stop it, subagent_check to peek, subagent_list to see all.`
+    `Spawned Pi subagent ${options.id} "${options.title}" (${options.modelLabel}).\n` +
+    `${promptLine}\n` +
+    `It runs in the background. Its result will be delivered when it finishes — ` +
+    `use subagent_wait(ids: ["${options.id}"]) to block for it, subagent_cancel to stop it, subagent_check to peek, subagent_list to see all.`
   );
 }
 

@@ -4,8 +4,8 @@
  *
  * Content types are rendered with clear visual hierarchy:
  *
- *   User messages      →  > text (accent prefix)
- *   Thinking            →  ~ italic muted  (dim prefix)
+ *   User messages      →  │ text (accent bar)
+ *   Thinking            →  ~ italic muted
  *   Assistant text      →  plain wrapped (default text)
  *   Tool calls+results  →  compact activity rows with a one-line preview
  *
@@ -98,10 +98,6 @@ function toolPreview(
 
 // ── Content renderers ───────────────────────────────────────────────────────
 
-function sectionLabel(t: Theme, label: string, out: string[]) {
-  out.push(t.fg("dim", t.bold(label.toUpperCase())));
-}
-
 function renderInlineMarkdown(t: Theme, text: string) {
   return text
     .replace(/\*\*([^*]+)\*\*/g, (_match, content: string) => t.bold(content))
@@ -143,7 +139,6 @@ function renderUserText(
 ) {
   const clean = sanitizeText(text).trim();
   if (!clean) return;
-  sectionLabel(t, "request", out);
   renderIndentedText(
     t,
     clean,
@@ -162,8 +157,7 @@ function renderThinking(
 ) {
   const reasoning = sanitizeText(text).trim();
   if (!reasoning) return;
-  sectionLabel(t, "reasoning", out);
-  const guide = t.fg("borderMuted", "│ ");
+  const guide = t.fg("borderMuted", "~ ");
   const wrapped = wrapTextWithAnsi(reasoning, Math.max(10, width - 2));
   for (const line of wrapped) {
     out.push(
@@ -183,7 +177,6 @@ function renderAssistantText(
 ) {
   const clean = sanitizeText(text).trim();
   if (!clean) return;
-  sectionLabel(t, "response", out);
 
   for (const rawLine of clean.split("\n")) {
     const line = rawLine.trimEnd();

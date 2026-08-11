@@ -474,9 +474,16 @@ const makeManager = Effect.gen(function* () {
       addInterest(unique);
       const loop = Effect.gen(function* () {
         while (true) {
-          const pending = unique.filter(
-            (id) => entries.get(id)?.snapshot.status === "running",
-          );
+          // An idle subagent being restarted (send on a settled entry) counts
+          // as pending until its RunStarted flips the snapshot to running;
+          // otherwise a wait issued right after send could return too early.
+          const pending = unique.filter((id) => {
+            const entry = entries.get(id);
+            return (
+              entry?.snapshot.status === "running" ||
+              entry?.restarting === true
+            );
+          });
           if (pending.length === 0) return;
           onPending?.(pending);
           yield* nextChange;

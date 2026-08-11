@@ -109,20 +109,20 @@ test("cancel interrupts a running Pi subagent", async () => {
   });
 });
 
-test("the concurrency cap rejects a fifth running Pi subagent", async () => {
+test("the concurrency cap rejects a ninth running Pi subagent", async () => {
   await withManager(async (manager, runtime) => {
     const spawns = await runTool(
       runtime,
       Effect.forEach(
-        [1, 2, 3, 4],
+        [1, 2, 3, 4, 5, 6, 7, 8],
         (n) => manager.spawn("pi", task(`Task ${n}`)),
         { concurrency: "unbounded" },
       ),
     );
-    assert.equal(spawns.length, 4);
+    assert.equal(spawns.length, 8);
     await assert.rejects(
-      runTool(runtime, manager.spawn("pi", task("Task 5"))),
-      /Max 4 subagents/,
+      runTool(runtime, manager.spawn("pi", task("Task 9"))),
+      /Max 8 subagents/,
     );
   });
 });

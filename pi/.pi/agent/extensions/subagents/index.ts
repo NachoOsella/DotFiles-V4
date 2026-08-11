@@ -290,7 +290,7 @@ export default function (pi: ExtensionAPI) {
               id: snap.id,
               title: snap.title,
               modelLabel: formatModelWithThinking(snap.meta),
-              cwd,
+              prompt: params.prompt,
             }),
           },
         ],

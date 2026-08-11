@@ -80,10 +80,8 @@ test("renders conversation sections and removes common markdown noise", () => {
   );
 
   assert.deepEqual(lines, [
-    "REQUEST",
     "│ Inspect two files.",
     "",
-    "RESPONSE",
     "  ◆ Summary",
     "",
     "  • Read one.ts",
