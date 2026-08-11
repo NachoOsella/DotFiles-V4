@@ -37,11 +37,8 @@ Kitty · Fish · Starship · Quickshell · Rofi · Neovim · Yazi · Fastfetch
 ### Development
 <img src="assets/nvim-yazi.png" width="90%" alt="Neovim and Yazi" style="border-radius: 8px; margin-bottom: 24px;">
 
-### Terminal
-<img src="assets/fastfetch.png" width="90%" alt="Fastfetch in Kitty with Fish prompt" style="border-radius: 8px; margin-bottom: 24px;">
-
-### Pi
-<img src="assets/pi.png" width="90%" alt="Pi coding assistant in Kitty" style="border-radius: 8px;">
+### Pi + Fastfetch
+<img src="assets/pi-fastfetch.png" width="90%" alt="Fish terminal with Fastfetch and Pi" style="border-radius: 8px;">
 
 </div>
 
