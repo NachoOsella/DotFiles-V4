@@ -15,7 +15,7 @@
 
 <br/>
 
-Kitty · Fish · Starship · Waybar · Rofi · Neovim · Yazi · Fastfetch
+Kitty · Fish · Starship · Quickshell · Rofi · Neovim · Yazi · Fastfetch
 
 </div>
 
@@ -28,11 +28,20 @@ Kitty · Fish · Starship · Waybar · Rofi · Neovim · Yazi · Fastfetch
 ### Launcher
 <img src="assets/rofi.png" width="90%" alt="Rofi launcher" style="border-radius: 8px; margin-bottom: 24px;">
 
+### Quickshell
+<img src="assets/control-center.png" width="90%" alt="Quickshell control center" style="border-radius: 8px; margin-bottom: 24px;">
+
+### Quickshell widgets
+<img src="assets/quickshell-widgets.jpg" width="90%" alt="Quickshell widget gallery" style="border-radius: 8px; margin-bottom: 24px;">
+
 ### Development
 <img src="assets/nvim-yazi.png" width="90%" alt="Neovim and Yazi" style="border-radius: 8px; margin-bottom: 24px;">
 
 ### Terminal
-<img src="assets/fastfetch.png" width="90%" alt="Fastfetch in Kitty" style="border-radius: 8px;">
+<img src="assets/fastfetch.png" width="90%" alt="Fastfetch in Kitty with Fish prompt" style="border-radius: 8px; margin-bottom: 24px;">
+
+### Pi
+<img src="assets/pi.png" width="90%" alt="Pi coding assistant in Kitty" style="border-radius: 8px;">
 
 </div>
 
@@ -66,7 +75,7 @@ cd ~/dotfiles
 ./scripts/install-user.sh
 
 # Or link only selected configs.
-./scripts/stow.sh install kitty nvim waybar
+./scripts/stow.sh install kitty nvim quickshell
 
 # Preview the full system bootstrap without applying changes.
 ./scripts/bootstrap.sh --dry-run
@@ -78,7 +87,7 @@ For most users, installing selected Stow packages is the safer option.
 ### Safe user config only
 
 Use this mode if you only want to link user-level dotfiles such as Hyprland, Kitty,
-Fish, Neovim, Waybar, Rofi, Yazi, and related configs.
+Fish, Neovim, Quickshell, Rofi, Yazi, and related configs.
 
 ```bash
 ./scripts/install-user.sh
@@ -91,7 +100,7 @@ If you only want specific configs, install individual Stow packages instead of
 running the full user install:
 
 ```bash
-./scripts/stow.sh install kitty nvim waybar
+./scripts/stow.sh install kitty nvim quickshell
 ```
 
 You can list the available Stow packages with:
@@ -103,7 +112,7 @@ You can list the available Stow packages with:
 To preview what Stow would link before applying changes, run:
 
 ```bash
-stow -n -v kitty nvim waybar
+stow -n -v kitty nvim quickshell
 ```
 
 ### Preview full Arch bootstrap
@@ -150,7 +159,7 @@ explicit confirmation before changing the system.
 
 - Hyprland desktop with a dark vending-machine wallpaper.
 - Gruvbox Material Dark Hard theme across the terminal, launcher, editor and bar.
-- Waybar with workspaces, media, network, audio, battery, memory and clock modules.
+- Quickshell with workspaces, media, network, audio, battery, memory, notifications and control-center popups.
 - Kitty + Fish + Starship for the terminal workflow.
 - Neovim and Yazi side by side for coding and file navigation.
 - Rofi launcher styled to match the rest of the desktop.
