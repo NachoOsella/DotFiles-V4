@@ -12,6 +12,8 @@ ModuleButton {
         text: NetworkService.wiredConnected ? "󰈀" : NetworkService.wifiIcon(NetworkService.signalStrength)
         color: NetworkService.connected ? Theme.aqua : Theme.grey1
         font.family: Theme.iconFontFamily
+        // Compensate for the Wi-Fi glyph's optical baseline.
+        transform: Translate { y: -1 }
     }
 
     StyledText {

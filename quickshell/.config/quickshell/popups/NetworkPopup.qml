@@ -67,7 +67,7 @@ PopupSurface {
             width: parent.width
             icon: NetworkService.wiredConnected ? "󰈀" : NetworkService.wifiIcon(NetworkService.signalStrength)
             iconColor: NetworkService.connected ? Theme.aqua : Theme.grey1
-            label: NetworkService.connected ? NetworkService.ssid || "Wired" : "Disconnected"
+            label: NetworkService.connectionLabel
             detail: NetworkService.connected ? NetworkService.address : ""
         }
 

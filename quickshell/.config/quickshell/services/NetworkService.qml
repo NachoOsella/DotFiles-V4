@@ -12,11 +12,20 @@ Singleton {
     readonly property var wiredDevice: Networking.devices.values.find(device => device.type === DeviceType.Wired) ?? null
     readonly property bool wifiAvailable: wifiDevice !== null && Networking.wifiHardwareEnabled
     readonly property bool wifiEnabled: wifiAvailable && Networking.wifiEnabled
+    readonly property bool wifiConnected: wifiDevice !== null && wifiDevice.connected
     readonly property bool wiredConnected: wiredDevice !== null && wiredDevice.connected
-    readonly property bool connected: wiredConnected || (wifiDevice !== null && wifiDevice.connected)
+    readonly property bool connected: wiredConnected || wifiConnected
+    // The active access point can be absent from the scan model, so use the device link as the source of truth.
     readonly property var connectedNetwork: wifiDevice ? wifiDevice.networks.values.find(network => network.connected) ?? null : null
     readonly property string ssid: connectedNetwork ? connectedNetwork.name : ""
     readonly property real signalStrength: connectedNetwork ? connectedNetwork.signalStrength : 0
+    readonly property string connectionLabel: {
+        if (!connected)
+            return wifiEnabled ? "Disconnected" : "Off";
+        if (ssid.length > 0)
+            return ssid;
+        return wiredConnected ? "Wired" : "Connected";
+    }
     readonly property string interfaceName: wiredConnected ? wiredDevice.name : wifiDevice ? wifiDevice.name : ""
     readonly property string address: wiredConnected ? wiredDevice.address : wifiDevice ? wifiDevice.address : ""
     readonly property var networks: wifiDevice ? wifiDevice.networks.values : []
@@ -29,8 +38,10 @@ Singleton {
     signal connectionError(string message)
 
     function wifiIcon(strength: real): string {
-        if (!wifiEnabled || !connectedNetwork)
+        if (!wifiEnabled || !wifiConnected)
             return "󰤮";
+        if (strength <= 0)
+            return "󰤢";
         if (strength < 0.2)
             return "󰤯";
         if (strength < 0.4)

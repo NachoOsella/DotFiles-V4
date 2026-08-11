@@ -25,7 +25,7 @@ PopupSurface {
             icon: NetworkService.wifiIcon(NetworkService.signalStrength)
             iconColor: NetworkService.connected ? Theme.aqua : Theme.grey1
             label: "Wi-Fi"
-            detail: NetworkService.ssid || (NetworkService.wifiEnabled ? "Disconnected" : "Off")
+            detail: NetworkService.connectionLabel
             interactive: NetworkService.wifiAvailable
             onClicked: PopupManager.open("network", root.screenName)
         }

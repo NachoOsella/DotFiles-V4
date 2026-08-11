@@ -26,6 +26,8 @@ ModuleButton {
             text: MediaService.icon
             color: MediaService.playing ? Theme.green : Theme.grey1
             font.family: Theme.iconFontFamily
+            // Compensate for the Spotify glyph's optical baseline.
+            transform: Translate { y: 2 }
         }
 
         StyledText {
