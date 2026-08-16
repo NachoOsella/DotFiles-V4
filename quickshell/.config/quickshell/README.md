@@ -131,7 +131,7 @@ Key pointer actions:
 ## Native services
 
 - **Hyprland:** workspaces, monitor mapping, focused workspace, active toplevels, dispatch
-- **MPRIS:** player discovery, capabilities, metadata, artwork, position, seek, and transport controls
+- **MPRIS:** player discovery, capabilities, metadata, artwork, position, seek, and transport controls. Spotatui is recognized as a Spotify player, including its `mpris:artUrl` cover metadata.
 - **PipeWire:** default sink/source, output selection, mute, volume, and application stream nodes when exposed
 - **Networking:** NetworkManager devices, Wi-Fi state, scanning, networks, connection and disconnect actions
 - **Bluetooth:** BlueZ adapter and paired-device state, connection, and battery information
@@ -149,7 +149,7 @@ Memory is read from `/proc/meminfo`. Network throughput is calculated from `/sys
 2. Spotify when present but paused;
 3. the first player with useful metadata.
 
-The bar collapses when no player has useful metadata. The media popup only renders controls supported by the selected player's MPRIS capabilities. Its one-second position timer runs only while the popup is visible and playback is active.
+The bar collapses when no player has useful metadata. The media popup only renders controls supported by the selected player's MPRIS capabilities. Spotatui must expose MPRIS metadata for the cover to appear; recent versions provide `mpris:artUrl`. Its one-second position timer runs only while the popup is visible and playback is active.
 
 ## Theme and sizing
 

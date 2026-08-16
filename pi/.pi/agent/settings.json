@@ -1,7 +1,7 @@
 {
-  "lastChangelogVersion": "0.84.1",
+  "lastChangelogVersion": "0.84.2",
   "theme": "gruvbox-material-dark-hard",
-  "defaultThinkingLevel": "xhigh",
+  "defaultThinkingLevel": "high",
   "hideThinkingBlock": false,
   "quietStartup": true,
   "enableSkillCommands": true,

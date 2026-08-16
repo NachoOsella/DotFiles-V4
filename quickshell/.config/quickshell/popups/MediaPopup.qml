@@ -53,8 +53,8 @@ PopupSurface {
                 StyledText {
                     anchors.centerIn: parent
                     visible: artwork.status !== Image.Ready
-                    text: "󰎈"
-                    color: Theme.grey1
+                    text: MediaService.spotifyPlayer ? MediaService.icon : "󰎈"
+                    color: MediaService.spotifyPlayer ? Theme.green : Theme.grey1
                     font.family: Theme.iconFontFamily
                     font.pixelSize: 28
                 }

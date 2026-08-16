@@ -14,7 +14,8 @@ Singleton {
     readonly property string title: available ? player.trackTitle : ""
     readonly property string artist: available ? player.trackArtist : ""
     readonly property string album: available ? player.trackAlbum : ""
-    readonly property string identity: player ? player.identity : ""
+    readonly property string identity: player ? (player.identity || player.desktopEntry || "") : ""
+    readonly property bool spotifyPlayer: player !== null && isSpotifyPlayer(player)
     readonly property string artUrl: available ? player.trackArtUrl : ""
     readonly property string trackText: {
         if (!available)
@@ -23,7 +24,17 @@ Singleton {
             return artist + "  —  " + title;
         return title || artist;
     }
-    readonly property string icon: identity.toLowerCase().includes("spotify") ? "" : "󰎈"
+    readonly property string icon: spotifyPlayer ? "" : "󰎈"
+
+    function isSpotifyPlayer(candidate: var): bool {
+        if (!candidate)
+            return false;
+        const playerIdentity = [candidate.identity, candidate.desktopEntry, candidate.dbusName]
+            .filter(value => value)
+            .join(" ")
+            .toLowerCase();
+        return playerIdentity.includes("spotify") || playerIdentity.includes("spotatui");
+    }
 
     function selectPlayer(): var {
         const currentPlayers = Mpris.players.values;
@@ -32,7 +43,7 @@ Singleton {
                 return candidate;
         }
         for (const candidate of currentPlayers) {
-            if (candidate.identity.toLowerCase().includes("spotify"))
+            if (isSpotifyPlayer(candidate))
                 return candidate;
         }
         for (const candidate of currentPlayers) {
