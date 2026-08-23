@@ -84,7 +84,7 @@ bind("ALT + Tab", function()
 end)
 
 -- Spotify controls.
-exec(mod .. " + U", "playerctl -p spotify volume 0.1-")
-exec(mod .. " + I", "playerctl -p spotify volume 0.1+")
-exec(mod .. " + CTRL + Right", "playerctl -p spotify next")
-exec(mod .. " + CTRL + Left", "playerctl -p spotify previous")
+exec(mod .. " + U", "playerctl -p spotatui,spotify volume 0.1-")
+exec(mod .. " + I", "playerctl -p spotatui,spotify volume 0.1+")
+exec(mod .. " + CTRL + Right", "playerctl -p spotatui,spotify next")
+exec(mod .. " + CTRL + Left", "playerctl -p spotatui,spotify previous")

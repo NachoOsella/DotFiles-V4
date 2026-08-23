@@ -23,19 +23,19 @@ format_time() {
 
 case "$field" in
     title)
-        value=$(playerctl -p spotify metadata xesam:title 2>/dev/null || true)
+        value=$(playerctl -p spotatui,spotify metadata xesam:title 2>/dev/null || true)
         print_metadata "$value" "Nothing playing" 32
         ;;
     artist)
-        value=$(playerctl -p spotify metadata xesam:artist 2>/dev/null || true)
+        value=$(playerctl -p spotatui,spotify metadata xesam:artist 2>/dev/null || true)
         print_metadata "$value" "Spotify" 36
         ;;
     album)
-        value=$(playerctl -p spotify metadata xesam:album 2>/dev/null || true)
+        value=$(playerctl -p spotatui,spotify metadata xesam:album 2>/dev/null || true)
         print_metadata "$value" "No album information" 36
         ;;
     status)
-        status=$(playerctl -p spotify status 2>/dev/null || true)
+        status=$(playerctl -p spotatui,spotify status 2>/dev/null || true)
         if [[ -n $status ]]; then
             printf '%s\n' "${status^^}"
         else
@@ -43,8 +43,8 @@ case "$field" in
         fi
         ;;
     progress)
-        position_raw=$(playerctl -p spotify position 2>/dev/null || true)
-        duration_microseconds=$(playerctl -p spotify metadata mpris:length 2>/dev/null || true)
+        position_raw=$(playerctl -p spotatui,spotify position 2>/dev/null || true)
+        duration_microseconds=$(playerctl -p spotatui,spotify metadata mpris:length 2>/dev/null || true)
         position_seconds=${position_raw%%.*}
 
         if [[ ! $position_seconds =~ ^[0-9]+$ || ! $duration_microseconds =~ ^[0-9]+$ ]]; then

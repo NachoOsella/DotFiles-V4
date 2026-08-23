@@ -7,7 +7,7 @@ url_path=$cache_directory/spotify-album.url
 fallback_path=$HOME/.config/hypr/assets/spotify.png
 
 mkdir -p "$cache_directory"
-art_url=$(playerctl -p spotify metadata --format '{{mpris:artUrl}}' 2>/dev/null || true)
+art_url=$(playerctl -p spotatui,spotify metadata --format '{{mpris:artUrl}}' 2>/dev/null || true)
 
 if [[ -z $art_url ]]; then
     printf '%s\n' "$fallback_path"
