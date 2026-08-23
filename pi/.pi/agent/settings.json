@@ -1,13 +1,13 @@
 {
   "lastChangelogVersion": "0.84.2",
   "theme": "gruvbox-material-dark-hard",
-  "defaultThinkingLevel": "high",
+  "defaultThinkingLevel": "xhigh",
   "hideThinkingBlock": false,
   "quietStartup": true,
   "enableSkillCommands": true,
   "extensions": [],
-  "defaultProvider": "openai-codex",
-  "defaultModel": "gpt-5.6-luna",
+  "defaultProvider": "zen-free",
+  "defaultModel": "muse-spark-1.2-contributor-free",
   "steeringMode": "one-at-a-time",
   "terminal": {
     "showTerminalProgress": false,
