@@ -1,8 +1,8 @@
-import { OPENCODE_CLI_USER_AGENT } from "./config.js";
+import { OPENCODE_CLI_USER_AGENT } from './config.js'
 
 /** Create an identifier compatible with the OpenCode CLI Zen headers. */
 function createClientId(prefix: string): string {
-  return `${prefix}_${crypto.randomUUID().replaceAll("-", "")}`;
+    return `${prefix}_${crypto.randomUUID().replaceAll('-', '')}`
 }
 
 /**
@@ -13,11 +13,11 @@ function createClientId(prefix: string): string {
  * one Pi process, while each process gets fresh ids.
  */
 export function createOpenCodeZenHeaders(): Record<string, string> {
-  return {
-    "User-Agent": OPENCODE_CLI_USER_AGENT,
-    "x-opencode-client": "cli",
-    "x-opencode-session": createClientId("ses"),
-    "x-opencode-project": createClientId("proj"),
-    "x-opencode-request": createClientId("req"),
-  };
+    return {
+        'User-Agent': OPENCODE_CLI_USER_AGENT,
+        'x-opencode-client': 'cli',
+        'x-opencode-session': createClientId('ses'),
+        'x-opencode-project': createClientId('proj'),
+        'x-opencode-request': createClientId('req'),
+    }
 }

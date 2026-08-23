@@ -57,3 +57,28 @@ export const DEEPSEEK_THINKING_LEVEL_MAP: ProviderModelConfig['thinkingLevelMap'
         minimal: 'low',
         xhigh: 'max',
     }
+
+/**
+ * Ox Alpha (x-preview-f-free) only accepts reasoning_effort values
+ * `low`, `high`, and `max`; anything else returns HTTP 400.
+ * Map every Pi level onto the nearest supported effort so that xhigh
+ * actually uses the model's maximum reasoning.
+ */
+export const OX_ALPHA_THINKING_LEVEL_MAP: ProviderModelConfig['thinkingLevelMap'] =
+    {
+        minimal: 'low',
+        low: 'low',
+        medium: 'high',
+        high: 'high',
+        xhigh: 'max',
+        max: 'max',
+    }
+
+/**
+ * Zen model ids whose streaming endpoint never emits `finish_reason`.
+ * With `supportsFinishReason: false`, Pi infers the stop reason from the
+ * content (tool calls imply "toolUse") instead of failing the stream.
+ */
+export const MISSING_FINISH_REASON_MODELS = new Set([
+    'muse-spark-1.2-contributor-free',
+])
