@@ -1,5 +1,15 @@
 return {
     "neovim/nvim-lspconfig",
+    opts = {
+        servers = {
+            jdtls = {},
+        },
+        setup = {
+            jdtls = function()
+                return true
+            end,
+        },
+    },
     init = function()
         local default_progress_handler = vim.lsp.handlers["$/progress"]
 

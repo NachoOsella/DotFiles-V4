@@ -2,6 +2,9 @@ return {
     {
         "saghen/blink.cmp",
         opts = {
+            fuzzy = {
+                implementation = "lua",
+            },
             -- Key setting for an NvChad-like completion feel
             completion = {
                 list = {
