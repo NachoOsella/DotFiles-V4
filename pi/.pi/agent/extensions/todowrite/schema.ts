@@ -21,6 +21,7 @@ const TodoSchema = Type.Object({
     description: "Brief description of the task",
     minLength: 1,
     maxLength: MAX_CONTENT_LENGTH,
+    pattern: "\\S",
   }),
   status: StringEnum(["pending", "in_progress", "completed"] as const, {
     description: "Current status of the task",

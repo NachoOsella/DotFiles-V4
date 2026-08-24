@@ -8,23 +8,30 @@ export function renderTodoCall(args: { todos?: Todo[] }, theme: Theme): Text {
   return new Text(
     theme.fg("toolTitle", "todowrite ") + theme.fg("muted", String(count)),
     0,
-    0,
+    0
   );
 }
 
 /** Render todowrite result details in collapsed or expanded form. */
 export function renderTodoResult(
-  result: { content: Array<{ type: string; text?: string }>; isError?: boolean; details?: unknown },
-  { expanded }: { expanded: boolean },
+  result: {
+    content: Array<{ type: string; text?: string }>;
+    details?: unknown;
+  },
+  { expanded, isPartial }: { expanded: boolean; isPartial: boolean },
   theme: Theme,
+  context: { isError: boolean }
 ): Text {
-  if (result.isError) {
-    return new Text(
-      theme.fg("error", result.content[0]?.type === "text" ? (result.content[0].text ?? "Error") : "Error"),
-      0,
-      0,
-    );
+  if (context.isError) {
+    const errorText =
+      result.content.find(
+        (block) => block.type === "text" && typeof block.text === "string"
+      )?.text ?? "Error";
+    return new Text(theme.fg("error", errorText), 0, 0);
   }
+
+  if (isPartial)
+    return new Text(theme.fg("warning", "Updating todo list..."), 0, 0);
 
   const details = result.details as TodoDetails | undefined;
   if (!details || details.total === 0) {
@@ -48,7 +55,9 @@ export function renderTodoResult(
 function buildSummaryParts(details: TodoDetails, theme: Theme): string[] {
   const parts: string[] = [];
   if (details.current) {
-    parts.push(theme.fg("accent", ">") + theme.fg("text", " " + details.current));
+    parts.push(
+      theme.fg("accent", ">") + theme.fg("text", " " + details.current)
+    );
   }
   if (details.pending > 0) {
     parts.push(theme.fg("dim", "+" + details.pending));
@@ -65,7 +74,10 @@ function renderExpandedItem(item: Todo, theme: Theme): string {
     return theme.fg("accent", "  > ") + theme.fg("text", item.content);
   }
   if (item.status === "completed") {
-    return theme.fg("success", "  [✓] ") + theme.fg("dim", theme.strikethrough(item.content));
+    return (
+      theme.fg("success", "  [✓] ") +
+      theme.fg("dim", theme.strikethrough(item.content))
+    );
   }
   return theme.fg("dim", "  [ ] ") + theme.fg("dim", item.content);
 }

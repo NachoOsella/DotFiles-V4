@@ -24,7 +24,13 @@ export default function todowriteExtension(pi: ExtensionAPI) {
   pi.on("session_start", (_event, ctx) => {
     const sessionId = ctx.sessionManager.getSessionId();
     restoreTodos(sessionId, ctx.sessionManager.getBranch());
-    clearWidget(ctx);
+    refreshWidget(ctx);
+  });
+
+  pi.on("session_tree", (_event, ctx) => {
+    const sessionId = ctx.sessionManager.getSessionId();
+    restoreTodos(sessionId, ctx.sessionManager.getBranch());
+    refreshWidget(ctx);
   });
 
   pi.on("session_shutdown", (_event, ctx) => {
@@ -42,16 +48,24 @@ export default function todowriteExtension(pi: ExtensionAPI) {
     ].join(" "),
     promptSnippet: "Track session progress with a todo list",
     promptGuidelines: [
-      "Use todowrite for tasks with multiple meaningful steps; keep one item in_progress.",
+      "Use todowrite for tasks with at least three meaningful steps or multiple requested changes.",
+      "Always submit the complete replacement list with todowrite.",
+      "Keep at most one todowrite item in_progress.",
     ],
     parameters: TodoWriteParams,
+    executionMode: "sequential",
 
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const sessionId = ctx.sessionManager.getSessionId();
       const todos = await Effect.runPromise(validateTodos(params.todos));
       setTodos(sessionId, todos);
       return {
-        content: [{ type: "text" as const, text: `Todo list updated.${buildSummary(todos)}` }],
+        content: [
+          {
+            type: "text" as const,
+            text: `Todo list updated.${buildSummary(todos)}`,
+          },
+        ],
         details: buildDetails(todos),
       };
     },
@@ -65,19 +79,35 @@ export default function todowriteExtension(pi: ExtensionAPI) {
   });
 }
 
-/** Restore the latest todo snapshot on the active branch for the given session. */
-function restoreTodos(sessionId: string, entries: readonly unknown[]): void {
+/** Restore the first valid todo snapshot on the active branch. */
+export function restoreTodos(
+  sessionId: string,
+  entries: readonly unknown[]
+): void {
+  setTodos(sessionId, []);
+
   for (let index = entries.length - 1; index >= 0; index -= 1) {
     const entry = entries[index];
-    if (!isRecord(entry) || entry.type !== "message" || !isRecord(entry.message)) continue;
+    if (
+      !isRecord(entry) ||
+      entry.type !== "message" ||
+      !isRecord(entry.message)
+    )
+      continue;
     const message = entry.message;
-    if (message.role !== "toolResult" || message.toolName !== TOOL_NAME || !isRecord(message.details)) {
+    if (
+      message.role !== "toolResult" ||
+      message.toolName !== TOOL_NAME ||
+      !isRecord(message.details)
+    ) {
       continue;
     }
 
     const restored = decodeStoredTodos(message.details.items);
-    if (restored) setTodos(sessionId, restored);
-    return;
+    if (restored) {
+      setTodos(sessionId, restored);
+      return;
+    }
   }
 }
 
