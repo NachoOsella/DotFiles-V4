@@ -41,11 +41,11 @@ configuration {
 window {
     transparency:     "real";
     location:         center;
-    anchor:           center;
+    anchor:           north;
     fullscreen:       false;
     width:            620px;
     x-offset:         0px;
-    y-offset:         0px;
+    y-offset:         -218px;
     enabled:          true;
     margin:           0px;
     padding:          0px;
@@ -130,7 +130,7 @@ listview {
     columns:          1;
     lines:            7;
     cycle:            true;
-    dynamic:          false;
+    dynamic:          true;
     scrollbar:        false;
     layout:           vertical;
     reverse:          false;
