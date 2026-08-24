@@ -1,0 +1,11 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "preserveSymlinks": true
+  },
+  "include": [
+    "extensions/pi-zen-free/**/*.ts",
+    "extensions/lsp/**/*.ts",
+    "extensions/todowrite/**/*.ts"
+  ]
+}

@@ -17,8 +17,12 @@
   "type": "module",
   "scripts": {
     "check": "tsc --noEmit",
+    "check:extensions": "tsc --noEmit -p tsconfig.extensions.json",
     "format": "prettier --write \"extensions/**/*.{ts,cjs}\" \"*.json\"",
     "format:check": "prettier --check \"extensions/**/*.{ts,cjs}\" \"*.json\"",
-    "test": "node --test --experimental-strip-types extensions/*/*.test.ts && npm --prefix extensions/file-search test"
+    "test": "node --test --experimental-strip-types extensions/*/*.test.ts && npm --prefix extensions/file-search test",
+    "test:lsp": "node --preserve-symlinks --preserve-symlinks-main --test --test-concurrency=1 --experimental-strip-types extensions/lsp/*.test.ts",
+    "test:todowrite": "node --preserve-symlinks --preserve-symlinks-main --test --experimental-strip-types extensions/todowrite/*.test.ts",
+    "test:zen-free": "node --preserve-symlinks --preserve-symlinks-main --test --experimental-strip-types extensions/pi-zen-free/*.test.ts"
   }
 }

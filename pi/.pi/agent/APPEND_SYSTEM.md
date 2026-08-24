@@ -33,7 +33,7 @@
 
 * When delegating with `subagent_spawn`, use the `pi` harness and choose the lowest suitable model and reasoning effort:
 
-  * `zen-free/deepseek-v4-flash-free` with `high` for very cheap basic tasks, research, and simple exploration.
+  * `zen-free/muse-spark-1.2-contributor-free` with `xhigh` for very cheap basic tasks, research, and simple exploration(that model is better than luna, so you decide).
   * `openai-codex/gpt-5.6-luna` with `high`, `xhigh`, or `max` for basic-to-medium tasks.
   * `openai-codex/gpt-5.6-terra` with `medium`, `high`, or `xhigh` for medium-to-advanced tasks.
   * `openai-codex/gpt-5.6-sol` with `minimal` through `high` for advanced tasks.
