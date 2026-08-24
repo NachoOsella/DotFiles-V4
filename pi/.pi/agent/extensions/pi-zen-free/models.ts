@@ -1,79 +1,94 @@
-import type { ProviderModelConfig } from '@earendil-works/pi-coding-agent'
-import {
-    DEEPSEEK_THINKING_LEVEL_MAP,
-    DEFAULT_THINKING_LEVEL_MAP,
-    MISSING_FINISH_REASON_MODELS,
-    OX_ALPHA_THINKING_LEVEL_MAP,
-} from './config.js'
-import type { ModelsDevModel } from './types.js'
+import type { Model } from '@earendil-works/pi-ai'
+import { ZEN_BASE_URL } from './config.ts'
+import type { SupportedZenApi } from './types.ts'
 
-/** Per-model thinking level overrides for models with restricted effort values. */
-const THINKING_LEVEL_MAPS: Record<
-    string,
-    ProviderModelConfig['thinkingLevelMap']
-> = {
-    'x-preview-f-free': OX_ALPHA_THINKING_LEVEL_MAP,
-}
+const FREE_COST = {
+    input: 0,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+} as const
 
-function thinkingLevelMapFor(
-    id: string,
-    reasoning: boolean
-): ProviderModelConfig['thinkingLevelMap'] {
-    if (!reasoning) return undefined
-    if (THINKING_LEVEL_MAPS[id]) return THINKING_LEVEL_MAPS[id]
-    return id.includes('deepseek')
-        ? DEEPSEEK_THINKING_LEVEL_MAP
-        : DEFAULT_THINKING_LEVEL_MAP
-}
+const CHAT_COMPAT = {
+    supportsStore: false,
+    supportsDeveloperRole: false,
+    maxTokensField: 'max_tokens',
+} as const
 
-/** Convert metadata from models.dev into Pi provider model configs. */
-export function buildModelConfigs(
-    freeModels: Map<string, ModelsDevModel>,
-    deployedIds: Set<string> | null
-): ProviderModelConfig[] {
-    const configs: ProviderModelConfig[] = []
-
-    for (const [id, info] of freeModels) {
-        if (deployedIds && !deployedIds.has(id)) continue
-        if (info.modalities?.output?.includes('image')) continue
-
-        const reasoning = info.reasoning ?? false
-
-        // qwen3.6-plus-free is excluded because the Zen API /chat/completions endpoint
-        // returns Anthropic Messages format (message_start, content_block_delta, etc.)
-        // instead of OpenAI Chat Completions SSE format. Since pi-zen-free registers
-        // as "openai-completions", the stream parser never receives finish_reason.
-        // This is a backend issue on OpenCode's side, not a Pi configuration problem.
-        if (id === 'qwen3.6-plus-free') continue
-
-        configs.push({
-            id,
-            name: info.name ?? id,
-            reasoning,
-            compat: {
-                // DeepSeek requires reasoning_content on replayed assistant messages during thinking.
-                requiresReasoningContentOnAssistantMessages:
-                    id.includes('deepseek') || undefined,
-                // muse-spark's Zen endpoint never sends finish_reason; let Pi infer it.
-                supportsFinishReason: MISSING_FINISH_REASON_MODELS.has(id)
-                    ? false
-                    : undefined,
-            },
-            thinkingLevelMap: thinkingLevelMapFor(id, reasoning),
-            input: info.modalities?.input?.includes('image')
-                ? ['text', 'image']
-                : ['text'],
-            // Keep provider pricing metadata instead of assuming every zero-input model is free.
-            cost: {
-                input: info.cost?.input ?? 0,
-                output: info.cost?.output ?? 0,
-                cacheRead: info.cost?.cache_read ?? 0,
-                cacheWrite: info.cost?.cache_write ?? 0,
-            },
-            contextWindow: info.limit?.context ?? 128000,
-            maxTokens: info.limit?.output ?? 16384,
-        })
-    }
-
-    return configs
-}
+/** Protocol-tested models available before a persisted catalog exists. */
+export const BOOTSTRAP_MODELS: readonly Model<SupportedZenApi>[] = [
+    {
+        id: 'nemotron-3.5-lightning-free',
+        name: 'Nemotron 3.5 Lightning Free',
+        api: 'openai-completions',
+        provider: 'zen-free',
+        baseUrl: ZEN_BASE_URL,
+        reasoning: true,
+        input: ['text'],
+        cost: FREE_COST,
+        compat: CHAT_COMPAT,
+        contextWindow: 262144,
+        maxTokens: 262144,
+    },
+    {
+        id: 'nemotron-3-ultra-free',
+        name: 'Nemotron 3 Ultra Free',
+        api: 'openai-completions',
+        provider: 'zen-free',
+        baseUrl: ZEN_BASE_URL,
+        reasoning: true,
+        input: ['text'],
+        cost: FREE_COST,
+        compat: CHAT_COMPAT,
+        contextWindow: 1000000,
+        maxTokens: 128000,
+    },
+    {
+        id: 'big-pickle',
+        name: 'Big Pickle',
+        api: 'openai-completions',
+        provider: 'zen-free',
+        baseUrl: ZEN_BASE_URL,
+        reasoning: true,
+        input: ['text'],
+        cost: FREE_COST,
+        compat: CHAT_COMPAT,
+        contextWindow: 200000,
+        maxTokens: 32000,
+    },
+    {
+        id: 'mimo-v2.5-free',
+        name: 'MiMo V2.5 Free',
+        api: 'openai-completions',
+        provider: 'zen-free',
+        baseUrl: ZEN_BASE_URL,
+        reasoning: true,
+        input: ['text', 'image'],
+        cost: FREE_COST,
+        compat: CHAT_COMPAT,
+        contextWindow: 200000,
+        maxTokens: 32000,
+    },
+    {
+        id: 'hy3-free',
+        name: 'Hy3 Free',
+        api: 'openai-completions',
+        provider: 'zen-free',
+        baseUrl: ZEN_BASE_URL,
+        reasoning: true,
+        thinkingLevelMap: {
+            off: null,
+            minimal: null,
+            low: 'low',
+            medium: 'medium',
+            high: 'high',
+            xhigh: null,
+            max: null,
+        },
+        input: ['text'],
+        cost: FREE_COST,
+        compat: CHAT_COMPAT,
+        contextWindow: 190000,
+        maxTokens: 64000,
+    },
+]
