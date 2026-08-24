@@ -1,6 +1,5 @@
 import { accessSync, constants, existsSync, readFileSync } from 'node:fs'
-import { join, isAbsolute } from 'node:path'
-import { spawnSync } from 'node:child_process'
+import { delimiter, isAbsolute, join } from 'node:path'
 import { CONFIG_DIR_NAME } from '@earendil-works/pi-coding-agent'
 import type { LspConfig, ServerConfig } from './types.ts'
 
@@ -152,27 +151,28 @@ export interface LoadedConfig {
     readonly error?: string
 }
 
-export function loadConfig(cwd: string, trusted: boolean): LoadedConfig {
-    const path = join(cwd, CONFIG_DIR_NAME, CONFIG_FILE)
-    const detectedServers = detectAvailableServers()
-    const base: LspConfig = {
-        enabled: Object.keys(detectedServers).length > 0,
-        diagnosticsAfterEdit: true,
-        // Reads are frequent and should not leave a server running for every
-        // incidental file type. Servers still start on explicit LSP requests
-        // and post-edit diagnostics.
-        warmOnRead: false,
-        idleTimeoutMs: 180_000,
-        servers: detectedServers,
-    }
+export interface LoadConfigOptions {
+    readonly discoverServers?: () => Readonly<Record<string, ServerConfig>>
+}
 
+export function loadConfig(
+    cwd: string,
+    trusted: boolean,
+    options: LoadConfigOptions = {}
+): LoadedConfig {
     if (!trusted) {
         return {
-            config: { ...base, enabled: false },
+            config: disabledConfig(),
             path: undefined,
             error: 'Project is not trusted; LSP process execution is disabled.',
         }
     }
+
+    const detectedServers = (
+        options.discoverServers ?? detectAvailableServers
+    )()
+    const base = defaultConfig(detectedServers)
+    const path = join(cwd, CONFIG_DIR_NAME, CONFIG_FILE)
     if (!existsSync(path)) return { config: base, path: undefined }
 
     try {
@@ -211,6 +211,28 @@ export function loadConfig(cwd: string, trusted: boolean): LoadedConfig {
     }
 }
 
+function defaultConfig(
+    servers: Readonly<Record<string, ServerConfig>>
+): LspConfig {
+    return {
+        enabled: Object.keys(servers).length > 0,
+        diagnosticsAfterEdit: true,
+        warmOnRead: false,
+        idleTimeoutMs: 180_000,
+        servers,
+    }
+}
+
+function disabledConfig(): LspConfig {
+    return {
+        enabled: false,
+        diagnosticsAfterEdit: true,
+        warmOnRead: false,
+        idleTimeoutMs: 180_000,
+        servers: {},
+    }
+}
+
 function parseServer(
     value: unknown,
     fallback: ServerConfig | undefined
@@ -236,9 +258,7 @@ function parseServer(
 }
 
 function positiveInteger(value: unknown): number | undefined {
-    return typeof value === 'number' &&
-        Number.isSafeInteger(value) &&
-        value > 0
+    return typeof value === 'number' && Number.isSafeInteger(value) && value > 0
         ? value
         : undefined
 }
@@ -260,7 +280,9 @@ function stringRecord(
     )
 }
 
-function detectAvailableServers(): Readonly<Record<string, ServerConfig>> {
+export function detectAvailableServers(): Readonly<
+    Record<string, ServerConfig>
+> {
     return Object.fromEntries(
         Object.entries(DEFAULT_SERVERS).filter(([, server]) =>
             commandAvailable(server.command[0])
@@ -270,27 +292,43 @@ function detectAvailableServers(): Readonly<Record<string, ServerConfig>> {
 
 const commandAvailability = new Map<string, boolean>()
 
-function commandAvailable(command: string | undefined): boolean {
+export function commandAvailable(command: string | undefined): boolean {
     if (!command) return false
     const cacheKey = `${process.platform}:${process.env.PATH ?? ''}:${command}`
     const cached = commandAvailability.get(cacheKey)
     if (cached !== undefined) return cached
-    if (isAbsolute(command)) {
-        try {
-            accessSync(command, constants.X_OK)
-            commandAvailability.set(cacheKey, true)
-            return true
-        } catch {
-            commandAvailability.set(cacheKey, false)
-            return false
-        }
-    }
 
-    const lookup = process.platform === 'win32' ? 'where' : 'which'
-    const available =
-        spawnSync(lookup, [command], { stdio: 'ignore' }).status === 0
+    const candidates = isAbsolute(command)
+        ? [command]
+        : (process.env.PATH ?? '')
+              .split(delimiter)
+              .filter(Boolean)
+              .flatMap((directory) =>
+                  executableCandidates(join(directory, command))
+              )
+    const available = candidates.some(isExecutable)
     commandAvailability.set(cacheKey, available)
     return available
+}
+
+function executableCandidates(path: string): readonly string[] {
+    if (process.platform !== 'win32') return [path]
+    const extensions = (process.env.PATHEXT ?? '.COM;.EXE;.BAT;.CMD')
+        .split(';')
+        .filter(Boolean)
+    return [
+        path,
+        ...extensions.map((extension) => `${path}${extension.toLowerCase()}`),
+    ]
+}
+
+function isExecutable(path: string): boolean {
+    try {
+        accessSync(path, constants.X_OK)
+        return true
+    } catch {
+        return false
+    }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

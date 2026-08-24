@@ -1,4 +1,4 @@
-import { existsSync } from 'node:fs'
+import { existsSync, realpathSync } from 'node:fs'
 import {
     basename,
     dirname,
@@ -64,8 +64,9 @@ export function rankMatchingServers(
                     return value === extension || value === fileName
                 })
         )
-        .sort(([, left], [, right]) =>
-            (right.priority ?? 0) - (left.priority ?? 0)
+        .sort(
+            ([, left], [, right]) =>
+                (right.priority ?? 0) - (left.priority ?? 0)
         )
 }
 
@@ -85,8 +86,9 @@ interface StartingClient {
     settled: boolean
 }
 
-export const makeLspLayer = (config: LspConfig, cwd: string) =>
-    Layer.effect(
+export const makeLspLayer = (config: LspConfig, cwd: string) => {
+    const workspace = canonicalWorkspacePath(cwd)
+    return Layer.effect(
         LspService,
         Effect.gen(function* () {
             const clients = new Map<string, ClientState>()
@@ -111,7 +113,8 @@ export const makeLspLayer = (config: LspConfig, cwd: string) =>
                 if (activeStop) return activeStop
                 clearIdleTimer(state)
                 const promise = state.client.shutdown().finally(() => {
-                    if (clients.get(state.key) === state) clients.delete(state.key)
+                    if (clients.get(state.key) === state)
+                        clients.delete(state.key)
                     if (stopping.get(state.key) === promise)
                         stopping.delete(state.key)
                 })
@@ -124,7 +127,11 @@ export const makeLspLayer = (config: LspConfig, cwd: string) =>
                 if (state.uses > 0 || disposed) return
                 clearIdleTimer(state)
                 state.idleTimer = setTimeout(() => {
-                    if (disposed || state.uses > 0 || clients.get(state.key) !== state)
+                    if (
+                        disposed ||
+                        state.uses > 0 ||
+                        clients.get(state.key) !== state
+                    )
                         return
                     void stopClient(state).catch(() => undefined)
                 }, config.idleTimeoutMs)
@@ -163,13 +170,17 @@ export const makeLspLayer = (config: LspConfig, cwd: string) =>
                 const key = `${dirname(filePath)}:${basename(filePath).toLowerCase()}`
                 const cached = serverMatchCache.get(key)
                 if (cached) return cached
-                const matches = rankMatchingServers(filePath, config.servers, cwd)
+                const matches = rankMatchingServers(
+                    filePath,
+                    config.servers,
+                    workspace
+                )
                 serverMatchCache.set(key, matches)
                 return matches
             }
 
             const resolveFile = (filePath: string) =>
-                isAbsolute(filePath) ? resolve(filePath) : resolve(cwd, filePath)
+                canonicalFileInWorkspace(workspace, filePath)
 
             const resolveRoot = (
                 serverId: string,
@@ -182,17 +193,25 @@ export const makeLspLayer = (config: LspConfig, cwd: string) =>
                 if (cached) return cached
                 let current = directory
                 while (true) {
-                    if (markers.some((marker) => existsSync(join(current, marker)))) {
+                    if (
+                        markers.some((marker) =>
+                            existsSync(join(current, marker))
+                        )
+                    ) {
                         rootCache.set(cacheKey, current)
                         return current
                     }
-                    if (current === cwd) break
+                    if (current === workspace) break
                     const parent = dirname(current)
-                    if (parent === current || !isInsideWorkspace(parent, cwd)) break
+                    if (
+                        parent === current ||
+                        !isInsideWorkspace(parent, workspace)
+                    )
+                        break
                     current = parent
                 }
-                rootCache.set(cacheKey, cwd)
-                return cwd
+                rootCache.set(cacheKey, workspace)
+                return workspace
             }
 
             const getOrStart = async (
@@ -227,7 +246,9 @@ export const makeLspLayer = (config: LspConfig, cwd: string) =>
                         .then(async (client) => {
                             if (disposed) {
                                 await client.shutdown()
-                                throw new Error('LSP runtime was disposed during startup.')
+                                throw new Error(
+                                    'LSP runtime was disposed during startup.'
+                                )
                             }
                             const state: ClientState = {
                                 key,
@@ -242,7 +263,8 @@ export const makeLspLayer = (config: LspConfig, cwd: string) =>
                         })
                         .finally(() => {
                             entry.settled = true
-                            if (starting.get(key) === entry) starting.delete(key)
+                            if (starting.get(key) === entry)
+                                starting.delete(key)
                         })
                     inflight = entry
                     starting.set(key, entry)
@@ -265,7 +287,7 @@ export const makeLspLayer = (config: LspConfig, cwd: string) =>
                             throw new LspDisabled({
                                 message: 'LSP is disabled in .pi/lsp.json.',
                             })
-                        if (!isInsideWorkspace(filePath, cwd)) {
+                        if (!isInsideWorkspace(filePath, workspace)) {
                             throw new LspServerUnavailable({
                                 message:
                                     'LSP access is limited to the current workspace.',
@@ -312,7 +334,7 @@ export const makeLspLayer = (config: LspConfig, cwd: string) =>
                                 lastError = cause
                                 failures.set(key, {
                                     id: serverId,
-                                    root: relative(cwd, root) || '.',
+                                    root: relative(workspace, root) || '.',
                                     extensions: serverConfig.extensions,
                                     state: 'broken',
                                     openDocuments: 0,
@@ -345,7 +367,8 @@ export const makeLspLayer = (config: LspConfig, cwd: string) =>
                                 cause instanceof Error
                                     ? cause.message
                                     : String(cause),
-                            serverId: findServers(filePath)[0]?.[0] ?? 'unknown',
+                            serverId:
+                                findServers(filePath)[0]?.[0] ?? 'unknown',
                             cause,
                         })
                     },
@@ -354,8 +377,8 @@ export const makeLspLayer = (config: LspConfig, cwd: string) =>
             const hasServer = (filePath: string) => {
                 const resolved = resolveFile(filePath)
                 return Effect.succeed(
-                    config.enabled &&
-                        isInsideWorkspace(resolved, cwd) &&
+                    resolved !== undefined &&
+                        config.enabled &&
                         findServers(resolved).length > 0
                 )
             }
@@ -363,6 +386,12 @@ export const makeLspLayer = (config: LspConfig, cwd: string) =>
             const touchFile = (filePath: string, waitForDiagnostics = false) =>
                 Effect.gen(function* () {
                     const resolved = resolveFile(filePath)
+                    if (!resolved)
+                        return yield* new LspRequestError({
+                            message: `File not found or outside workspace: ${filePath}`,
+                            method: 'textDocument/didChange',
+                            cause: undefined,
+                        })
                     const state = yield* getClient(resolved)
                     yield* Effect.tryPromise<void, LspError>({
                         try: (signal) =>
@@ -386,13 +415,22 @@ export const makeLspLayer = (config: LspConfig, cwd: string) =>
             const diagnostics = (filePath?: string) =>
                 Effect.gen(function* () {
                     const target = filePath ? resolveFile(filePath) : undefined
+                    if (filePath && !target)
+                        return yield* new LspRequestError({
+                            message: `File not found or outside workspace: ${filePath}`,
+                            method: 'textDocument/publishDiagnostics',
+                            cause: undefined,
+                        })
                     const selected = target
                         ? [yield* getClient(target)]
                         : [...clients.values()]
                     const result: LspDiagnostic[] = []
                     try {
                         for (const state of selected) {
-                            for (const [path, values] of state.client.diagnostics()) {
+                            for (const [
+                                path,
+                                values,
+                            ] of state.client.diagnostics()) {
                                 if (target && path !== target) continue
                                 result.push(
                                     ...values.map((diagnostic) => ({
@@ -412,9 +450,9 @@ export const makeLspLayer = (config: LspConfig, cwd: string) =>
             const request = (input: LspRequest) =>
                 Effect.gen(function* () {
                     const filePath = resolveFile(input.filePath)
-                    if (!existsSync(filePath)) {
+                    if (!filePath) {
                         return yield* new LspRequestError({
-                            message: `File not found: ${filePath}`,
+                            message: `File not found or outside workspace: ${input.filePath}`,
                             method: input.operation,
                             cause: undefined,
                         })
@@ -449,12 +487,14 @@ export const makeLspLayer = (config: LspConfig, cwd: string) =>
 
             const status = Effect.suspend(() =>
                 Effect.succeed<ReadonlyArray<LspStatus>>([
-                    ...[...clients.values()].map(({ client, serverId, root }) => ({
-                        id: serverId,
-                        root: relative(cwd, root) || '.',
-                        extensions: client.extensions,
-                        ...client.status(),
-                    })),
+                    ...[...clients.values()].map(
+                        ({ client, serverId, root }) => ({
+                            id: serverId,
+                            root: relative(workspace, root) || '.',
+                            extensions: client.extensions,
+                            ...client.status(),
+                        })
+                    ),
                     ...failures.values(),
                 ])
             )
@@ -466,7 +506,8 @@ export const makeLspLayer = (config: LspConfig, cwd: string) =>
                     )
                     await Promise.all(entries.map((state) => stopClient(state)))
                     for (const [key, value] of failures) {
-                        if (!serverId || value.id === serverId) failures.delete(key)
+                        if (!serverId || value.id === serverId)
+                            failures.delete(key)
                     }
                     rootCache.clear()
                     serverMatchCache.clear()
@@ -482,6 +523,33 @@ export const makeLspLayer = (config: LspConfig, cwd: string) =>
             })
         })
     )
+}
+
+export function canonicalWorkspacePath(workspace: string): string {
+    return realpathSync(resolve(workspace))
+}
+
+export function canonicalWorkspaceFile(
+    workspace: string,
+    filePath: string
+): string | undefined {
+    return canonicalFileInWorkspace(canonicalWorkspacePath(workspace), filePath)
+}
+
+function canonicalFileInWorkspace(
+    workspace: string,
+    filePath: string
+): string | undefined {
+    const resolved = isAbsolute(filePath)
+        ? resolve(filePath)
+        : resolve(workspace, filePath)
+    try {
+        const canonical = realpathSync(resolved)
+        return isInsideWorkspace(canonical, workspace) ? canonical : undefined
+    } catch {
+        return undefined
+    }
+}
 
 function operationMethod(operation: LspOperation): string {
     switch (operation) {
@@ -542,13 +610,14 @@ function hasRootMarker(
 }
 
 function withAbort<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
-    if (signal.aborted) return Promise.reject(new Error('LSP operation aborted.'))
+    if (signal.aborted)
+        return Promise.reject(new Error('LSP operation aborted.'))
     return new Promise<T>((resolve, reject) => {
         const abort = () => reject(new Error('LSP operation aborted.'))
         signal.addEventListener('abort', abort, { once: true })
-        promise.then(resolve, reject).finally(() =>
-            signal.removeEventListener('abort', abort)
-        )
+        promise
+            .then(resolve, reject)
+            .finally(() => signal.removeEventListener('abort', abort))
     })
 }
 
@@ -556,7 +625,8 @@ function isInsideWorkspace(filePath: string, workspace: string): boolean {
     const value = relative(workspace, filePath)
     return (
         value === '' ||
-        (!value.startsWith('..\\') &&
+        (!isAbsolute(value) &&
+            !value.startsWith('..\\') &&
             !value.startsWith('../') &&
             value !== '..')
     )

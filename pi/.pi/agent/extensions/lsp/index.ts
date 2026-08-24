@@ -3,6 +3,7 @@ import { isAbsolute, relative, resolve } from 'node:path'
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent'
 import { Text } from '@earendil-works/pi-tui'
 import { Effect } from 'effect'
+import type { Static } from 'typebox'
 import { LSP_PROMPT_SNIPPET, LSP_TOOL_DESCRIPTION } from './prompt.ts'
 import { LspParameters } from './schema.ts'
 import { loadConfig, type LoadedConfig } from './config.ts'
@@ -10,38 +11,94 @@ import { formatDiagnostics } from './src/diagnostics.ts'
 import { compactLspResult, type CompactLspDetails } from './src/format.ts'
 import { LspService } from './src/service.ts'
 import { createRuntime, runLsp } from './src/runtime.ts'
-import type { LspOperation } from './types.ts'
+import type { LspConfig, LspOperation } from './types.ts'
 import type { LspRuntime } from './src/runtime.ts'
 import { LSP_INFO_CHANNEL } from '../shared/dashboard-state.ts'
 
 const TOOL_NAME = 'lsp'
 const EDIT_TOOLS = new Set(['edit', 'write'])
 
+interface DisposableRuntime {
+    dispose(): Promise<void>
+}
+
+export function createRuntimeLifecycle<T extends DisposableRuntime>(
+    create: (config: LspConfig, cwd: string) => T
+) {
+    let runtime: T | undefined
+    let runtimeCwd: string | undefined
+    let queue: Promise<void> = Promise.resolve()
+
+    return {
+        get(cwd: string, config: LspConfig): Promise<T> {
+            const operation = queue.then(async () => {
+                if (runtime && runtimeCwd === cwd) return runtime
+                const previous = runtime
+                runtime = undefined
+                runtimeCwd = undefined
+                await previous?.dispose()
+                runtime = create(config, cwd)
+                runtimeCwd = cwd
+                return runtime
+            })
+            queue = operation.then(
+                () => undefined,
+                () => undefined
+            )
+            return operation
+        },
+        async dispose(): Promise<void> {
+            const operation = queue.then(async () => {
+                const active = runtime
+                runtime = undefined
+                runtimeCwd = undefined
+                await active?.dispose()
+            })
+            queue = operation.then(
+                () => undefined,
+                () => undefined
+            )
+            await operation
+        },
+    }
+}
+
+export function normalizeLspArguments(
+    args: unknown
+): Static<typeof LspParameters> {
+    if (!isRecord(args) || typeof args.filePath !== 'string')
+        return args as Static<typeof LspParameters>
+    if (!args.filePath.startsWith('@'))
+        return args as Static<typeof LspParameters>
+    return {
+        ...args,
+        filePath: args.filePath.slice(1),
+    } as Static<typeof LspParameters>
+}
+
 export default function lspExtension(pi: ExtensionAPI) {
-    let runtime: LspRuntime | undefined
     let loaded: LoadedConfig | undefined
     let cwd = process.cwd()
+    const runtimeLifecycle = createRuntimeLifecycle(createRuntime)
+    const warmWork = new Set<Promise<unknown>>()
+    const warmControllers = new Set<AbortController>()
 
-    let runtimeTransition: Promise<LspRuntime> | undefined
     const getRuntime = async (nextCwd: string, trusted: boolean) => {
-        if (runtime && cwd === nextCwd) return runtime
-        if (runtimeTransition) return runtimeTransition
-        runtimeTransition = (async () => {
-            await runtime?.dispose()
+        if (!loaded || cwd !== nextCwd) {
             cwd = nextCwd
             loaded = loadConfig(cwd, trusted)
-            runtime = createRuntime(loaded.config, cwd)
-            return runtime
-        })().finally(() => {
-            runtimeTransition = undefined
-        })
-        return runtimeTransition
+        }
+        return runtimeLifecycle.get(cwd, loaded.config)
+    }
+
+    const stopWarmWork = async () => {
+        for (const controller of warmControllers) controller.abort()
+        await Promise.allSettled(warmWork)
     }
 
     pi.on('session_start', async (_event, ctx) => {
-        await runtimeTransition
-        await runtime?.dispose()
-        runtime = undefined
+        await stopWarmWork()
+        await runtimeLifecycle.dispose()
         cwd = ctx.cwd
         loaded = loadConfig(ctx.cwd, ctx.isProjectTrusted())
         if (ctx.hasUI) ctx.ui.setStatus('lsp', undefined)
@@ -49,9 +106,8 @@ export default function lspExtension(pi: ExtensionAPI) {
     })
 
     pi.on('session_shutdown', async (_event, ctx) => {
-        await runtimeTransition
-        await runtime?.dispose()
-        runtime = undefined
+        await stopWarmWork()
+        await runtimeLifecycle.dispose()
         if (ctx.hasUI) ctx.ui.setStatus('lsp', undefined)
     })
 
@@ -61,6 +117,7 @@ export default function lspExtension(pi: ExtensionAPI) {
         description: LSP_TOOL_DESCRIPTION,
         promptSnippet: LSP_PROMPT_SNIPPET,
         parameters: LspParameters,
+        prepareArguments: normalizeLspArguments,
         renderCall(args, theme, context) {
             const path = isAbsolute(args.filePath)
                 ? relative(context.cwd, args.filePath)
@@ -73,10 +130,19 @@ export default function lspExtension(pi: ExtensionAPI) {
                 0
             )
         },
-        renderResult(result, { expanded, isPartial }, theme) {
+        renderResult(result, { expanded, isPartial }, theme, context) {
             if (isPartial)
                 return new Text(
                     theme.fg('warning', 'Querying language server...'),
+                    0,
+                    0
+                )
+            if (context.isError)
+                return new Text(
+                    theme.fg(
+                        'error',
+                        firstText(result.content) ?? 'LSP request failed.'
+                    ),
                     0,
                     0
                 )
@@ -85,9 +151,9 @@ export default function lspExtension(pi: ExtensionAPI) {
                 return new Text(theme.fg('muted', 'No LSP result.'), 0, 0)
             const lines = details.summary.split('\n')
             const visible = expanded ? lines : lines.slice(0, 4)
-            let text = visible.join('\\n')
+            let text = visible.join('\n')
             if (!expanded && lines.length > visible.length)
-                text += '\\n... expand for more'
+                text += '\n... expand for more'
             return new Text(
                 theme.fg(details.resultCount === 0 ? 'muted' : 'text', text),
                 0,
@@ -106,10 +172,7 @@ export default function lspExtension(pi: ExtensionAPI) {
                 )
             }
 
-            if (
-                operation === 'workspaceSymbols' &&
-                !params.query?.trim()
-            ) {
+            if (operation === 'workspaceSymbols' && !params.query?.trim()) {
                 throw new Error('workspaceSymbols requires a non-empty query.')
             }
             const serviceRuntime = await getRuntime(
@@ -117,29 +180,22 @@ export default function lspExtension(pi: ExtensionAPI) {
                 ctx.isProjectTrusted()
             )
             const service = LspService
-            const effect = importService(
-                serviceRuntime,
-                service,
-                (lsp) =>
-                    lsp.request({
-                        operation,
-                        filePath: params.filePath,
-                        line: params.line,
-                        character: params.character,
-                        query: params.query,
-                        limit: params.limit,
-                        offset: params.offset,
-                        contextLines: params.contextLines,
-                    })
+            const effect = importService(serviceRuntime, service, (lsp) =>
+                lsp.request({
+                    operation,
+                    filePath: params.filePath,
+                    line: params.line,
+                    character: params.character,
+                    query: params.query,
+                    limit: params.limit,
+                    offset: params.offset,
+                    contextLines: params.contextLines,
+                })
             )
-            const result = await runLsp(
-                serviceRuntime,
-                effect,
-                {
-                    signal,
-                    interruptMessage: 'LSP request cancelled.',
-                }
-            )
+            const result = await runLsp(serviceRuntime, effect, {
+                signal,
+                interruptMessage: 'LSP request cancelled.',
+            })
             await publishRuntimeStatus(
                 pi,
                 serviceRuntime,
@@ -159,10 +215,6 @@ export default function lspExtension(pi: ExtensionAPI) {
 
     pi.on('tool_result', async (event, ctx) => {
         if (event.isError) return
-        const serviceRuntime = await getRuntime(
-            ctx.cwd,
-            ctx.isProjectTrusted()
-        )
 
         if (
             EDIT_TOOLS.has(event.toolName) &&
@@ -172,6 +224,10 @@ export default function lspExtension(pi: ExtensionAPI) {
             if (!filePath) return
             const absolutePath = resolve(ctx.cwd, filePath)
             if (!existsSync(absolutePath)) return
+            const serviceRuntime = await getRuntime(
+                ctx.cwd,
+                ctx.isProjectTrusted()
+            )
             try {
                 const diagnostics = await runLsp(
                     serviceRuntime,
@@ -194,19 +250,22 @@ export default function lspExtension(pi: ExtensionAPI) {
                     serviceRuntime,
                     loaded?.config.enabled
                 )
-                const text = formatDiagnostics(diagnostics, ctx.cwd)
-                if (!text) return
+                const diagnosticsResult = formatDiagnostics(
+                    diagnostics,
+                    ctx.cwd
+                )
+                if (!diagnosticsResult.text) return
                 return {
                     content: [
                         ...event.content,
                         {
                             type: 'text' as const,
-                            text: `\n\nLSP errors detected:\n${text}`,
+                            text: `\n\nLSP errors detected:\n${diagnosticsResult.text}`,
                         },
                     ],
                     details: {
                         ...(isRecord(event.details) ? event.details : {}),
-                        lspDiagnostics: diagnostics,
+                        lspDiagnostics: diagnosticsResult,
                     },
                 }
             } catch {
@@ -219,33 +278,43 @@ export default function lspExtension(pi: ExtensionAPI) {
             }
         }
 
-        if (event.toolName === 'read' && loaded?.config.warmOnRead) {
-            const filePath = extractFilePath(event.input, event.details)
-            if (!filePath) return
-            const absolutePath = resolve(ctx.cwd, filePath)
-            if (!existsSync(absolutePath)) return
-            void runLsp(
+        if (event.toolName !== 'read' || !loaded?.config.warmOnRead) return
+        const filePath = extractFilePath(event.input, event.details)
+        if (!filePath) return
+        const absolutePath = resolve(ctx.cwd, filePath)
+        if (!existsSync(absolutePath)) return
+        const controller = new AbortController()
+        const turnSignal = ctx.signal
+        const abort = () => controller.abort()
+        if (turnSignal?.aborted) controller.abort()
+        else turnSignal?.addEventListener('abort', abort, { once: true })
+        warmControllers.add(controller)
+
+        let serviceRuntime: LspRuntime | undefined
+        const work = (async () => {
+            serviceRuntime = await getRuntime(ctx.cwd, ctx.isProjectTrusted())
+            controller.signal.throwIfAborted()
+            await runLsp(
                 serviceRuntime,
                 importService(serviceRuntime, LspService, (lsp) =>
                     lsp.touchFile(absolutePath, false)
                 ),
-                { signal: ctx.signal }
+                { signal: controller.signal }
             )
-                .then(() =>
-                    publishRuntimeStatus(
+        })()
+            .catch(() => undefined)
+            .finally(async () => {
+                warmControllers.delete(controller)
+                warmWork.delete(work)
+                turnSignal?.removeEventListener('abort', abort)
+                if (serviceRuntime)
+                    await publishRuntimeStatus(
                         pi,
                         serviceRuntime,
                         loaded?.config.enabled
                     )
-                )
-                .catch(() =>
-                    publishRuntimeStatus(
-                        pi,
-                        serviceRuntime,
-                        loaded?.config.enabled
-                    )
-                )
-        }
+            })
+        warmWork.add(work)
     })
 
     pi.registerCommand('lsp-status', {
@@ -258,11 +327,7 @@ export default function lspExtension(pi: ExtensionAPI) {
             )
             const active = await runLsp(
                 serviceRuntime,
-                importService(
-                    serviceRuntime,
-                    LspService,
-                    (lsp) => lsp.status
-                )
+                importService(serviceRuntime, LspService, (lsp) => lsp.status)
             )
             const configured =
                 Object.keys(current.config.servers).join(', ') || 'none'
@@ -323,10 +388,14 @@ export default function lspExtension(pi: ExtensionAPI) {
                     lsp.diagnostics(args.trim() || undefined)
                 )
             )
-            const text = formatDiagnostics(diagnostics, ctx.cwd, 'all')
+            const diagnosticsResult = formatDiagnostics(
+                diagnostics,
+                ctx.cwd,
+                'all'
+            )
             ctx.ui.notify(
-                text || 'No LSP diagnostics found.',
-                text ? 'warning' : 'info'
+                diagnosticsResult.text || 'No LSP diagnostics found.',
+                diagnosticsResult.text ? 'warning' : 'info'
             )
         },
     })
@@ -373,6 +442,17 @@ function importService<A>(
         const instance = yield* service
         return yield* build(instance)
     })
+}
+
+function firstText(content: unknown): string | undefined {
+    if (!Array.isArray(content)) return undefined
+    const block = content.find(
+        (value): value is { type: 'text'; text: string } =>
+            isRecord(value) &&
+            value.type === 'text' &&
+            typeof value.text === 'string'
+    )
+    return block?.text
 }
 
 function extractFilePath(...values: readonly unknown[]): string | undefined {

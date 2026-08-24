@@ -1,5 +1,5 @@
-import { readFile } from 'node:fs/promises'
-import { relative } from 'node:path'
+import { readFile, realpath } from 'node:fs/promises'
+import { isAbsolute, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { LspOperation } from '../types.ts'
 
@@ -38,50 +38,116 @@ export async function compactLspResult(
     options: CompactOptions = {}
 ): Promise<CompactLspDetails> {
     const entries = normalizeResult(operation, result, cwd)
-    const offset = Math.max(0, options.offset ?? 0)
-    const limit = Math.min(MAX_ITEMS, Math.max(1, options.limit ?? DEFAULT_ITEMS))
-    const page = entries.slice(offset, offset + limit)
-    const lines: string[] = []
+    const offset = Math.min(Math.max(0, options.offset ?? 0), entries.length)
+    const limit = Math.min(
+        MAX_ITEMS,
+        Math.max(1, options.limit ?? DEFAULT_ITEMS)
+    )
+    const candidates = entries.slice(offset, offset + limit)
+    const items = await Promise.all(
+        candidates.map((entry, index) =>
+            formatEntry(entry, index, options, cwd)
+        )
+    )
+
+    const emitted: string[] = []
     let itemTruncated = false
-    for (const [index, entry] of page.entries()) {
-        if (entry.text.length > MAX_ITEM_CHARS) itemTruncated = true
-        lines.push(truncate(entry.text, MAX_ITEM_CHARS))
-        if (
-            options.contextLines &&
-            options.contextLines > 0 &&
-            index < MAX_SNIPPET_RESULTS &&
-            entry.filePath !== undefined &&
-            entry.line !== undefined
-        ) {
-            const snippet = await sourceSnippet(
-                entry.filePath,
-                entry.line,
-                options.contextLines
-            )
-            if (snippet) lines.push(snippet)
+    for (const item of items) {
+        const nextReturnedCount = emitted.length + 1
+        const hasMore = offset + nextReturnedCount < entries.length
+        const reserved = [
+            heading(operation, entries.length, offset, nextReturnedCount),
+            ...emitted,
+            item.text,
+            ...(hasMore
+                ? [
+                      `More results available: offset=${offset + nextReturnedCount}`,
+                  ]
+                : []),
+        ].join('\n')
+
+        if (reserved.length <= MAX_OUTPUT_CHARS) {
+            emitted.push(item.text)
+            itemTruncated ||= item.truncated
+            continue
         }
+
+        // An oversized first item must remain reachable instead of producing an
+        // empty page. Reserve the heading and continuation before truncating it.
+        if (emitted.length === 0) {
+            const continuation =
+                offset + 1 < entries.length
+                    ? `More results available: offset=${offset + 1}`
+                    : undefined
+            const available = Math.max(
+                1,
+                MAX_OUTPUT_CHARS -
+                    heading(operation, entries.length, offset, 1).length -
+                    (continuation ? continuation.length + 2 : 1)
+            )
+            emitted.push(truncate(item.text, available))
+            itemTruncated = true
+        }
+        break
     }
 
-    const nextOffset = offset + page.length
+    const returnedCount = emitted.length
+    const nextOffset = offset + returnedCount
     const hasMore = nextOffset < entries.length
-    if (hasMore) lines.push(`More results available: offset=${nextOffset}`)
-    const heading =
-        entries.length === 0
-            ? `No results found for ${operation}.`
-            : `${operation}: ${entries.length} result(s), showing ${offset + 1}-${offset + page.length}`
-    const rawSummary = entries.length === 0 ? heading : `${heading}\n${lines.join('\n')}`
-    const summary = truncate(rawSummary, MAX_OUTPUT_CHARS)
+    const summary = [
+        heading(operation, entries.length, offset, returnedCount),
+        ...emitted,
+        ...(hasMore ? [`More results available: offset=${nextOffset}`] : []),
+    ].join('\n')
 
     return {
         operation,
         summary,
         resultCount: entries.length,
-        returnedCount: page.length,
+        returnedCount,
         offset,
         nextOffset: hasMore ? nextOffset : undefined,
-        truncated:
-            itemTruncated || hasMore || summary.length < rawSummary.length,
+        truncated: itemTruncated || hasMore,
     }
+}
+
+function heading(
+    operation: LspOperation,
+    resultCount: number,
+    offset: number,
+    returnedCount: number
+): string {
+    if (resultCount === 0) return `No results found for ${operation}.`
+    if (returnedCount === 0)
+        return `${operation}: ${resultCount} result(s), showing none`
+    return `${operation}: ${resultCount} result(s), showing ${offset + 1}-${offset + returnedCount}`
+}
+
+async function formatEntry(
+    entry: Entry,
+    index: number,
+    options: CompactOptions,
+    cwd: string
+): Promise<{ text: string; truncated: boolean }> {
+    const text = truncate(entry.text, MAX_ITEM_CHARS)
+    let item = text
+    let truncated = text.length < entry.text.length
+    if (
+        options.contextLines &&
+        options.contextLines > 0 &&
+        index < MAX_SNIPPET_RESULTS &&
+        entry.filePath !== undefined &&
+        entry.line !== undefined
+    ) {
+        const snippet = await sourceSnippet(
+            entry.filePath,
+            entry.line,
+            options.contextLines,
+            cwd
+        )
+        if (snippet) item += `\n${snippet}`
+    }
+    return { text: item, truncated }
 }
 
 function normalizeResult(
@@ -105,14 +171,13 @@ function normalizeLocations(result: unknown, cwd: string): Entry[] {
                 : typeof value.targetUri === 'string'
                   ? value.targetUri
                   : undefined
-        const range =
-            isRecord(value.range)
-                ? value.range
-                : isRecord(value.targetSelectionRange)
-                  ? value.targetSelectionRange
-                  : isRecord(value.targetRange)
-                    ? value.targetRange
-                    : undefined
+        const range = isRecord(value.range)
+            ? value.range
+            : isRecord(value.targetSelectionRange)
+              ? value.targetSelectionRange
+              : isRecord(value.targetRange)
+                ? value.targetRange
+                : undefined
         if (!uri || !range) return []
         const position = positionFromRange(range)
         return [
@@ -137,7 +202,8 @@ function formatSymbol(value: unknown, cwd: string, depth = 0): Entry[] {
     const uri =
         location && typeof location.uri === 'string' ? location.uri : undefined
     const symbolRange =
-        range ?? (location && isRecord(location.range) ? location.range : undefined)
+        range ??
+        (location && isRecord(location.range) ? location.range : undefined)
     const position = symbolRange ? formatPosition(symbolRange) : ''
     const suffix = uri ? ` - ${formatUri(uri, cwd)}` : ''
     const entry: Entry = {
@@ -211,10 +277,16 @@ function kindName(kind: unknown): string {
 async function sourceSnippet(
     filePath: string,
     line: number,
-    contextLines: number
+    contextLines: number,
+    cwd: string
 ): Promise<string> {
     try {
-        const lines = (await readFile(filePath, 'utf8')).split(/\r\n|\r|\n/)
+        const [workspace, target] = await Promise.all([
+            realpath(resolve(cwd)),
+            realpath(filePath),
+        ])
+        if (!isInsideWorkspace(target, workspace)) return ''
+        const lines = (await readFile(target, 'utf8')).split(/\r\n|\r|\n/)
         const start = Math.max(0, line - contextLines)
         const end = Math.min(lines.length, line + contextLines + 1)
         return lines
@@ -230,9 +302,22 @@ async function sourceSnippet(
     }
 }
 
+function isInsideWorkspace(filePath: string, workspace: string): boolean {
+    const value = relative(workspace, filePath)
+    return (
+        value === '' ||
+        (!isAbsolute(value) &&
+            !value.startsWith('..\\') &&
+            !value.startsWith('../') &&
+            value !== '..')
+    )
+}
+
 function truncate(value: string, maxChars: number): string {
     if (value.length <= maxChars) return value
-    return `${value.slice(0, Math.max(0, maxChars - 16)).trimEnd()} [truncated]`
+    const suffix = ' [truncated]'
+    if (maxChars <= suffix.length) return suffix.slice(0, maxChars)
+    return `${value.slice(0, maxChars - suffix.length).trimEnd()}${suffix}`
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

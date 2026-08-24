@@ -159,6 +159,7 @@ test('aborts initialization and terminates the server process group', async () =
     const root = await mkdtemp(join(tmpdir(), 'pi-lsp-abort-'))
     const server = join(root, 'server.mjs')
     const terminated = join(root, 'terminated')
+    const ready = join(root, 'ready')
     await writeFile(
         server,
         `
@@ -167,6 +168,7 @@ process.on('SIGTERM', () => {
   writeFileSync(process.argv[2], 'terminated')
   process.exit(0)
 })
+writeFileSync(process.argv[3], 'ready')
 process.stdin.resume()
 `
     )
@@ -175,16 +177,17 @@ process.stdin.resume()
     const started = startClient({
         serverId: 'test',
         config: {
-            command: [process.execPath, server, terminated],
+            command: [process.execPath, server, terminated, ready],
             extensions: ['.ts'],
             rootMarkers: [],
         },
         root,
         signal: controller.signal,
     })
-    setTimeout(() => controller.abort(), 50)
 
     try {
+        assert.equal(await waitForFile(ready), true)
+        controller.abort()
         await assert.rejects(started, /initialization aborted/)
         assert.equal(await waitForFile(terminated), true)
     } finally {

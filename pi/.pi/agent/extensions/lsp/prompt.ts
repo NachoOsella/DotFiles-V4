@@ -7,9 +7,8 @@ export const LSP_PROMPT_SNIPPET =
 export const LSP_PARAMETER_DESCRIPTIONS = {
     operation: 'Language-server operation to perform.',
     filePath:
-        'Absolute or workspace-relative existing file. For workspaceSymbols, use a representative file for the target language.',
-    line:
-        'Required for definition, references, hover, and implementation. 1-based editor line.',
+        'Absolute or workspace-relative existing file. One leading @ is normalized. For workspaceSymbols, use a representative file for the target language.',
+    line: 'Required for definition, references, hover, and implementation. 1-based editor line.',
     character:
         'Required for definition, references, hover, and implementation. 1-based UTF-16 editor column.',
     query: 'Required search text for workspaceSymbols.',
