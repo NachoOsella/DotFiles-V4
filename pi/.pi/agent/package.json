@@ -1,13 +1,35 @@
 {
+  "workspaces": [
+    "extensions/ask-user",
+    "extensions/background-terminals",
+    "extensions/codex-search",
+    "extensions/discord-activity",
+    "extensions/firecrawl-search",
+    "extensions/git-info",
+    "extensions/lsp",
+    "extensions/model-info",
+    "extensions/session-stats",
+    "extensions/subagents",
+    "extensions/todowrite",
+    "extensions/ui-customization"
+  ],
   "dependencies": {
     "@earendil-works/pi-ai": "^0.84.2",
     "@earendil-works/pi-coding-agent": "^0.84.2",
     "@earendil-works/pi-tui": "^0.84.2",
     "@effect/platform-node": "4.0.0-beta.98",
+    "@xhayper/discord-rpc": "^1.3.4",
     "acorn": "^8.17.0",
     "effect": "4.0.0-beta.98",
     "firecrawl": "^4.30.0",
-    "typebox": "^1.3.6"
+    "typebox": "^1.3.6",
+    "vscode-jsonrpc": "^8.2.1",
+    "vscode-languageserver-types": "^3.17.5"
+  },
+  "overrides": {
+    "effect": "4.0.0-beta.98",
+    "@effect/platform-node": "4.0.0-beta.98",
+    "@effect/platform": "4.0.0-beta.98"
   },
   "devDependencies": {
     "@types/node": "^26.1.1",

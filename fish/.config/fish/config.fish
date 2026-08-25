@@ -41,3 +41,4 @@ fish_add_path ~/.local/share/nvim/mason/bin
 
 # Added by Antigravity CLI installer
 set -gx PATH "/home/nacho/.local/bin" $PATH
+set -gx NODE_PATH /home/nacho/.pi/agent/node_modules $NODE_PATH

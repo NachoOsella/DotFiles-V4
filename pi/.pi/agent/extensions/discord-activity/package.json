@@ -14,8 +14,10 @@
       "./index.ts"
     ]
   },
+  "peerDependencies": {
+    "effect": "*"
+  },
   "dependencies": {
-    "@xhayper/discord-rpc": "^1.3.4",
-    "effect": "^4.0.0-beta.102"
+    "@xhayper/discord-rpc": "^1.3.4"
   }
 }

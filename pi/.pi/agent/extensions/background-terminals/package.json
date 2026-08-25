@@ -7,8 +7,8 @@
     "prepare": "effect-tsgo patch",
     "test": "node --test --experimental-strip-types manager.test.ts output.test.ts prompt.test.ts result-delivery.test.ts ps.test.ts"
   },
-  "dependencies": {
-    "effect": "^4.0.0-beta.99"
+  "peerDependencies": {
+    "effect": "*"
   },
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "^0.82.1",
