@@ -2,24 +2,37 @@
 
 <img src="assets/nothing.png" width="100%" alt="Hyprland desktop" style="border-radius: 10px; margin-bottom: 20px;">
 
-# Hyprland Dotfiles
+# Hyprland dotfiles
 
 [![Arch Linux](https://img.shields.io/badge/Arch_Linux-1793d1?style=for-the-badge&logo=arch-linux&logoColor=white)](https://archlinux.org/)
 [![Hyprland](https://img.shields.io/badge/Hyprland-00b4d8?style=for-the-badge&logo=hyprland&logoColor=white)](https://wiki.hyprland.org/)
 [![Neovim](https://img.shields.io/badge/Neovim-57a143?style=for-the-badge&logo=neovim&logoColor=white)](https://neovim.io/)
 [![Gruvbox](https://img.shields.io/badge/Gruvbox_Material-a89984?style=for-the-badge&logoColor=white)](https://github.com/sainnhe/gruvbox-material)
 
-<br/>
-
-**My personal Arch + Hyprland setup with warm Gruvbox colors, sharp rectangles and a keyboard-first workflow.**
-
-<br/>
+Arch + Hyprland the way I actually use it. Warm Gruvbox Material Hard, sharp rectangles, no animations I did not ask for, and everything reachable without leaving the keyboard.
 
 Kitty · Fish · Starship · Quickshell · Rofi · Neovim · Yazi · Fastfetch
 
 </div>
 
 ---
+
+## Stack
+
+I keep it simple. One tool per job, all tied together with Gruvbox Material Dark Hard.
+
+| Area | What I use |
+| --- | --- |
+| Window manager | Hyprland with Hyprlock, Hypridle and Hyprpaper |
+| Shell | Fish + Starship |
+| Terminal | Kitty |
+| Editor | Neovim on top of LazyVim |
+| Launcher | Rofi |
+| Bar and desktop widgets | Quickshell. Waybar config is still in the repo for reference |
+| File management | Yazi in the terminal, pcmanfm-qt for the rest |
+| System | PipeWire, NetworkManager with iwd, TLP, SDDM, Dunst, btop, Fastfetch, zathura, KeePassXC |
+
+Wallpapers live in `assets/wallpapers`. The Death Star one in the header is the default.
 
 ## Preview
 
@@ -44,130 +57,123 @@ Kitty · Fish · Starship · Quickshell · Rofi · Neovim · Yazi · Fastfetch
 
 ---
 
-## Before you install
+## Getting started
 
-> Warning
-> These are my personal Arch Linux + Hyprland dotfiles.
-> The full bootstrap can install packages, write system configuration under `/etc`,
-> link user configs with GNU Stow, and enable, disable, or mask systemd services.
-> Read the scripts and run `--dry-run` before applying the full setup.
+> [!WARNING]
+> These are my personal dotfiles. The full bootstrap can install packages, copy files to `/etc`, link configs with GNU Stow, and enable or mask systemd services. Skim the scripts first and run with `--dry-run` if you are not on my machine.
 
-This repository is best used as inspiration or as a starting point for your own setup.
-It is not intended to be a universal one-command installer for every machine.
+### Prerequisites
 
----
+- Arch Linux. The bootstrap assumes `pacman` and `yay`.
+- GNU Stow for the safe path. `sudo pacman -S stow`.
+- Git.
 
-## Install modes
+If you just want a few configs, you do not need Arch. Stow works on any distro.
 
-### Recommended for other users
-
-If you are not me, avoid running the full bootstrap first. Start with the smaller
-scripts so you can choose exactly what you want to apply:
+### 1. Clone
 
 ```bash
 git clone https://github.com/NachoOsella/DotFiles-V4.git ~/dotfiles
 cd ~/dotfiles
+```
 
-# Link all user configs only.
+### 2. Pick how far you want to go
+
+**A. Just the dotfiles. This is the safe default.**
+
+Best if you want to steal an app or two without touching your system.
+
+```bash
+# every user config in the repo
 ./scripts/install-user.sh
 
-# Or link only selected configs.
+# or pick what you need
 ./scripts/stow.sh install kitty nvim quickshell
-
-# Preview the full system bootstrap without applying changes.
-./scripts/bootstrap.sh --dry-run
-```
-
-The full `bootstrap.sh` is mainly for reproducing my own Arch + Hyprland system.
-For most users, installing selected Stow packages is the safer option.
-
-### Safe user config only
-
-Use this mode if you only want to link user-level dotfiles such as Hyprland, Kitty,
-Fish, Neovim, Quickshell, Rofi, Yazi, and related configs.
-
-```bash
-./scripts/install-user.sh
-```
-
-This mode does not install packages, does not write to `/etc`, and does not change
-systemd services.
-
-If you only want specific configs, install individual Stow packages instead of
-running the full user install:
-
-```bash
-./scripts/stow.sh install kitty nvim quickshell
-```
-
-You can list the available Stow packages with:
-
-```bash
 ./scripts/stow.sh list
 ```
 
-To preview what Stow would link before applying changes, run:
+Preview before you link:
 
 ```bash
 stow -n -v kitty nvim quickshell
 ```
 
-### Preview full Arch bootstrap
+This path never installs packages, never writes to `/etc`, and never touches services.
 
-Use dry-run mode before running the full bootstrap:
+**B. Full system bootstrap. Arch only, and mostly for me.**
+
+This reproduces my whole machine. Run a dry run first. It shows exactly what would change and asks for nothing.
 
 ```bash
 ./scripts/bootstrap.sh --dry-run
-```
-
-### Full Arch bootstrap
-
-Use this only on an Arch Linux machine where you want to reproduce my full system
-setup:
-
-```bash
 ./scripts/bootstrap.sh --yes
-```
-
-Then reboot:
-
-```bash
 reboot
 ```
 
-The full bootstrap installs packages, applies system configuration, links dotfiles,
-and enables the configured services. If you omit `--yes`, the script asks for an
-explicit confirmation before changing the system.
+Without `--yes`, the script asks you to type `bootstrap` by hand. That pause is on purpose.
 
----
+Useful flags:
 
-## What the full bootstrap can change
+```bash
+./scripts/bootstrap.sh --dry-run --skip-packages   # skip pacman and AUR
+./scripts/bootstrap.sh --skip-system               # skip files in /etc
+./scripts/bootstrap.sh --skip-services             # skip systemd changes
+./scripts/bootstrap.sh --host archlinux            # force a host overlay
+```
 
-- Installs official packages from `packages/pacman.txt` and host overlays.
-- Installs AUR packages from `packages/aur.txt` and host overlays.
-- Copies versioned system files from `system/etc` and `hosts/<host>/system/etc` to `/etc`.
-- Links user configuration with GNU Stow.
-- Enables system and user services declared under `hosts/<host>/services`.
-- Can disable and mask conflicting system units declared in host service manifests.
+> [!TIP]
+> Start small. Even on Arch, I recommend linking a couple of Stow packages first and living with them for a day before you run the full bootstrap.
 
----
+## How the repo is organized
 
-## What it sets up
+Everything is a Stow package. Each folder at the root maps to `~/.config` or similar.
 
-- Hyprland desktop with a dark vending-machine wallpaper.
-- Gruvbox Material Dark Hard theme across the terminal, launcher, editor and bar.
-- Quickshell with workspaces, media, network, audio, battery, memory, notifications and control-center popups.
-- Kitty + Fish + Starship for the terminal workflow.
-- Neovim and Yazi side by side for coding and file navigation.
-- Rofi launcher styled to match the rest of the desktop.
-- Fastfetch for a clean system overview.
+```
+dotfiles/
+├── assets/               # screenshots and wallpapers
+├── hypr/                 # Hyprland, Hyprlock, Hypridle, Hyprpaper, keybinds in hypr/binds.lua
+├── quickshell/           # bar, control center, media, network, notifications, OSD
+├── kitty/ fish/ starship/# terminal stack
+├── nvim/                 # LazyVim setup, plugins in lua/plugins/
+├── rofi/                 # launcher, powermenu, wifi, clipboard and emoji menus
+├── yazi/ btop/ fastfetch/ lsd/ zathura/ waybar/ dunst/ gtk/ qt/ ...
+├── packages/
+│   ├── pacman.txt        # 128 official packages
+│   └── aur.txt           # AUR helpers and extras
+├── hosts/archlinux/      # per-host overlays for packages, /etc and services
+├── system/etc/           # versioned system config copied to /etc by bootstrap
+└── scripts/
+    ├── bootstrap.sh      # full setup. packages + system + stow + services
+    ├── install-user.sh   # safe alias for stow.sh install
+    ├── stow.sh           # conflict-aware wrapper around GNU Stow
+    ├── install-packages.sh / apply-system.sh / enable-services.sh
+    └── preflight.sh / check.sh
+```
 
----
+Host-specific things live under `hosts/<host>`. If your hostname matches, the scripts layer those files on top of the defaults.
 
-<div align="center">
+## What the bootstrap does when you let it
 
-[![License](https://img.shields.io/github/license/NachoOsella/DotFiles-V4?style=flat-square)](LICENSE)
+No surprises. Each step is a separate script you can run on its own.
 
-Made by <a href="https://github.com/NachoOsella">Nacho</a>
+- Installs packages from `packages/pacman.txt` and `packages/aur.txt`, plus any `hosts/<host>/packages` overlay.
+- Copies system config from `system/etc` and `hosts/<host>/system/etc` into `/etc`. That covers NetworkManager with iwd, TLP, and a few defaults.
+- Links user configs with GNU Stow. It checks for conflicts first and will not overwrite your files silently.
+- Enables services listed in `hosts/<host>/services/system.txt` and `user.txt`, and masks anything in `system-disable.txt`. On this host that means bluetooth, docker, NetworkManager, sddm, tlp and a few timers for user services like pipewire and wireplumber.
 
-</div>
+Prefer the smaller scripts when you only want part of it:
+
+```bash
+./scripts/preflight.sh --dry-run
+./scripts/install-packages.sh --dry-run
+./scripts/apply-system.sh --dry-run
+./scripts/enable-services.sh --dry-run
+```
+
+## A few notes
+
+I use this setup every day, so I optimize for speed over novelty. Super + Return opens Kitty. Super + D opens Rofi. Super + h j k l moves focus, add Shift to move windows, add Ctrl to resize. Workspaces are Super + 1..0. The rest is in `hypr/.config/hypr/hypr/binds.lua`.
+
+If something looks off after stowing, run `stow -R` on that package or `scripts/check.sh` to see what the bootstrap expects.
+
+Steal what you like, ignore the rest. If you fork it, make it yours. That is the whole point of dotfiles.
