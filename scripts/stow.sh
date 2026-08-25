@@ -168,6 +168,38 @@ stow_pkg() {
 	fi
 }
 
+ensure_pi_deps() {
+	local pi_dir="${DOTFILES_DIR}/pi/.pi/agent"
+	local pi_home="${HOME}/.pi/agent"
+	# Only if pi package was part of this operation
+	if [[ ! -f "${pi_dir}/package.json" ]]; then
+		return 0
+	fi
+	# Ensure home symlink for shared node_modules (universal, no env needed)
+	if [[ -d "${pi_dir}/node_modules" && ! -e "${pi_home}/node_modules" ]]; then
+		mkdir -p "$(dirname "${pi_home}/node_modules")"
+		ln -s "${pi_dir}/node_modules" "${pi_home}/node_modules" 2>/dev/null || true
+	fi
+	# Install if missing (fresh clone)
+	if [[ ! -d "${pi_dir}/node_modules" ]]; then
+		if ! command -v npm >/dev/null 2>&1; then
+			printf "${YELLOW}${ICON_WARN}${RESET}  %-30s ${DIM}npm not found, skipping pi deps${RESET}\n" "pi-deps"
+			return 0
+		fi
+		printf "${BLUE}${ICON_PKG}${RESET}  %-30s" "pi-deps"
+		if (cd "${pi_dir}" && npm install --ignore-scripts >/tmp/pi-npm-install.log 2>&1); then
+			printf "${GREEN}${ICON_OK}${RESET}\n"
+			# Ensure symlink after install
+			if [[ ! -e "${pi_home}/node_modules" ]]; then
+				ln -s "${pi_dir}/node_modules" "${pi_home}/node_modules" 2>/dev/null || true
+			fi
+		else
+			printf "${RED}${ICON_FAIL}${RESET}\n"
+			echo -e "${RED}pi npm install failed — see /tmp/pi-npm-install.log${RESET}"
+		fi
+	fi
+}
+
 cmd_install() {
 	local targets=("$@")
 	if [[ ${#targets[@]} -eq 0 ]]; then
@@ -179,6 +211,11 @@ cmd_install() {
 	for pkg in "${targets[@]}"; do
 		stow_pkg "$pkg" ""
 	done
+
+	# Auto-install pi deps on fresh clone (universal, no shell env needed)
+	if [[ " ${targets[*]} " == *" pi "* ]] || [[ ${#targets[@]} -eq ${#PACKAGES[@]} ]]; then
+		ensure_pi_deps
+	fi
 }
 
 cmd_remove() {
@@ -206,6 +243,10 @@ cmd_restow() {
 	for pkg in "${targets[@]}"; do
 		stow_pkg "$pkg" "-R"
 	done
+
+	if [[ " ${targets[*]} " == *" pi "* ]] || [[ ${#targets[@]} -eq ${#PACKAGES[@]} ]]; then
+		ensure_pi_deps
+	fi
 }
 
 cmd_status() {
