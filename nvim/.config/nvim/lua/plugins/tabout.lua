@@ -7,8 +7,9 @@ return {
     },
     config = function()
         require("tabout").setup {
-            tabkey = "<Tab>",
-            backwards_tabkey = "<S-Tab>",
+            -- Changed from <M-Tab> because Hyprland uses ALT+Tab for window cycling (hypr/hypr/binds.lua)
+            tabkey = "<M-o>",
+            backwards_tabkey = "<M-S-o>",
             act_as_tab = true,
             act_as_shift_tab = false,
             enable_backwards = true,

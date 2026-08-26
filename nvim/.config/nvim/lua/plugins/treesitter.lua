@@ -19,7 +19,6 @@ return {
             "typescript",
             "angular",
             "yaml",
-            "go",
         },
         incremental_selection = {
             enable = true,

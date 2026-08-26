@@ -8,6 +8,7 @@ return {
             "prettier",
             "prettierd",
             "typescript-language-server",
+            "angular-language-server", -- Angular uses the same TS stack, kept here for treesitter angular
             "eslint-lsp",
             "eslint_d",
             "json-lsp",
@@ -16,6 +17,7 @@ return {
             "docker-compose-language-service",
             "ruff",
             "pyright",
+            -- go removed: not used in this setup
         },
     },
 }

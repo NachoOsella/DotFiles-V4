@@ -66,6 +66,15 @@ vim.api.nvim_create_autocmd("VimEnter", {
 })
 vim.defer_fn(sync_neotree_highlights, 0)
 
+-- Disable auto-comment on Enter / o / O
+local format_group = vim.api.nvim_create_augroup("user_format_options", { clear = true })
+vim.api.nvim_create_autocmd("FileType", {
+    group = format_group,
+    callback = function()
+        vim.opt_local.formatoptions:remove({ "c", "r", "o" })
+    end,
+})
+
 local terminal_group = vim.api.nvim_create_augroup("user_terminal_cleanup", { clear = true })
 vim.api.nvim_create_autocmd("QuitPre", {
     group = terminal_group,
