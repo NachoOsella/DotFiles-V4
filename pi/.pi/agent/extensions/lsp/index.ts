@@ -18,6 +18,29 @@ import { LSP_INFO_CHANNEL } from '../shared/dashboard-state.ts'
 const TOOL_NAME = 'lsp'
 const EDIT_TOOLS = new Set(['edit', 'write'])
 
+// Process-wide singleton: parent + all subagent sessions share the same
+// underlying LspRuntime / language-server processes for the same
+// workspace+config. Without this, each child AgentSession would spawn its
+// own tsserver (7x RAM).
+const globalLifecycles = new Map<string, ReturnType<typeof createRuntimeLifecycle<LspRuntime>>>()
+const globalRefCounts = new Map<string, number>()
+
+function lifecycleKey(cwd: string, config: LspConfig): string {
+    // resolve() canonicalizes the workspace; config hash keeps different
+    // trust/settings from sharing a runtime incorrectly.
+    return `${resolve(cwd)}::${JSON.stringify({ enabled: config.enabled, idleTimeoutMs: config.idleTimeoutMs, servers: config.servers })}`
+}
+
+function getGlobalLifecycle(cwd: string, config: LspConfig) {
+    const key = lifecycleKey(cwd, config)
+    let lc = globalLifecycles.get(key)
+    if (!lc) {
+        lc = createRuntimeLifecycle(createRuntime)
+        globalLifecycles.set(key, lc)
+    }
+    return { lc, key }
+}
+
 interface DisposableRuntime {
     dispose(): Promise<void>
 }
@@ -79,7 +102,7 @@ export function normalizeLspArguments(
 export default function lspExtension(pi: ExtensionAPI) {
     let loaded: LoadedConfig | undefined
     let cwd = process.cwd()
-    const runtimeLifecycle = createRuntimeLifecycle(createRuntime)
+    let currentKey: string | undefined
     const warmWork = new Set<Promise<unknown>>()
     const warmControllers = new Set<AbortController>()
 
@@ -88,7 +111,17 @@ export default function lspExtension(pi: ExtensionAPI) {
             cwd = nextCwd
             loaded = loadConfig(cwd, trusted)
         }
-        return runtimeLifecycle.get(cwd, loaded.config)
+        const { lc, key } = getGlobalLifecycle(cwd, loaded.config)
+        if (currentKey !== key) {
+            if (currentKey) {
+                const prev = globalRefCounts.get(currentKey) ?? 0
+                if (prev <= 1) globalRefCounts.delete(currentKey)
+                else globalRefCounts.set(currentKey, prev - 1)
+            }
+            globalRefCounts.set(key, (globalRefCounts.get(key) ?? 0) + 1)
+            currentKey = key
+        }
+        return lc.get(cwd, loaded.config)
     }
 
     const stopWarmWork = async () => {
@@ -98,7 +131,6 @@ export default function lspExtension(pi: ExtensionAPI) {
 
     pi.on('session_start', async (_event, ctx) => {
         await stopWarmWork()
-        await runtimeLifecycle.dispose()
         cwd = ctx.cwd
         loaded = loadConfig(ctx.cwd, ctx.isProjectTrusted())
         if (ctx.hasUI) ctx.ui.setStatus('lsp', undefined)
@@ -107,7 +139,15 @@ export default function lspExtension(pi: ExtensionAPI) {
 
     pi.on('session_shutdown', async (_event, ctx) => {
         await stopWarmWork()
-        await runtimeLifecycle.dispose()
+        if (currentKey) {
+            const cnt = globalRefCounts.get(currentKey) ?? 0
+            if (cnt <= 1) globalRefCounts.delete(currentKey)
+            else globalRefCounts.set(currentKey, cnt - 1)
+            // Keep the global lifecycle alive for reuse; the underlying
+            // LspService will idle-timeout its clients. Full disposal
+            // happens on process exit.
+            currentKey = undefined
+        }
         if (ctx.hasUI) ctx.ui.setStatus('lsp', undefined)
     })
 

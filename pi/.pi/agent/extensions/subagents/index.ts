@@ -4,7 +4,8 @@
  * Tools (for the parent LLM):
  * - subagent_spawn: fire-and-forget spawn (prompt, title, working_dir, model,
  *   reasoning_effort). Max 8 running at once.
- * - subagent_wait: block until the listed subagents settle, return results.
+ * - subagent_send: steer or queue a concise child instruction.
+ * - subagent_wait: wait for children or mailbox activity.
  * - subagent_cancel: stop one or more running subagents.
  * - subagent_check: peek at a subagent's status and recent activity.
  * - subagent_list: list all subagents.
@@ -17,88 +18,89 @@
  * against one shared ManagedRuntime.
  */
 
-import * as fs from "node:fs";
-import * as path from "node:path";
-import { StringEnum } from "@earendil-works/pi-ai";
+import * as fs from 'node:fs'
+import * as path from 'node:path'
+import { StringEnum } from '@earendil-works/pi-ai'
 import type {
-  ExtensionAPI,
-  ExtensionContext,
-  ExtensionUIContext,
-} from "@earendil-works/pi-coding-agent";
+    ExtensionAPI,
+    ExtensionUIContext,
+} from '@earendil-works/pi-coding-agent'
 import {
-  DEFAULT_MAX_BYTES,
-  DEFAULT_MAX_LINES,
-  formatSize,
-  getAgentDir,
-  getMarkdownTheme,
-  ProjectTrustStore,
-  truncateHead,
-} from "@earendil-works/pi-coding-agent";
-import { Markdown, Text } from "@earendil-works/pi-tui";
-import { Type } from "typebox";
+    DEFAULT_MAX_BYTES,
+    DEFAULT_MAX_LINES,
+    formatSize,
+    getAgentDir,
+    getMarkdownTheme,
+    ProjectTrustStore,
+    truncateHead,
+} from '@earendil-works/pi-coding-agent'
+import { Markdown, Text } from '@earendil-works/pi-tui'
+import { Type } from 'typebox'
 import {
-  formatElapsed,
-  formatModelWithThinking,
-  latestText,
-  REASONING_EFFORTS,
-  type SubagentSnapshot,
-} from "./src/domain.ts";
+    formatElapsed,
+    formatModelWithThinking,
+    latestText,
+    REASONING_EFFORTS,
+    type SubagentSnapshot,
+} from './src/domain.ts'
+import { formatActivityStatus, formatContextUtilization } from './src/format.ts'
+import { SubagentManager, type SubagentManagerShape } from './src/manager.ts'
+import type { AgentEnvelope } from './src/mailbox.ts'
+import { AGENT_ROLE_NAMES } from './src/roles.ts'
 import {
-  formatActivityStatus,
-  formatContextUtilization,
-} from "./src/format.ts";
-import { SubagentManager, type SubagentManagerShape } from "./src/manager.ts";
+    buildMailboxMessage,
+    buildSubagentSpawnResult,
+    SUBAGENT_CANCEL_PARAMETER_DESCRIPTIONS,
+    SUBAGENT_CANCEL_TOOL_DESCRIPTION,
+    SUBAGENT_CHECK_PARAMETER_DESCRIPTIONS,
+    SUBAGENT_CHECK_TOOL_DESCRIPTION,
+    SUBAGENT_LIST_TOOL_DESCRIPTION,
+    SUBAGENT_SEND_PARAMETER_DESCRIPTIONS,
+    SUBAGENT_SEND_TOOL_DESCRIPTION,
+    SUBAGENT_SPAWN_PARAMETER_DESCRIPTIONS,
+    SUBAGENT_SPAWN_PROMPT_GUIDELINES,
+    SUBAGENT_SPAWN_PROMPT_SNIPPET,
+    SUBAGENT_SPAWN_TOOL_DESCRIPTION,
+    SUBAGENT_WAIT_PARAMETER_DESCRIPTIONS,
+    SUBAGENT_WAIT_TOOL_DESCRIPTION,
+} from './src/prompt.ts'
 import {
-  buildSubagentResultMessage,
-  buildSubagentSpawnResult,
-  SUBAGENT_CANCEL_PARAMETER_DESCRIPTIONS,
-  SUBAGENT_CANCEL_TOOL_DESCRIPTION,
-  SUBAGENT_CHECK_PARAMETER_DESCRIPTIONS,
-  SUBAGENT_CHECK_TOOL_DESCRIPTION,
-  SUBAGENT_LIST_TOOL_DESCRIPTION,
-  SUBAGENT_SPAWN_PARAMETER_DESCRIPTIONS,
-  SUBAGENT_SPAWN_PROMPT_GUIDELINES,
-  SUBAGENT_SPAWN_PROMPT_SNIPPET,
-  SUBAGENT_SPAWN_TOOL_DESCRIPTION,
-  SUBAGENT_WAIT_PARAMETER_DESCRIPTIONS,
-  SUBAGENT_WAIT_TOOL_DESCRIPTION,
-} from "./src/prompt.ts";
-import { createDeferredResultDelivery } from "./src/result-delivery.ts";
-import {
-  createSubagentRuntime,
-  runTool,
-  type SubagentRuntime,
-} from "./src/runtime.ts";
-import { openSubagentPicker } from "./src/ui/takeover.ts";
+    createSubagentRuntime,
+    runTool,
+    type SubagentRuntime,
+} from './src/runtime.ts'
+import { openSubagentPicker } from './src/ui/takeover.ts'
 
-const SUBAGENT_OUTPUT_MAX_BYTES = 24 * 1024;
-const WAIT_OUTPUT_MAX_BYTES = 48 * 1024;
-const WAIT_PER_AGENT_MAX_BYTES = 16 * 1024;
+const SUBAGENT_OUTPUT_MAX_BYTES = 8 * 1024
+const WAIT_OUTPUT_MAX_BYTES = 32 * 1024
+const WAIT_PER_AGENT_MAX_BYTES = 8 * 1024
+const CHECK_PREVIEW_MAX_BYTES = 1024
+const DELIVERY_BATCH_MS = 100
 
 function describeSubagent(snap: SubagentSnapshot) {
-  const details = [
-    `${snap.backend}: ${formatModelWithThinking(snap.meta)}`,
-    formatContextUtilization(snap.usage),
-    formatElapsed(snap),
-    snap.cwd,
-  ].filter(Boolean);
-  return `${snap.id} [${snap.status}] "${snap.title}" (${details.join(", ")})`;
+    const details = [
+        `${snap.backend}: ${formatModelWithThinking(snap.meta)}`,
+        formatContextUtilization(snap.usage),
+        formatElapsed(snap),
+        snap.cwd,
+    ].filter(Boolean)
+    return `${snap.id} [${snap.status}] ${snap.taskName ?? snap.title} (${snap.role ?? 'default'}; ${details.join(', ')})`
 }
 
 function truncatedOutput(
-  snap: SubagentSnapshot,
-  maxBytes = SUBAGENT_OUTPUT_MAX_BYTES,
+    snap: SubagentSnapshot,
+    maxBytes = SUBAGENT_OUTPUT_MAX_BYTES
 ): string {
-  const output = snap.finalText || "(no output)";
-  const truncation = truncateHead(output, {
-    maxBytes: Math.min(maxBytes, DEFAULT_MAX_BYTES),
-    maxLines: Math.min(600, DEFAULT_MAX_LINES),
-  });
-  let text = truncation.content;
-  if (truncation.truncated) {
-    text += `\n\n[Output truncated: ${formatSize(truncation.outputBytes)} of ${formatSize(truncation.totalBytes)} shown. Full transcript in session file: ${snap.meta.sessionFilePath ?? "?"}]`;
-  }
-  return text;
+    const output = snap.finalText || '(no output)'
+    const truncation = truncateHead(output, {
+        maxBytes: Math.min(maxBytes, DEFAULT_MAX_BYTES),
+        maxLines: Math.min(600, DEFAULT_MAX_LINES),
+    })
+    let text = truncation.content
+    if (truncation.truncated) {
+        text += `\n\n[Output truncated: ${formatSize(truncation.outputBytes)} of ${formatSize(truncation.totalBytes)} shown. Full transcript in session file: ${snap.meta.sessionFilePath ?? '?'}]`
+    }
+    return text
 }
 
 /**
@@ -107,472 +109,564 @@ function truncatedOutput(
  * containing directory); unreadable/invalid trust data fails closed.
  */
 function resolveChildProjectTrust(options: {
-  parentCwd: string;
-  childCwd: string;
-  parentTrusted: boolean;
+    parentCwd: string
+    childCwd: string
+    parentTrusted: boolean
 }) {
-  if (path.resolve(options.childCwd) === path.resolve(options.parentCwd)) {
-    return options.parentTrusted;
-  }
-  try {
-    const trustStore = new ProjectTrustStore(getAgentDir());
-    return trustStore.get(options.childCwd) === true;
-  } catch {
-    return false;
-  }
+    if (path.resolve(options.childCwd) === path.resolve(options.parentCwd)) {
+        return options.parentTrusted
+    }
+    try {
+        const trustStore = new ProjectTrustStore(getAgentDir())
+        return trustStore.get(options.childCwd) === true
+    } catch {
+        return false
+    }
 }
 
 export default function (pi: ExtensionAPI) {
-  let runtime: SubagentRuntime | undefined;
-  let managerPromise: Promise<SubagentManagerShape> | undefined;
-  let sessionContext: ExtensionContext | undefined;
-  let ui: ExtensionUIContext | undefined;
-  let unsubStatus: (() => void) | undefined;
-  const resultDelivery = createDeferredResultDelivery<SubagentSnapshot>();
+    let runtime: SubagentRuntime | undefined
+    let managerPromise: Promise<SubagentManagerShape> | undefined
+    let ui: ExtensionUIContext | undefined
+    let unsubStatus: (() => void) | undefined
+    let deliveryTimer: ReturnType<typeof setTimeout> | undefined
 
-  const getRuntime = () => (runtime ??= createSubagentRuntime());
+    const getRuntime = () => (runtime ??= createSubagentRuntime())
 
-  /** Resolve the manager service once per runtime and wire the extension hooks. */
-  const getManager = () => {
-    managerPromise ??= getRuntime()
-      .runPromise(SubagentManager)
-      .then((manager) => {
-        manager.view.setOnSettled(onSettled);
-        unsubStatus?.();
-        unsubStatus = manager.view.subscribe(() => updateStatus(manager));
-        updateStatus(manager);
-        return manager;
-      });
-    return managerPromise;
-  };
-
-  const updateStatus = (manager: SubagentManagerShape) => {
-    if (!ui) return;
-    const subs = manager.view.list();
-    if (subs.length === 0) {
-      ui.setStatus("subagents", undefined);
-      return;
+    /** Resolve the manager service once per runtime and wire the extension hooks. */
+    const getManager = () => {
+        managerPromise ??= getRuntime()
+            .runPromise(SubagentManager)
+            .then((manager) => {
+                manager.setOnMailbox(onMailbox)
+                unsubStatus?.()
+                unsubStatus = manager.view.subscribe(() =>
+                    updateStatus(manager)
+                )
+                updateStatus(manager)
+                return manager
+            })
+        return managerPromise
     }
-    const running = subs.filter((snap) => snap.status === "running").length;
-    const failed = subs.filter((snap) => snap.status === "error").length;
-    const done = subs.length - running - failed;
-    ui.setStatus(
-      "subagents",
-      formatActivityStatus(ui.theme, { running, done, failed }),
-    );
-  };
 
-  const deliverResult = (snap: SubagentSnapshot) => {
-    pi.sendMessage(
-      {
-        customType: "subagent-result",
-        content: buildSubagentResultMessage({
-          id: snap.id,
-          title: snap.title,
-          status: snap.status,
-          errorText: snap.errorText,
-          output: truncatedOutput(snap),
-        }),
-        display: true,
-        details: { id: snap.id, title: snap.title, status: snap.status },
-      },
-      { deliverAs: "followUp", triggerTurn: true },
-    );
-  };
-
-  const flushResults = () => {
-    for (const snap of resultDelivery.drain()) deliverResult(snap);
-  };
-
-  const onSettled = (snap: SubagentSnapshot, consumed: boolean) => {
-    if (consumed) {
-      resultDelivery.consume([snap.id]);
-      return;
+    const updateStatus = (manager: SubagentManagerShape) => {
+        if (!ui) return
+        const subs = manager.view.list()
+        if (subs.length === 0) {
+            ui.setStatus('subagents', undefined)
+            return
+        }
+        const running = subs.filter((snap) => snap.status === 'running').length
+        const failed = subs.filter((snap) => snap.status === 'error').length
+        const done = subs.length - running - failed
+        ui.setStatus(
+            'subagents',
+            formatActivityStatus(ui.theme, { running, done, failed })
+        )
     }
-    // Keep the result retractable while the parent is working. A later
-    // subagent_wait can consume it before agent_settled flushes follow-ups.
-    // Defer a copy: the live snapshot keeps mutating if the subagent is
-    // restarted before the deferred result flushes.
-    resultDelivery.defer({ ...snap, meta: { ...snap.meta } });
-    if (sessionContext?.isIdle()) flushResults();
-  };
 
-  pi.on("session_start", (_event, ctx) => {
-    sessionContext = ctx;
-    if (ctx.hasUI) ui = ctx.ui;
-  });
+    const deliverMailbox = (
+        manager: SubagentManagerShape,
+        sequences?: number[]
+    ) => {
+        const events = manager.drainMailbox({ sequences })
+        if (events.length === 0) return
+        pi.sendMessage(
+            {
+                customType: 'subagent-result',
+                content: buildMailboxMessage(events),
+                display: true,
+                details: { events },
+            },
+            {
+                deliverAs: 'steer',
+                triggerTurn: true,
+            }
+        )
+    }
 
-  pi.on("agent_settled", flushResults);
+    const flushMailbox = () => {
+        deliveryTimer = undefined
+        void getManager().then((manager) => deliverMailbox(manager))
+    }
 
-  pi.on("session_shutdown", async () => {
-    sessionContext = undefined;
-    resultDelivery.clear();
-    unsubStatus?.();
-    unsubStatus = undefined;
-    ui?.setStatus("subagents", undefined);
-    const closing = runtime;
-    runtime = undefined;
-    managerPromise = undefined;
-    // Disposing the runtime runs the manager finalizer, which tears down all
-    // subagent scopes (and, later, their real child processes).
-    await closing?.dispose();
-  });
+    const scheduleMailboxDelivery = () => {
+        if (deliveryTimer) return
+        deliveryTimer = setTimeout(flushMailbox, DELIVERY_BATCH_MS)
+    }
 
-  // --- Tools -------------------------------------------------------------
+    const onMailbox = (envelope: AgentEnvelope) => {
+        void getManager().then((manager) => {
+            if (envelope.kind === 'question') {
+                deliverMailbox(manager, [envelope.sequence])
+                return
+            }
+            scheduleMailboxDelivery()
+        })
+    }
 
-  pi.registerTool({
-    name: "subagent_spawn",
-    label: "Spawn Subagent",
-    description: SUBAGENT_SPAWN_TOOL_DESCRIPTION,
-    promptSnippet: SUBAGENT_SPAWN_PROMPT_SNIPPET,
-    promptGuidelines: SUBAGENT_SPAWN_PROMPT_GUIDELINES,
-    parameters: Type.Object({
-      prompt: Type.String({
-        description: SUBAGENT_SPAWN_PARAMETER_DESCRIPTIONS.prompt,
-      }),
-      name: Type.String({
-        description: SUBAGENT_SPAWN_PARAMETER_DESCRIPTIONS.name,
-      }),
-      working_dir: Type.Optional(
-        Type.String({
-          description: SUBAGENT_SPAWN_PARAMETER_DESCRIPTIONS.workingDir,
-        }),
-      ),
-      model: Type.Optional(
-        Type.String({
-          description: SUBAGENT_SPAWN_PARAMETER_DESCRIPTIONS.model,
-        }),
-      ),
-      reasoning_effort: Type.Optional(
-        StringEnum(REASONING_EFFORTS, {
-          description: SUBAGENT_SPAWN_PARAMETER_DESCRIPTIONS.reasoningEffort,
-        }),
-      ),
-    }),
-    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      const manager = await getManager();
-      const cwd = path.resolve(ctx.cwd, params.working_dir ?? ".");
-      if (!fs.existsSync(cwd) || !fs.statSync(cwd).isDirectory()) {
-        throw new Error(`working_dir is not a directory: ${cwd}`);
-      }
+    pi.on('session_start', (_event, ctx) => {
+        if (ctx.hasUI) ui = ctx.ui
+    })
 
-      const title = params.name.trim().slice(0, 160) || "subagent";
-      const snap = await runTool(
-        getRuntime(),
-        manager.spawn("pi", {
-          prompt: params.prompt,
-          title,
-          cwd,
-          model: params.model,
-          reasoningEffort: params.reasoning_effort,
-          parent: {
-            parentCwd: ctx.cwd,
-            parentSession: ctx.sessionManager.getSessionFile(),
-            projectTrusted: resolveChildProjectTrust({
-              parentCwd: ctx.cwd,
-              childCwd: cwd,
-              parentTrusted: ctx.isProjectTrusted(),
+    pi.on('session_shutdown', async () => {
+        if (deliveryTimer) clearTimeout(deliveryTimer)
+        deliveryTimer = undefined
+        unsubStatus?.()
+        unsubStatus = undefined
+        ui?.setStatus('subagents', undefined)
+        const closing = runtime
+        runtime = undefined
+        managerPromise = undefined
+        // Disposing the runtime runs the manager finalizer, which tears down all
+        // subagent scopes (and, later, their real child processes).
+        await closing?.dispose()
+    })
+
+    // --- Tools -------------------------------------------------------------
+
+    pi.registerTool({
+        name: 'subagent_spawn',
+        label: 'Spawn Subagent',
+        description: SUBAGENT_SPAWN_TOOL_DESCRIPTION,
+        promptSnippet: SUBAGENT_SPAWN_PROMPT_SNIPPET,
+        promptGuidelines: SUBAGENT_SPAWN_PROMPT_GUIDELINES,
+        parameters: Type.Object({
+            prompt: Type.String({
+                description: SUBAGENT_SPAWN_PARAMETER_DESCRIPTIONS.prompt,
             }),
-            inheritedModel: ctx.model
-              ? { provider: ctx.model.provider, id: ctx.model.id }
-              : undefined,
-            inheritedThinkingLevel: pi.getThinkingLevel(),
-            modelRegistry: ctx.modelRegistry,
-          },
-        }),
-      );
-
-      return {
-        content: [
-          {
-            type: "text",
-            text: buildSubagentSpawnResult({
-              id: snap.id,
-              title: snap.title,
-              modelLabel: formatModelWithThinking(snap.meta),
-              prompt: params.prompt,
+            name: Type.String({
+                description: SUBAGENT_SPAWN_PARAMETER_DESCRIPTIONS.name,
             }),
-          },
-        ],
-        details: {
-          id: snap.id,
-          title: snap.title,
-          cwd,
-          model: formatModelWithThinking(snap.meta),
-        },
-      };
-    },
-  });
-
-  pi.registerTool({
-    name: "subagent_wait",
-    label: "Wait for Subagents",
-    description: SUBAGENT_WAIT_TOOL_DESCRIPTION,
-    parameters: Type.Object({
-      ids: Type.Array(Type.String(), {
-        maxItems: 64,
-        description: SUBAGENT_WAIT_PARAMETER_DESCRIPTIONS.ids,
-      }),
-    }),
-    async execute(_toolCallId, params, signal, onUpdate) {
-      const manager = await getManager();
-      const ids = [...new Set(params.ids)];
-      if (ids.length === 0)
-        throw new Error("Provide at least one subagent id.");
-      const known = manager.view.list().map((snap) => snap.id);
-      const unknown = ids.filter((id) => !manager.view.get(id));
-      if (unknown.length > 0) {
-        throw new Error(
-          `Unknown subagent id(s): ${unknown.join(", ")}. Known: ${known.join(", ") || "none"}.`,
-        );
-      }
-
-      await runTool(
-        getRuntime(),
-        manager.waitFor(ids, (pending) => {
-          onUpdate?.({
-            content: [
-              { type: "text", text: `Waiting for ${pending.join(", ")}...` },
-            ],
-            details: { pending },
-          });
+            task_name: Type.Optional(
+                Type.String({
+                    description: SUBAGENT_SPAWN_PARAMETER_DESCRIPTIONS.taskName,
+                })
+            ),
+            agent_type: Type.Optional(
+                StringEnum(AGENT_ROLE_NAMES, {
+                    description:
+                        SUBAGENT_SPAWN_PARAMETER_DESCRIPTIONS.agentType,
+                })
+            ),
+            working_dir: Type.Optional(
+                Type.String({
+                    description:
+                        SUBAGENT_SPAWN_PARAMETER_DESCRIPTIONS.workingDir,
+                })
+            ),
+            model: Type.Optional(
+                Type.String({
+                    description: SUBAGENT_SPAWN_PARAMETER_DESCRIPTIONS.model,
+                })
+            ),
+            reasoning_effort: Type.Optional(
+                StringEnum(REASONING_EFFORTS, {
+                    description:
+                        SUBAGENT_SPAWN_PARAMETER_DESCRIPTIONS.reasoningEffort,
+                })
+            ),
         }),
-        { signal, interruptMessage: "Wait aborted. Subagents keep running." },
-      );
+        async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+            const manager = await getManager()
+            const cwd = path.resolve(ctx.cwd, params.working_dir ?? '.')
+            if (!fs.existsSync(cwd) || !fs.statSync(cwd).isDirectory()) {
+                throw new Error(`working_dir is not a directory: ${cwd}`)
+            }
 
-      // Settlement may have happened before this wait began. Remove any
-      // deferred automatic delivery now that the tool is returning the result.
-      resultDelivery.consume(ids);
+            const title = params.name.trim().slice(0, 160) || 'subagent'
+            const snap = await runTool(
+                getRuntime(),
+                manager.spawn('pi', {
+                    prompt: params.prompt,
+                    title,
+                    taskName: params.task_name,
+                    role: params.agent_type,
+                    cwd,
+                    model: params.model,
+                    reasoningEffort: params.reasoning_effort,
+                    parent: {
+                        parentCwd: ctx.cwd,
+                        parentSession: ctx.sessionManager.getSessionFile(),
+                        projectTrusted: resolveChildProjectTrust({
+                            parentCwd: ctx.cwd,
+                            childCwd: cwd,
+                            parentTrusted: ctx.isProjectTrusted(),
+                        }),
+                        inheritedModel: ctx.model
+                            ? { provider: ctx.model.provider, id: ctx.model.id }
+                            : undefined,
+                        inheritedThinkingLevel: pi.getThinkingLevel(),
+                        modelRegistry: ctx.modelRegistry,
+                    },
+                })
+            )
 
-      const sections: string[] = [];
-      let remainingBytes = WAIT_OUTPUT_MAX_BYTES;
-      for (const id of ids) {
-        const snap = manager.view.get(id);
-        if (!snap) {
-          sections.push(`## ${id}\n\n(no longer tracked)`);
-          continue;
+            return {
+                content: [
+                    {
+                        type: 'text',
+                        text: buildSubagentSpawnResult({
+                            id: snap.id,
+                            taskName: snap.taskName ?? snap.title,
+                            role: snap.role ?? 'default',
+                            modelLabel: formatModelWithThinking(snap.meta),
+                        }),
+                    },
+                ],
+                details: {
+                    id: snap.id,
+                    taskName: snap.taskName,
+                    role: snap.role,
+                    cwd,
+                    model: formatModelWithThinking(snap.meta),
+                },
+            }
+        },
+    })
+
+    pi.registerTool({
+        name: 'subagent_wait',
+        label: 'Wait for Subagents',
+        description: SUBAGENT_WAIT_TOOL_DESCRIPTION,
+        parameters: Type.Object({
+            ids: Type.Optional(
+                Type.Array(Type.String(), {
+                    maxItems: 64,
+                    description: SUBAGENT_WAIT_PARAMETER_DESCRIPTIONS.ids,
+                })
+            ),
+            timeout_ms: Type.Optional(
+                Type.Integer({
+                    minimum: 0,
+                    description: SUBAGENT_WAIT_PARAMETER_DESCRIPTIONS.timeoutMs,
+                })
+            ),
+            after_sequence: Type.Optional(
+                Type.Integer({
+                    minimum: 0,
+                    description:
+                        SUBAGENT_WAIT_PARAMETER_DESCRIPTIONS.afterSequence,
+                })
+            ),
+        }),
+        async execute(_toolCallId, params, signal, onUpdate) {
+            const manager = await getManager()
+            const ids = [...new Set(params.ids ?? [])]
+            if (ids.length === 0) {
+                const result = await runTool(
+                    getRuntime(),
+                    manager.waitForMailbox({
+                        timeoutMs: params.timeout_ms,
+                        afterSequence: params.after_sequence,
+                    }),
+                    { signal, interruptMessage: 'Mailbox wait aborted.' }
+                )
+                return {
+                    content: [
+                        {
+                            type: 'text',
+                            text:
+                                result.events.length > 0
+                                    ? buildMailboxMessage(result.events)
+                                    : 'No new subagent messages.',
+                        },
+                    ],
+                    details: {
+                        events: result.events,
+                        next_sequence: result.nextSequence,
+                        timed_out: result.timedOut,
+                    },
+                }
+            }
+
+            const known = manager.view.list().map((snap) => snap.id)
+            const unknown = ids.filter((id) => !manager.view.get(id))
+            if (unknown.length > 0) {
+                throw new Error(
+                    `Unknown subagent id(s): ${unknown.join(', ')}. Known: ${known.join(', ') || 'none'}.`
+                )
+            }
+            await runTool(
+                getRuntime(),
+                manager.waitFor(ids, (pending) => {
+                    onUpdate?.({
+                        content: [
+                            {
+                                type: 'text',
+                                text: `Waiting for ${pending.join(', ')}...`,
+                            },
+                        ],
+                        details: { pending },
+                    })
+                }),
+                {
+                    signal,
+                    interruptMessage: 'Wait aborted. Subagents keep running.',
+                }
+            )
+
+            const events = manager.drainMailbox({ agentIds: ids })
+            const sections: string[] = []
+            let remainingBytes = WAIT_OUTPUT_MAX_BYTES
+            for (const id of ids) {
+                const snap = manager.view.get(id)
+                if (!snap) continue
+                let section = `## ${snap.id} ${snap.taskName ?? snap.title} (${snap.role ?? 'default'})`
+                if (snap.errorText) section += `\nError: ${snap.errorText}`
+                const budget = Math.max(
+                    512,
+                    Math.min(
+                        WAIT_PER_AGENT_MAX_BYTES,
+                        remainingBytes - Buffer.byteLength(section, 'utf8') - 2
+                    )
+                )
+                section += `\n\n${truncatedOutput(snap, budget)}`
+                if (Buffer.byteLength(section, 'utf8') > remainingBytes) break
+                sections.push(section)
+                remainingBytes -= Buffer.byteLength(section, 'utf8')
+            }
+            const bounded = truncateHead(sections.join('\n\n---\n\n'), {
+                maxBytes: WAIT_OUTPUT_MAX_BYTES,
+                maxLines: DEFAULT_MAX_LINES,
+            })
+            return {
+                content: [{ type: 'text', text: bounded.content }],
+                details: {
+                    events,
+                    next_sequence:
+                        events.at(-1)?.sequence ?? params.after_sequence ?? 0,
+                    timed_out: false,
+                    results: ids.map((id) => {
+                        const snap = manager.view.get(id)
+                        return {
+                            id,
+                            taskName: snap?.taskName,
+                            role: snap?.role,
+                            status: snap?.status,
+                        }
+                    }),
+                },
+            }
+        },
+    })
+
+    pi.registerTool({
+        name: 'subagent_send',
+        label: 'Send to Subagent',
+        description: SUBAGENT_SEND_TOOL_DESCRIPTION,
+        parameters: Type.Object({
+            id: Type.String({
+                description: SUBAGENT_SEND_PARAMETER_DESCRIPTIONS.id,
+            }),
+            message: Type.String({
+                description: SUBAGENT_SEND_PARAMETER_DESCRIPTIONS.message,
+            }),
+            delivery: Type.Optional(
+                StringEnum(['steer', 'follow-up'] as const, {
+                    description: SUBAGENT_SEND_PARAMETER_DESCRIPTIONS.delivery,
+                })
+            ),
+        }),
+        async execute(_toolCallId, params) {
+            const manager = await getManager()
+            const snap = manager.view.get(params.id)
+            if (!snap) throw new Error(`Unknown subagent id "${params.id}".`)
+            await runTool(
+                getRuntime(),
+                manager.send(params.id, params.message, params.delivery)
+            )
+            return {
+                content: [{ type: 'text', text: `Sent to ${params.id}.` }],
+                details: {
+                    id: params.id,
+                    delivery: params.delivery ?? 'steer',
+                },
+            }
+        },
+    })
+
+    pi.registerTool({
+        name: 'subagent_cancel',
+        label: 'Cancel Subagents',
+        description: SUBAGENT_CANCEL_TOOL_DESCRIPTION,
+        parameters: Type.Object({
+            ids: Type.Array(Type.String(), {
+                description: SUBAGENT_CANCEL_PARAMETER_DESCRIPTIONS.ids,
+            }),
+        }),
+        async execute(_toolCallId, params) {
+            const manager = await getManager()
+            const ids = [...new Set(params.ids)]
+            if (ids.length === 0)
+                throw new Error('Provide at least one subagent id.')
+
+            const known = manager.view.list().map((snap) => snap.id)
+            const unknown = ids.filter((id) => !manager.view.get(id))
+            if (unknown.length > 0) {
+                throw new Error(
+                    `Unknown subagent id(s): ${unknown.join(', ')}. Known: ${known.join(', ') || 'none'}.`
+                )
+            }
+
+            const report = await runTool(getRuntime(), manager.cancel(ids))
+
+            const lines = report.map((entry) =>
+                entry.cancelled
+                    ? `Cancelled ${entry.id} "${entry.title}".`
+                    : `${entry.id} "${entry.title}" was already ${entry.status}.`
+            )
+
+            return {
+                content: [{ type: 'text', text: lines.join('\n') }],
+                details: {
+                    results: report.map((entry) => ({
+                        id: entry.id,
+                        title: entry.title,
+                        status: entry.status,
+                    })),
+                },
+            }
+        },
+    })
+
+    pi.registerTool({
+        name: 'subagent_check',
+        label: 'Check Subagent',
+        description: SUBAGENT_CHECK_TOOL_DESCRIPTION,
+        parameters: Type.Object({
+            id: Type.String({
+                description: SUBAGENT_CHECK_PARAMETER_DESCRIPTIONS.id,
+            }),
+        }),
+        async execute(_toolCallId, params) {
+            const manager = await getManager()
+            const snap = manager.view.get(params.id)
+            if (!snap) {
+                const known = manager.view.list().map((s) => s.id)
+                throw new Error(
+                    `Unknown subagent id "${params.id}". Known: ${known.join(', ') || 'none'}.`
+                )
+            }
+
+            let text = `${describeSubagent(snap)}\nTurns: ${snap.turns}`
+            if (snap.errorText) text += `\nError: ${snap.errorText}`
+
+            const output = latestText(snap)
+            if (output) {
+                const preview = truncateHead(output, {
+                    maxBytes: CHECK_PREVIEW_MAX_BYTES,
+                    maxLines: 20,
+                })
+                text += `\n\nLatest output:\n${preview.content}`
+                if (preview.truncated) text += '\n[...]'
+            } else if (snap.status === 'running') {
+                text += '\n\n(no text output yet)'
+            }
+
+            return {
+                content: [{ type: 'text', text }],
+                details: {
+                    id: snap.id,
+                    status: snap.status,
+                    turns: snap.turns,
+                },
+            }
+        },
+    })
+
+    pi.registerTool({
+        name: 'subagent_list',
+        label: 'List Subagents',
+        description: SUBAGENT_LIST_TOOL_DESCRIPTION,
+        parameters: Type.Object({}),
+        async execute() {
+            const manager = await getManager()
+            const subs = manager.view.list()
+            const text =
+                subs.length === 0
+                    ? 'No subagents.'
+                    : subs.map((snap) => describeSubagent(snap)).join('\n')
+            return {
+                content: [{ type: 'text', text }],
+                details: {
+                    subagents: subs.map((snap) => ({
+                        id: snap.id,
+                        taskName: snap.taskName,
+                        role: snap.role,
+                        runtime: 'pi',
+                        status: snap.status,
+                    })),
+                },
+            }
+        },
+    })
+
+    // --- Result message rendering ------------------------------------------
+
+    pi.registerMessageRenderer(
+        'subagent-result',
+        (message, { expanded }, theme) => {
+            const details = (message.details ?? {}) as {
+                events?: ReadonlyArray<AgentEnvelope>
+            }
+            const events = details.events ?? []
+            const failed = events.some((event) => event.kind === 'error')
+            const icon = failed
+                ? theme.fg('error', 'x')
+                : theme.fg('success', '■')
+            const header = `${icon} ${theme.fg('accent', theme.bold('subagent updates'))}`
+            const content =
+                typeof message.content === 'string' ? message.content : ''
+            const body = content.split('\n').slice(1).join('\n').trim()
+
+            if (expanded) {
+                const md = new Markdown(`${body}`, 0, 0, getMarkdownTheme())
+                const container = new Text(header, 0, 0)
+                return {
+                    render: (width: number) => [
+                        ...container.render(width),
+                        ...md.render(width),
+                    ],
+                    invalidate: () => {
+                        container.invalidate()
+                        md.invalidate()
+                    },
+                }
+            }
+
+            const previewLines = body.split('\n').slice(0, 8)
+            let text = header
+            for (const line of previewLines)
+                text += `\n${theme.fg('toolOutput', line)}`
+            if (body.split('\n').length > 8)
+                text += `\n${theme.fg('dim', '... (ctrl+o to expand)')}`
+            return new Text(text, 0, 0)
         }
-        const verb = snap.status === "error" ? "failed" : "finished";
-        let section = `## ${snap.id} "${snap.title}" ${verb}`;
-        if (snap.errorText) section += `\nError: ${snap.errorText}`;
-        const headerBytes = Buffer.byteLength(section, "utf8") + 2;
-        const outputBudget = Math.max(
-          512,
-          Math.min(WAIT_PER_AGENT_MAX_BYTES, remainingBytes - headerBytes),
-        );
-        section += `\n\n${truncatedOutput(snap, outputBudget)}`;
-        const sectionBytes = Buffer.byteLength(section, "utf8");
-        if (sectionBytes > remainingBytes) {
-          sections.push(
-            `## ${snap.id} "${snap.title}"\n\n[omitted: total wait output limit reached]`,
-          );
-          break;
-        }
-        sections.push(section);
-        remainingBytes -= sectionBytes;
-      }
+    )
 
-      const combined = sections.join("\n\n---\n\n");
-      const bounded = truncateHead(combined, {
-        maxBytes: WAIT_OUTPUT_MAX_BYTES - 128,
-        maxLines: DEFAULT_MAX_LINES,
-      });
-      const text = bounded.truncated
-        ? `${bounded.content}\n\n[wait output truncated at the total output limit]`
-        : bounded.content;
-      return {
-        content: [{ type: "text", text }],
-        details: {
-          results: ids.map((id) => {
-            const snap = manager.view.get(id);
-            return { id, title: snap?.title, status: snap?.status };
-          }),
+    // --- Command ------------------------------------------------------------
+
+    pi.registerCommand('subagents', {
+        description: 'List, inspect, and take over subagents',
+        handler: async (_args, ctx) => {
+            if (ctx.mode !== 'tui') {
+                if (ctx.hasUI)
+                    ctx.ui.notify(
+                        'Subagent takeover is only available in the TUI',
+                        'error'
+                    )
+                return
+            }
+            const manager = await getManager()
+            if (manager.view.size() === 0) {
+                ctx.ui.notify(
+                    'No subagents yet. The agent spawns them with subagent_spawn.',
+                    'info'
+                )
+                return
+            }
+            await openSubagentPicker(ctx, manager.view)
         },
-      };
-    },
-  });
-
-  pi.registerTool({
-    name: "subagent_cancel",
-    label: "Cancel Subagents",
-    description: SUBAGENT_CANCEL_TOOL_DESCRIPTION,
-    parameters: Type.Object({
-      ids: Type.Array(Type.String(), {
-        description: SUBAGENT_CANCEL_PARAMETER_DESCRIPTIONS.ids,
-      }),
-    }),
-    async execute(_toolCallId, params) {
-      const manager = await getManager();
-      const ids = [...new Set(params.ids)];
-      if (ids.length === 0)
-        throw new Error("Provide at least one subagent id.");
-
-      const known = manager.view.list().map((snap) => snap.id);
-      const unknown = ids.filter((id) => !manager.view.get(id));
-      if (unknown.length > 0) {
-        throw new Error(
-          `Unknown subagent id(s): ${unknown.join(", ")}. Known: ${known.join(", ") || "none"}.`,
-        );
-      }
-
-      const report = await runTool(getRuntime(), manager.cancel(ids));
-
-      const lines = report.map((entry) =>
-        entry.cancelled
-          ? `Cancelled ${entry.id} "${entry.title}".`
-          : `${entry.id} "${entry.title}" was already ${entry.status}.`,
-      );
-
-      return {
-        content: [{ type: "text", text: lines.join("\n") }],
-        details: {
-          results: report.map((entry) => ({
-            id: entry.id,
-            title: entry.title,
-            status: entry.status,
-          })),
-        },
-      };
-    },
-  });
-
-  pi.registerTool({
-    name: "subagent_check",
-    label: "Check Subagent",
-    description: SUBAGENT_CHECK_TOOL_DESCRIPTION,
-    parameters: Type.Object({
-      id: Type.String({
-        description: SUBAGENT_CHECK_PARAMETER_DESCRIPTIONS.id,
-      }),
-    }),
-    async execute(_toolCallId, params) {
-      const manager = await getManager();
-      const snap = manager.view.get(params.id);
-      if (!snap) {
-        const known = manager.view.list().map((s) => s.id);
-        throw new Error(
-          `Unknown subagent id "${params.id}". Known: ${known.join(", ") || "none"}.`,
-        );
-      }
-
-      let text = `${describeSubagent(snap)}\nTurns: ${snap.turns}`;
-      if (snap.errorText) text += `\nError: ${snap.errorText}`;
-
-      const output = latestText(snap);
-      if (output) {
-        const preview = truncateHead(output, { maxBytes: 2048, maxLines: 20 });
-        text += `\n\nLatest output:\n${preview.content}`;
-        if (preview.truncated) text += "\n[...]";
-      } else if (snap.status === "running") {
-        text += "\n\n(no text output yet)";
-      }
-
-      return {
-        content: [{ type: "text", text }],
-        details: { id: snap.id, status: snap.status, turns: snap.turns },
-      };
-    },
-  });
-
-  pi.registerTool({
-    name: "subagent_list",
-    label: "List Subagents",
-    description: SUBAGENT_LIST_TOOL_DESCRIPTION,
-    parameters: Type.Object({}),
-    async execute() {
-      const manager = await getManager();
-      const subs = manager.view.list();
-      const text =
-        subs.length === 0
-          ? "No subagents."
-          : subs.map((snap) => describeSubagent(snap)).join("\n");
-      return {
-        content: [{ type: "text", text }],
-        details: {
-          subagents: subs.map((snap) => ({
-            id: snap.id,
-            title: snap.title,
-            runtime: "pi",
-            status: snap.status,
-          })),
-        },
-      };
-    },
-  });
-
-  // --- Result message rendering ------------------------------------------
-
-  pi.registerMessageRenderer(
-    "subagent-result",
-    (message, { expanded }, theme) => {
-      const details = (message.details ?? {}) as {
-        id?: string;
-        title?: string;
-        status?: string;
-      };
-      const failed = details.status === "error";
-      const icon = failed ? theme.fg("error", "x") : theme.fg("success", "■");
-      const header =
-        `${icon} ` +
-        theme.fg("accent", theme.bold(`subagent ${details.id ?? "?"}`)) +
-        theme.fg(
-          "muted",
-          ` · ${details.title ?? ""} · ${failed ? "failed" : "finished"}`,
-        );
-
-      const content =
-        typeof message.content === "string" ? message.content : "";
-      // Remove only the summary line. The following Error line (when present)
-      // is part of the actual result and must remain visible.
-      const body = content.split("\n").slice(1).join("\n").trim();
-
-      if (expanded) {
-        const md = new Markdown(`${body}`, 0, 0, getMarkdownTheme());
-        const container = new Text(header, 0, 0);
-        return {
-          render: (width: number) => [
-            ...container.render(width),
-            ...md.render(width),
-          ],
-          invalidate: () => {
-            container.invalidate();
-            md.invalidate();
-          },
-        };
-      }
-
-      const previewLines = body.split("\n").slice(0, 8);
-      let text = header;
-      for (const line of previewLines)
-        text += `\n${theme.fg("toolOutput", line)}`;
-      if (body.split("\n").length > 8)
-        text += `\n${theme.fg("dim", "... (ctrl+o to expand)")}`;
-      return new Text(text, 0, 0);
-    },
-  );
-
-  // --- Command ------------------------------------------------------------
-
-  pi.registerCommand("subagents", {
-    description: "List, inspect, and take over subagents",
-    handler: async (_args, ctx) => {
-      if (ctx.mode !== "tui") {
-        if (ctx.hasUI)
-          ctx.ui.notify(
-            "Subagent takeover is only available in the TUI",
-            "error",
-          );
-        return;
-      }
-      const manager = await getManager();
-      if (manager.view.size() === 0) {
-        ctx.ui.notify(
-          "No subagents yet. The agent spawns them with subagent_spawn.",
-          "info",
-        );
-        return;
-      }
-      await openSubagentPicker(ctx, manager.view);
-    },
-  });
+    })
 }

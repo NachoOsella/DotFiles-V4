@@ -1,90 +1,78 @@
-/** All model-facing strings for the subagents tools. */
+import { COLLABORATION_POLICY } from './collaboration-policy.ts'
+import type { AgentEnvelope } from './mailbox.ts'
 
-/** Describes subagent_spawn and the fixed concurrency cap. */
+/** All model-facing strings for the subagent tools. */
+
 export const SUBAGENT_SPAWN_TOOL_DESCRIPTION =
-    "Spawn a background Pi subagent: a fully autonomous, headless Pi session with its own context window that inherits this environment's tools and configuration. This returns immediately with an id. The subagent's final output is queued back to you when it settles, or collect it explicitly with subagent_wait. Children cannot orchestrate more agents/workflows or ask the user, and cannot see this conversation, so the prompt must be self-contained. Max 8 subagents can run at once."
-
-/** Adds background Pi subagent delegation to the parent model's available-tools prompt. */
+    'Spawn a background child for a self-contained task. Max 8 can run at once.'
 export const SUBAGENT_SPAWN_PROMPT_SNIPPET =
-    'Spawn a background Pi subagent with its own context and normal tools for a self-contained task'
+    'Delegate a self-contained task to a background subagent'
+export const SUBAGENT_SPAWN_PROMPT_GUIDELINES = [COLLABORATION_POLICY]
 
-/** Guides the parent model to delegate standalone tasks and avoid unnecessary blocking waits. */
-export const SUBAGENT_SPAWN_PROMPT_GUIDELINES = [
-    'Use subagent_spawn for self-contained work that can run in parallel.',
-    'Keep working after spawning; wait only when the result is required.',
-]
-
-/** Model-facing schema descriptions for subagent_spawn task and execution options. */
 export const SUBAGENT_SPAWN_PARAMETER_DESCRIPTIONS = {
-    prompt: 'Task prompt for the subagent. Must be self-contained: include all needed context, file paths, and what to report back.',
-    name: 'Short human-readable name for this subagent, shown in listings and the UI',
-    workingDir: 'Working directory (default: current working directory)',
-    model: 'Pi model hint: "provider/model-id" or a model id. Omit to inherit the current model.',
-    reasoningEffort:
-        'Pi reasoning effort. Omit to inherit the current thinking level.',
+    prompt: 'Self-contained task and report request',
+    name: 'Short name shown in listings and the UI',
+    taskName: 'Unique task name. Defaults to name.',
+    agentType: 'Child role: default, explorer, worker, reviewer, or tester',
+    workingDir: 'Working directory. Defaults to the current directory.',
+    model: 'Model hint. Defaults to the role or parent model.',
+    reasoningEffort: 'Reasoning effort. Defaults to the role or parent level.',
 }
 
-/** Builds the subagent_spawn result: what was spawned (model, name, prompt) and how to follow up. */
 export function buildSubagentSpawnResult(options: {
     id: string
-    title: string
+    taskName?: string
+    /** Legacy display name accepted for callers from v1. */
+    title?: string
+    /** Accepted but intentionally never returned. */
+    prompt?: string
+    role?: string
     modelLabel: string
-    prompt: string
 }) {
-    const prompt = options.prompt.trim()
-    const promptLine = prompt.includes('\n')
-        ? `Prompt:\n${prompt}`
-        : `Prompt: ${prompt}`
-    return (
-        `Spawned Pi subagent ${options.id} "${options.title}" (${options.modelLabel}).\n` +
-        `${promptLine}\n` +
-        `It runs in the background. Its result will be delivered when it finishes — ` +
-        `use subagent_wait(ids: ["${options.id}"]) to block for it, subagent_cancel to stop it, subagent_check to peek, subagent_list to see all.`
-    )
+    if (!options.taskName) {
+        return `Spawned ${options.id} "${options.title ?? 'subagent'}" (${options.modelLabel}). It runs in the background; use subagent_wait when its result is needed.`
+    }
+    return `Spawned ${options.id} ${options.taskName} (${options.role ?? 'default'}, ${options.modelLabel}).`
 }
 
-/** Describes explicit blocking collection of one or more subagent results. */
-export const SUBAGENT_WAIT_TOOL_DESCRIPTION =
-    'Block until all listed subagents have settled, then return their final outputs. Prefer letting results arrive automatically; use this only when you need a result before continuing.'
-
-/** Model-facing schema description for the subagent ids to await. */
-export const SUBAGENT_WAIT_PARAMETER_DESCRIPTIONS = {
-    ids: 'Subagent ids to wait for, e.g. ["sa-1", "sa-2"]',
-}
-
-/** Describes aborting running subagents while retaining their partial transcripts. */
-export const SUBAGENT_CANCEL_TOOL_DESCRIPTION =
-    'Cancel one or more running subagents. This aborts their active work but preserves their partial session transcripts on disk.'
-
-/** Model-facing schema description for the subagent ids to cancel. */
-export const SUBAGENT_CANCEL_PARAMETER_DESCRIPTIONS = {
-    ids: 'Subagent ids to cancel, e.g. ["sa-1", "sa-2"]',
-}
-
-/** Describes nonblocking inspection of a subagent without consuming its result. */
-export const SUBAGENT_CHECK_TOOL_DESCRIPTION =
-    "Peek at a subagent's status and recent activity without blocking. Does not consume its result."
-
-/** Model-facing schema description for the subagent id to inspect. */
-export const SUBAGENT_CHECK_PARAMETER_DESCRIPTIONS = {
+export const SUBAGENT_SEND_TOOL_DESCRIPTION =
+    'Send a concise instruction to a child.'
+export const SUBAGENT_SEND_PARAMETER_DESCRIPTIONS = {
     id: 'Subagent id',
+    message: 'Instruction for the child',
+    delivery: 'steer redirects an active run; follow-up waits for it to settle',
 }
 
-/** Describes listing all tracked running and settled subagents. */
-export const SUBAGENT_LIST_TOOL_DESCRIPTION =
-    'List all running and finished Pi subagents with their status.'
+export const SUBAGENT_WAIT_TOOL_DESCRIPTION =
+    'Wait for listed children, or for new child mailbox messages when ids are omitted.'
+export const SUBAGENT_WAIT_PARAMETER_DESCRIPTIONS = {
+    ids: 'Optional subagent ids',
+    timeoutMs: 'Optional mailbox wait timeout in milliseconds',
+    afterSequence: 'Only return mailbox messages after this sequence',
+}
 
-/** Builds the child completion/failure wrapper injected into the parent model's context. */
-export function buildSubagentResultMessage(options: {
-    id: string
-    title: string
-    status: 'running' | 'done' | 'error'
-    errorText?: string
-    output: string
-}) {
-    const verb = options.status === 'error' ? 'failed' : 'finished'
-    let text = `Subagent ${options.id} "${options.title}" ${verb}.`
-    if (options.errorText) text += `\nError: ${options.errorText}`
-    text += `\n\n${options.output}`
-    return text
+export const SUBAGENT_CANCEL_TOOL_DESCRIPTION =
+    'Cancel one or more running subagents.'
+export const SUBAGENT_CANCEL_PARAMETER_DESCRIPTIONS = { ids: 'Subagent ids' }
+export const SUBAGENT_CHECK_TOOL_DESCRIPTION =
+    "Peek at a subagent's status and recent activity."
+export const SUBAGENT_CHECK_PARAMETER_DESCRIPTIONS = { id: 'Subagent id' }
+export const SUBAGENT_LIST_TOOL_DESCRIPTION =
+    'List running and finished Pi subagents.'
+
+function envelopeSummary(envelope: AgentEnvelope) {
+    const state =
+        envelope.kind === 'result'
+            ? 'finished'
+            : envelope.kind === 'question'
+              ? 'asked'
+              : envelope.kind
+    return `- ${envelope.agentId} ${envelope.taskName} (${envelope.role}) ${state}: ${envelope.text}`
+}
+
+export function buildMailboxMessage(events: ReadonlyArray<AgentEnvelope>) {
+    const heading = events.some((event) => event.kind === 'question')
+        ? 'Subagent messages:'
+        : 'Subagent updates:'
+    return `${heading}\n${events.map(envelopeSummary).join('\n')}`
 }
