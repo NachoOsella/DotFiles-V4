@@ -14,15 +14,15 @@ import {
 import {
   DISCORD_ACTIVITY_CHANNEL,
   emptyGitInfoState,
-  emptyLspInfoState,
+  // [LSP-UI-DISABLED] emptyLspInfoState,
   emptyModelInfoState,
   GIT_INFO_CHANNEL,
-  LSP_INFO_CHANNEL,
+  // [LSP-UI-DISABLED] LSP_INFO_CHANNEL,
   MODEL_INFO_CHANNEL,
   REFRESH_CHANNEL,
   isDiscordActivityState,
   isGitInfoState,
-  isLspInfoState,
+  // [LSP-UI-DISABLED] isLspInfoState,
   isModelInfoState,
 } from "../shared/dashboard-state.ts";
 
@@ -134,7 +134,7 @@ export default function uiCustomization(pi: ExtensionAPI) {
   let title = "pi";
   let modelInfo = emptyModelInfoState();
   let gitInfo = emptyGitInfoState();
-  let lspInfo = emptyLspInfoState();
+  // [LSP-UI-DISABLED] let lspInfo = emptyLspInfoState();
   let discordActivityActive = false;
   let requestRender: (() => void) | undefined;
   let activeTui: DashboardTui | undefined;
@@ -152,11 +152,11 @@ export default function uiCustomization(pi: ExtensionAPI) {
     requestRender?.();
   });
 
-  const stopLspListener = pi.events.on(LSP_INFO_CHANNEL, (value) => {
-    if (!isLspInfoState(value)) return;
-    lspInfo = value;
-    requestRender?.();
-  });
+  // [LSP-UI-DISABLED] const stopLspListener = pi.events.on(LSP_INFO_CHANNEL, (value) => {
+  // [LSP-UI-DISABLED]   if (!isLspInfoState(value)) return;
+  // [LSP-UI-DISABLED]   lspInfo = value;
+  // [LSP-UI-DISABLED]   requestRender?.();
+  // [LSP-UI-DISABLED] });
 
   const stopDiscordActivityListener = pi.events.on(
     DISCORD_ACTIVITY_CHANNEL,
@@ -250,11 +250,11 @@ export default function uiCustomization(pi: ExtensionAPI) {
           const lines = [
             columns(directory, modelStatus, width),
             columns(theme.fg("muted", usage), theme.fg("muted", git), width),
-            truncateToWidth(
-              theme.fg("dim", lspInfo.message),
-              width,
-              theme.fg("dim", "..."),
-            ),
+            // [LSP-UI-DISABLED] truncateToWidth(
+            // [LSP-UI-DISABLED]   theme.fg("dim", lspInfo.message),
+            // [LSP-UI-DISABLED]   width,
+            // [LSP-UI-DISABLED]   theme.fg("dim", "..."),
+            // [LSP-UI-DISABLED] ),
           ];
 
           // Extension statuses render after the two dashboard lines, one per row.
@@ -281,7 +281,7 @@ export default function uiCustomization(pi: ExtensionAPI) {
     title = formatDirectory(ctx.cwd);
     modelInfo = emptyModelInfoState();
     gitInfo = emptyGitInfoState();
-    lspInfo = emptyLspInfoState();
+    // [LSP-UI-DISABLED] lspInfo = emptyLspInfoState();
     discordActivityActive = false;
     install(ctx);
   });
@@ -293,7 +293,7 @@ export default function uiCustomization(pi: ExtensionAPI) {
   pi.on("session_shutdown", (_event, ctx) => {
     stopModelListener();
     stopGitListener();
-    stopLspListener();
+    // [LSP-UI-DISABLED] stopLspListener();
     stopDiscordActivityListener();
     for (const timer of themeRemovalTimers) clearTimeout(timer);
     themeRemovalTimers = [];

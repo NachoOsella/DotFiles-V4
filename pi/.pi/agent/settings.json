@@ -5,7 +5,7 @@
   "hideThinkingBlock": false,
   "quietStartup": true,
   "enableSkillCommands": true,
-  "extensions": [],
+  "extensions": ["!extensions/lsp/**"],
   "defaultProvider": "zen-free",
   "defaultModel": "muse-spark-1.2-contributor-free",
   "steeringMode": "one-at-a-time",
