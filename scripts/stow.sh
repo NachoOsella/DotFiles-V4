@@ -38,6 +38,7 @@ PACKAGES=(
 	"yazi"
 	"btop"
 	"fastfetch"
+	"hunk"
 	"lsd"
 	"zathura"
 	"gtk"

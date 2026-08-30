@@ -1,0 +1,72 @@
+# Hunk configuration - Gruvbox Material Dark Hard
+theme = "custom"
+mode = "auto"
+line_numbers = true
+menu_bar = true
+
+[custom_theme]
+base = "gruvbox-dark-hard"
+label = "Gruvbox Material Dark Hard"
+
+# Background palette (gruvbox-material dark hard)
+background = "#1d2021"    # bg0 - editor background
+panel = "#1d2021"         # Waybar base
+panelAlt = "#1d2021"      # Waybar base
+border = "#3c3836"        # bg4 - border lines
+accent = "#7daea3"        # blue - accent / modified highlight
+accentMuted = "#2e3b3b"   # bg_visual_blue - muted selection
+text = "#d4be98"          # fg0 - main text
+muted = "#928374"         # grey1 - muted text
+
+# Diff row backgrounds (tinted for added/removed lines)
+addedBg = "#32361a"       # bg_diff_green
+removedBg = "#3c1f1e"     # bg_diff_red
+movedAddedBg = "#0d3138"  # bg_diff_blue
+movedRemovedBg = "#0d3138"
+contextBg = "#1d2021"     # same as background
+addedContentBg = "#333e34"   # bg_visual_green
+removedContentBg = "#442e2d" # bg_visual_red
+contextContentBg = "#1d2021"
+
+# Diff sign colors (gutter markers)
+addedSignColor = "#a9b665"   # green
+removedSignColor = "#ea6962" # red
+
+# Line numbers
+lineNumberBg = "#141617"   # bg_dim
+lineNumberFg = "#7c6f64"   # grey0
+
+# Selected hunk / cursor highlight
+selectedHunk = "#2e3b3b"   # bg_visual_blue
+
+# Badges
+badgeAdded = "#a9b665"     # green
+badgeRemoved = "#ea6962"   # red
+badgeNeutral = "#928374"   # grey1
+
+# File status colors (sidebar)
+fileNew = "#a9b665"        # green
+fileDeleted = "#ea6962"    # red
+fileRenamed = "#7daea3"    # blue
+fileModified = "#e78a4e"   # orange
+fileUntracked = "#928374"  # grey1
+
+# Notes / agent annotations
+noteBorder = "#7daea3"     # blue
+noteBackground = "#32302f" # bg_statusline2
+noteTitleBackground = "#282828"  # bg1
+noteTitleText = "#ddc7a1"  # fg1
+
+# Syntax highlighting (terminal code colors)
+[custom_theme.syntax]
+default = "#d4be98"    # fg0 - plain text
+keyword = "#ea6962"    # red - keywords, conditionals, statements
+string = "#a9b665"     # green - strings, characters
+comment = "#928374"    # grey1 - comments
+number = "#d3869b"     # purple - numbers, booleans
+function = "#a9b665"   # green - function names
+property = "#7daea3"   # blue - properties, identifiers
+type = "#d8a657"       # yellow - types, classes
+variable = "#d4be98"   # fg0 - variables (falls back to default)
+operator = "#e78a4e"   # orange - operators
+punctuation = "#d4be98" # fg0 - delimiters, punctuation
