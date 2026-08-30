@@ -13,7 +13,7 @@
  * application ID when using a custom Discord application.
  *
  * The extension automatically sets your Discord activity to show
- * "Working on <project-name>" while you're using Pi.
+ * "Prompting" / "Coding with Pi <project-name>" while you're using Pi.
  */
 
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent'
@@ -195,10 +195,9 @@ function projectName(cwd: string): string {
  */
 function buildActivity(project: string): DiscordActivity {
     return {
-        name: 'Pi',
+        name: 'Prompting',
         type: 0,
-        details: `Working on ${project}`,
-        state: 'Coding with Pi',
+        details: `Coding with Pi ${project}`,
         timestamps: {
             start: Date.now(),
         },
@@ -232,7 +231,7 @@ const sessionEffect = (
                 const client: Client = yield* connectDiscord(clientId)
                 yield* setActivity(client, buildActivity(project))
                 yield* Effect.sync(onActivitySet)
-                console.log(`[pi-discord] Activity set: working on ${project}`)
+                console.log(`[pi-discord] Activity set: Coding with Pi ${project}`)
 
                 // Keep the scope alive while Discord is connected. Interruption or a
                 // disconnect closes the scope and destroys the RPC client.

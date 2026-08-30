@@ -37,12 +37,16 @@ interface DashboardTui extends RenderableNode {
 }
 
 const TITLE_LINES = [
-  "  ██████╗  ██╗ ",
-  "  ██╔══██╗ ██║ ",
-  "  ██████╔╝ ██║ ",
-  "  ██╔═══╝  ██║ ",
-  "  ██║      ██║ ",
-  "  ╚═╝      ╚═╝ ",
+  "   ███████████████████████████╗   ",
+  "   ╚══██████╔════════██████╔══╝   ",
+  "      ██████║        ██████║      ",
+  "      ██████║        ██████║      ",
+  "      ██████║        ██████║      ",
+  "      ██████║        ██████║      ",
+  "      ██████║        ███████╗     ",
+  "      ██████║        ╚████████╗   ",
+  "      ██████║          ╚███████╗  ",
+  "      ╚═════╝            ╚═════╝  ",
 ];
 const ANSI_PATTERN =
   /[\u001B\u009B][[\]()#;?]*(?:(?:(?:[a-zA-Z\d]*(?:;[a-zA-Z\d]*)*)?\u0007)|(?:(?:\d{1,4}(?:;\d{0,4})*)?[\dA-PR-TZcf-nq-uy=><~]))/g;
@@ -187,8 +191,8 @@ export default function uiCustomization(pi: ExtensionAPI) {
       return {
         render(width: number) {
           // Use the active Pi theme rather than hardcoded terminal colors.
-          const logo = TITLE_LINES.map((line, row) =>
-            center(theme.fg("borderAccent", line), width),
+          const logo = TITLE_LINES.map((line) =>
+            center(theme.bold(theme.fg("borderAccent", line)), width),
           );
           const subtitle = center(
             theme.bold(theme.fg("borderAccent", title)),
