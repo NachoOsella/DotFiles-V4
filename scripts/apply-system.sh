@@ -12,7 +12,7 @@ DRY_RUN=0
 usage() {
 	cat <<'EOF'
 Usage: ./scripts/apply-system.sh [--host HOST] [--dry-run]
-Copies versioned files from system/etc and hosts/<host>/system/etc into /etc.
+Copies versioned files from system and hosts/<host>/system into the system root.
 EOF
 }
 
@@ -49,7 +49,7 @@ apply_tree() {
 		fi
 
 		local rel="${entry#"$source_root"/}"
-		local dst="$destination_root/$rel"
+		local dst="${destination_root%/}/$rel"
 
 		if [[ -d "$entry" ]]; then
 			if ((DRY_RUN)); then
@@ -74,10 +74,10 @@ apply_tree() {
 }
 
 log "Applying versioned system configuration for host '$HOST'"
-apply_tree "$SYSTEM_DIR/etc" /etc
+apply_tree "$SYSTEM_DIR" /
 
 HOST_OVERLAY_SYSTEM_DIR=""
 overlay_host_system_dir "$HOST" HOST_OVERLAY_SYSTEM_DIR || true
 if [[ -n "$HOST_OVERLAY_SYSTEM_DIR" ]]; then
-	apply_tree "$HOST_OVERLAY_SYSTEM_DIR/etc" /etc
+	apply_tree "$HOST_OVERLAY_SYSTEM_DIR" /
 fi

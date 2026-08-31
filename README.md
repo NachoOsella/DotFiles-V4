@@ -30,7 +30,7 @@ I keep it simple. One tool per job, all tied together with Gruvbox Material Dark
 | Launcher | Rofi |
 | Bar and desktop widgets | Quickshell. Waybar config is still in the repo for reference |
 | File management | Yazi in the terminal, pcmanfm-qt for the rest |
-| System | PipeWire, NetworkManager with iwd, TLP, SDDM, Dunst, btop, Fastfetch, zathura, KeePassXC |
+| System | PipeWire, NetworkManager with iwd, TLP, SDDM with the Classic Where is my SDDM theme, Dunst, btop, Fastfetch, zathura, KeePassXC |
 
 Wallpapers live in `assets/wallpapers`. The Death Star one in the header is the default.
 
@@ -138,10 +138,10 @@ dotfiles/
 ├── rofi/                 # launcher, powermenu, wifi, clipboard and emoji menus
 ├── yazi/ btop/ fastfetch/ lsd/ zathura/ waybar/ dunst/ gtk/ qt/ ...
 ├── packages/
-│   ├── pacman.txt        # 128 official packages
+│   ├── pacman.txt        # 129 official packages
 │   └── aur.txt           # AUR helpers and extras
 ├── hosts/archlinux/      # per-host overlays for packages, /etc and services
-├── system/etc/           # versioned system config copied to /etc by bootstrap
+├── system/               # versioned system files copied to / by bootstrap
 └── scripts/
     ├── bootstrap.sh      # full setup. packages + system + stow + services
     ├── install-user.sh   # safe alias for stow.sh install
@@ -157,7 +157,7 @@ Host-specific things live under `hosts/<host>`. If your hostname matches, the sc
 No surprises. Each step is a separate script you can run on its own.
 
 - Installs packages from `packages/pacman.txt` and `packages/aur.txt`, plus any `hosts/<host>/packages` overlay.
-- Copies system config from `system/etc` and `hosts/<host>/system/etc` into `/etc`. That covers NetworkManager with iwd, TLP, and a few defaults.
+- Copies system files from `system` and `hosts/<host>/system` into `/`. That covers NetworkManager with iwd, TLP, and the Classic Where is my SDDM theme.
 - Links user configs with GNU Stow. It checks for conflicts first and will not overwrite your files silently.
 - Enables services listed in `hosts/<host>/services/system.txt` and `user.txt`, and masks anything in `system-disable.txt`. On this host that means bluetooth, docker, NetworkManager, sddm, tlp and a few timers for user services like pipewire and wireplumber.
 

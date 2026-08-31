@@ -80,6 +80,7 @@ python-gobject
 python-pip
 qt5ct
 qt5-wayland
+qt6-5compat
 qt6ct
 qt6-virtualkeyboard
 qt6-wayland
