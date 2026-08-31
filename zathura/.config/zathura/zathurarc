@@ -41,3 +41,4 @@ set recolor-keephue             "true"                 # keep original color
 
 
 set selection-clipboard         "clipboard"
+set guioptions                  "sh"
