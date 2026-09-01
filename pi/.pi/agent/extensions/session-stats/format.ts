@@ -4,10 +4,15 @@ import type { SessionStats } from "./types.ts";
 
 /** Format large counts using compact suffixes. */
 export function formatNumber(num: number): string {
-  if (num >= 1_000_000_000) return (num / 1_000_000_000).toFixed(1) + "B";
-  if (num >= 1_000_000) return (num / 1_000_000).toFixed(1) + "M";
-  if (num >= 1_000) return (num / 1_000).toFixed(1) + "K";
+  if (num >= 1_000_000_000) return compactNumber(num / 1_000_000_000) + "B";
+  if (num >= 1_000_000) return compactNumber(num / 1_000_000) + "M";
+  if (num >= 1_000) return compactNumber(num / 1_000) + "K";
   return num.toLocaleString("en-US");
+}
+
+function compactNumber(value: number): string {
+  const decimals = value >= 100 ? 0 : value >= 10 ? 1 : 2;
+  return value.toFixed(decimals).replace(/\.0+$|(?<=\.[0-9])0+$/, "");
 }
 
 /** Format a percentage with compact precision. */
@@ -16,8 +21,12 @@ export function formatPercent(value: number): string {
   return value.toFixed(value >= 10 || value === 0 ? 0 : 1) + "%";
 }
 
-/** Calculate read cache hit rate as a percentage of all prompt tokens. */
-export function readCacheHitRate(input: number, cacheRead: number, cacheWrite: number): number {
+/** Calculate the share of prompt tokens served from the read cache. */
+export function calculateCacheReadShare(
+  input: number,
+  cacheRead: number,
+  cacheWrite: number,
+): number {
   const promptTokens = input + cacheRead + cacheWrite;
   return promptTokens > 0 ? (cacheRead / promptTokens) * 100 : 0;
 }
@@ -78,26 +87,45 @@ export function progressBar(
   const safeMax = Math.max(1, max);
   const ratio = Math.max(0, Math.min(1, value / safeMax));
   const filled = Math.round(ratio * width);
-  return color(theme, fillToken, "█".repeat(filled)) + color(theme, "dim", "░".repeat(Math.max(0, width - filled)));
+  return (
+    color(theme, fillToken, "█".repeat(filled)) +
+    color(theme, "dim", "░".repeat(Math.max(0, width - filled)))
+  );
 }
 
-/** Format cache hit rate with a bar. */
-export function formatCacheHit(
+/** Format cache read share with a compact bar. */
+export function formatCacheReadShare(
   input: number,
   cacheRead: number,
   cacheWrite: number,
   theme?: Theme,
 ): string {
-  const hitRate = readCacheHitRate(input, cacheRead, cacheWrite);
-  return formatPercent(hitRate).padStart(5) + " " + progressBar(hitRate, 100, 10, theme, "success");
+  const share = calculateCacheReadShare(input, cacheRead, cacheWrite);
+  return (
+    formatPercent(share).padStart(5) +
+    " " +
+    progressBar(share, 100, 10, theme, "success")
+  );
 }
 
-/** Finalize total token count from component counters and reported provider totals. */
-export function finalizeTotalTokens(stats: Pick<SessionStats, "totalTokens">, fallbackTotalTokens = 0): void {
+/**
+ * Finalize canonical usage from the explicit token buckets.
+ * Provider totals are diagnostic only because they can use a different billing
+ * definition and must not silently inflate the visible accumulated usage.
+ */
+export function finalizeTotalTokens(
+  stats: Pick<SessionStats, "totalTokens">,
+  reportedTotalTokens?: number,
+): void {
   const computedTotal =
     stats.totalTokens.input +
     stats.totalTokens.output +
     stats.totalTokens.cacheRead +
     stats.totalTokens.cacheWrite;
-  stats.totalTokens.totalTokens = Math.max(computedTotal, fallbackTotalTokens);
+  stats.totalTokens.totalTokens = computedTotal;
+  if (reportedTotalTokens !== undefined) {
+    stats.totalTokens.reportedTotalTokens = reportedTotalTokens;
+    stats.totalTokens.reportedTotalTokensMismatch =
+      reportedTotalTokens - computedTotal;
+  }
 }

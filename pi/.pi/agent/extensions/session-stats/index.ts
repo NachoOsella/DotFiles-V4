@@ -15,6 +15,7 @@ import {
   buildCurrentSessionOutput,
   buildProjectStatsOutput,
   buildProjectSummaries,
+  type DataQuality,
 } from "./output.ts";
 import { parseCurrentBranch, parseSessionFileEffect } from "./parser.ts";
 import type {
@@ -28,19 +29,23 @@ const SUBAGENT_SESSION_PREFIX = "subagent:";
 const MAX_CONCURRENT_READS = 8;
 
 /** Paid catalog equivalents used to estimate the value of free endpoints. */
-const FREE_MODEL_PRICE_REFERENCES: Record<string, readonly [string, string][]> = {
-  "hy3-free": [["openrouter", "tencent/hy3"]],
-  "mimo-v2-pro-free": [["opencode-go", "mimo-v2.5-pro"]],
-  "nemotron-3-ultra-free": [["nvidia", "nvidia/nemotron-3-ultra-550b-a55b"]],
-  "glm-4.7-free": [["openrouter", "z-ai/glm-4.7"]],
-  "ling-2.6-flash-free": [["openrouter", "inclusionai/ling-2.6-flash"]],
-  "trinity-large-preview-free": [["vercel-ai-gateway", "arcee-ai/trinity-large-preview"]],
-};
+const FREE_MODEL_PRICE_REFERENCES: Record<string, readonly [string, string][]> =
+  {
+    "hy3-free": [["openrouter", "tencent/hy3"]],
+    "mimo-v2-pro-free": [["opencode-go", "mimo-v2.5-pro"]],
+    "nemotron-3-ultra-free": [["nvidia", "nvidia/nemotron-3-ultra-550b-a55b"]],
+    "glm-4.7-free": [["openrouter", "z-ai/glm-4.7"]],
+    "ling-2.6-flash-free": [["openrouter", "inclusionai/ling-2.6-flash"]],
+    "trinity-large-preview-free": [
+      ["vercel-ai-gateway", "arcee-ai/trinity-large-preview"],
+    ],
+  };
 
 /** Register `/stats` for current-session and aggregate usage statistics. */
 export default function sessionStatsExtension(pi: ExtensionAPI) {
   pi.registerCommand("stats", {
-    description: "Show session statistics. /stats | /stats all [project] [days]",
+    description:
+      "Show session statistics. /stats | /stats all [project] [days]",
     handler: async (args, ctx) => {
       const parsed = parseCommand(args);
       if (parsed.kind === "invalid") {
@@ -68,7 +73,8 @@ async function showAllSessionStats(
     if (sessions.length === 0) return { kind: "empty" as const };
 
     yield* Effect.sync(() => {
-      if (ctx.hasUI) ctx.ui.setStatus(STATUS_KEY, `Parsing ${sessions.length} sessions...`);
+      if (ctx.hasUI)
+        ctx.ui.setStatus(STATUS_KEY, `Parsing ${sessions.length} sessions...`);
     });
 
     const pricing = createModelPricingResolver(ctx);
@@ -82,6 +88,8 @@ async function showAllSessionStats(
               ...stats,
               ...(name ? { name } : {}),
               project: session.cwd || undefined,
+              parentSessionPath:
+                session.parentSessionPath ?? stats.parentSessionPath,
             };
           }),
           Effect.catch(() => Effect.succeed(undefined)),
@@ -92,7 +100,14 @@ async function showAllSessionStats(
     const stats = parsed.flatMap((value) => (value ? [value] : []));
     return stats.length === 0
       ? { kind: "unparseable" as const }
-      : { kind: "success" as const, stats };
+      : {
+          kind: "success" as const,
+          stats,
+          quality: {
+            parsedSessions: stats.length,
+            discoveredSessions: sessions.length,
+          } satisfies DataQuality,
+        };
   }).pipe(
     Effect.ensuring(
       Effect.sync(() => {
@@ -113,21 +128,34 @@ async function showAllSessionStats(
     }
     if (project) {
       await showStatsModal(
-        (width, theme) => buildAllStatsOutput(result.stats, days, width, theme, true),
+        (width, theme) =>
+          buildAllStatsOutput(
+            result.stats,
+            days,
+            width,
+            theme,
+            true,
+            undefined,
+            result.quality,
+          ),
         ctx,
       );
       return;
     }
 
-    await showAllStatsBrowser(result.stats, days, ctx);
+    await showAllStatsBrowser(result.stats, days, result.quality, ctx);
   } catch (error) {
-    ctx.ui.notify(`Unable to load session statistics: ${errorMessage(error)}`, "error");
+    ctx.ui.notify(
+      `Unable to load session statistics: ${errorMessage(error)}`,
+      "error",
+    );
   }
 }
 
 async function showAllStatsBrowser(
   sessions: readonly SessionStats[],
   days: number | undefined,
+  quality: DataQuality,
   ctx: ExtensionCommandContext,
 ): Promise<void> {
   type View = "overview" | "projects" | "detail";
@@ -137,12 +165,27 @@ async function showAllStatsBrowser(
   await showStatsModal(
     (width, theme) => {
       if (view === "overview") {
-        return buildAllStatsOutput(sessions, days, width, theme);
+        return buildAllStatsOutput(
+          sessions,
+          days,
+          width,
+          theme,
+          false,
+          undefined,
+          quality,
+        );
       }
 
       const projects = buildProjectSummaries(sessions, days);
       if (view === "projects") {
-        return buildProjectStatsOutput(sessions, days, width, theme, selectedProject);
+        return buildProjectStatsOutput(
+          sessions,
+          days,
+          width,
+          theme,
+          selectedProject,
+          quality,
+        );
       }
 
       const selected = projects[selectedProject];
@@ -154,6 +197,7 @@ async function showAllStatsBrowser(
             theme,
             true,
             selected.project,
+            quality,
           )
         : "No project selected.";
     },
@@ -210,7 +254,9 @@ async function showAllStatsBrowser(
   );
 }
 
-async function showCurrentSessionStats(ctx: ExtensionCommandContext): Promise<void> {
+async function showCurrentSessionStats(
+  ctx: ExtensionCommandContext,
+): Promise<void> {
   const currentFile = ctx.sessionManager.getSessionFile() ?? "ephemeral";
   const pricing = createModelPricingResolver(ctx);
   const currentStats = parseCurrentBranch(
@@ -219,7 +265,11 @@ async function showCurrentSessionStats(ctx: ExtensionCommandContext): Promise<vo
     ctx.sessionManager.getSessionName() ?? undefined,
     pricing,
   );
-  const subagentStats = await loadCurrentSessionSubagentStats(ctx, currentFile, pricing);
+  const subagentStats = await loadCurrentSessionSubagentStats(
+    ctx,
+    currentFile,
+    pricing,
+  );
   const stats = mergeSessionStats(
     [currentStats, ...subagentStats],
     currentFile,
@@ -231,6 +281,10 @@ async function showCurrentSessionStats(ctx: ExtensionCommandContext): Promise<vo
       buildCurrentSessionOutput(stats, width, theme, {
         mainThread: currentStats,
         subagents: subagentStats,
+        contextUsage:
+          typeof ctx.getContextUsage === "function"
+            ? ctx.getContextUsage()
+            : undefined,
       }),
     ctx,
   );
@@ -248,27 +302,53 @@ async function loadCurrentSessionSubagentStats(
     const sessions = await SessionManager.listAll();
     const currentPath = resolve(currentFile);
     const currentStart = ctx.sessionManager.getHeader()?.timestamp;
-    const currentStartTime = currentStart ? Date.parse(currentStart) : Number.NaN;
-    const subagentSessions = sessions.filter((session) => {
-      if (resolve(session.path) === currentPath) return false;
-      if (session.parentSessionPath && resolve(session.parentSessionPath) === currentPath) {
-        return true;
+    const currentStartTime = currentStart
+      ? Date.parse(currentStart)
+      : Number.NaN;
+    const linkedPaths = new Set([currentPath]);
+    const linkedChildren = [] as typeof sessions;
+    let foundChild = true;
+    while (foundChild) {
+      foundChild = false;
+      for (const session of sessions) {
+        const sessionPath = resolve(session.path);
+        if (
+          linkedPaths.has(sessionPath) ||
+          !session.parentSessionPath ||
+          !linkedPaths.has(resolve(session.parentSessionPath))
+        ) {
+          continue;
+        }
+        linkedPaths.add(sessionPath);
+        linkedChildren.push(session);
+        foundChild = true;
       }
+    }
 
-      // Keep compatibility with child sessions created before parent links were added.
-      return (
+    // Keep compatibility with child sessions created before parent links were added.
+    const legacyChildren = sessions.filter(
+      (session) =>
         !session.parentSessionPath &&
+        !linkedPaths.has(resolve(session.path)) &&
         session.cwd &&
         resolve(session.cwd) === resolve(ctx.cwd) &&
         session.name?.startsWith(SUBAGENT_SESSION_PREFIX) &&
-        (Number.isNaN(currentStartTime) || session.created.getTime() >= currentStartTime)
-      );
-    });
+        (Number.isNaN(currentStartTime) ||
+          session.created.getTime() >= currentStartTime),
+    );
+    const subagentSessions = [...linkedChildren, ...legacyChildren];
     const parsed = await Effect.runPromise(
       Effect.forEach(
         subagentSessions,
         (session) =>
           parseSessionFileEffect(session.path, pricing).pipe(
+            Effect.map((stats) => ({
+              ...stats,
+              ...(session.name ? { name: session.name } : {}),
+              project: session.cwd || undefined,
+              parentSessionPath:
+                session.parentSessionPath ?? stats.parentSessionPath,
+            })),
             Effect.catch(() => Effect.succeed(undefined)),
           ),
         { concurrency: MAX_CONCURRENT_READS },
@@ -283,7 +363,11 @@ async function loadCurrentSessionSubagentStats(
 
 type ParsedCommand =
   | { readonly kind: "current" }
-  | { readonly kind: "all"; readonly days?: number; readonly project: boolean }
+  | {
+      readonly kind: "all";
+      readonly days?: number;
+      readonly project: boolean;
+    }
   | { readonly kind: "invalid"; readonly message: string };
 
 function parseCommand(args: string): ParsedCommand {
@@ -330,8 +414,11 @@ function createModelPricingResolver(
 ): ModelPricingResolver {
   return (provider, modelId) => {
     const directModel = ctx.modelRegistry.find(provider, modelId);
-    if (directModel && hasBillablePricing(directModel.cost)) return directModel.cost;
-    if (!modelId.endsWith("-free")) return directModel?.cost;
+    if (directModel) {
+      // A zero-rate catalog entry is known free usage, not missing pricing.
+      return { ...directModel.cost, source: "catalog" };
+    }
+    if (!modelId.endsWith("-free")) return undefined;
 
     const baseModelId = modelId.slice(0, -"-free".length);
     const candidates = [
@@ -340,7 +427,10 @@ function createModelPricingResolver(
       ...(FREE_MODEL_PRICE_REFERENCES[modelId] ?? []),
     ];
     for (const [referenceProvider, referenceModelId] of candidates) {
-      const referenceModel = ctx.modelRegistry.find(referenceProvider, referenceModelId);
+      const referenceModel = ctx.modelRegistry.find(
+        referenceProvider,
+        referenceModelId,
+      );
       if (referenceModel && hasBillablePricing(referenceModel.cost)) {
         return { ...referenceModel.cost, source: "estimated" };
       }
@@ -358,9 +448,12 @@ function hasBillablePricing(pricing: {
   cacheRead: number;
   cacheWrite: number;
 }): boolean {
-  return [pricing.input, pricing.output, pricing.cacheRead, pricing.cacheWrite].some(
-    (rate) => Number.isFinite(rate) && rate > 0,
-  );
+  return [
+    pricing.input,
+    pricing.output,
+    pricing.cacheRead,
+    pricing.cacheWrite,
+  ].some((rate) => Number.isFinite(rate) && rate > 0);
 }
 
 function errorMessage(error: unknown): string {

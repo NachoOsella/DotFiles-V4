@@ -22,11 +22,7 @@ export type ModelPricingResolver = (
 
 /** Source used to determine a model's cost. */
 export type PricingSource =
-  | "reported"
-  | "catalog"
-  | "estimated"
-  | "unknown"
-  | "mixed";
+  "reported" | "catalog" | "estimated" | "unknown" | "mixed";
 
 /** Aggregated model usage for a session. */
 export interface ModelUsage {
@@ -37,7 +33,15 @@ export interface ModelUsage {
   output: number;
   cacheRead: number;
   cacheWrite: number;
+  /** Actual or catalog-calculated cost. Estimated value is tracked separately. */
   cost: number;
+  reportedCost?: number;
+  catalogCost?: number;
+  estimatedCost?: number;
+  /** Tokens whose pricing could not be identified for this model. */
+  unknownTokens?: number;
+  /** Token buckets with known reported, catalog, or estimated pricing. */
+  pricedTokens?: number;
   /** Optional for compatibility with callers constructing test data. */
   pricingSource?: PricingSource;
 }
@@ -59,8 +63,20 @@ export interface TokenTotals {
   output: number;
   cacheRead: number;
   cacheWrite: number;
+  /** Canonical accumulated usage: the four explicit token buckets above. */
   totalTokens: number;
-  cost: { total: number };
+  cost: {
+    /** Actual or catalog-calculated cost; never includes estimated value. */
+    total: number;
+    reported?: number;
+    catalog?: number;
+    estimated?: number;
+    unknownTokens?: number;
+    pricedTokens?: number;
+  };
+  /** Provider-reported total retained only as diagnostic metadata. */
+  reportedTotalTokens?: number;
+  reportedTotalTokensMismatch?: number;
 }
 
 /** Statistics for one Pi session or the current in-memory branch. */
@@ -68,6 +84,8 @@ export interface SessionStats {
   file: string;
   /** Working directory associated with persisted sessions. */
   project?: string;
+  /** Parent session path when Pi recorded this as a child session. */
+  parentSessionPath?: string;
   name?: string;
   startTime?: string;
   durationMs?: number;
@@ -85,6 +103,7 @@ export interface SessionEntryLike {
   type?: unknown;
   timestamp?: unknown;
   name?: unknown;
+  parentSession?: unknown;
   message?: unknown;
   usage?: unknown;
 }

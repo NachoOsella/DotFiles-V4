@@ -8,7 +8,11 @@ import type { SessionEntryLike } from "./types.ts";
 
 test("parseCurrentBranch aggregates safe usage, models, and tools", () => {
   const entries: SessionEntryLike[] = [
-    { type: "session", timestamp: "2026-01-01T00:00:00.000Z" },
+    {
+      type: "session",
+      timestamp: "2026-01-01T00:00:00.000Z",
+      parentSession: "/tmp/root.jsonl",
+    },
     {
       type: "message",
       timestamp: "2026-01-01T00:00:01.000Z",
@@ -38,10 +42,12 @@ test("parseCurrentBranch aggregates safe usage, models, and tools", () => {
 
   assert.equal(stats.userMessages, 1);
   assert.equal(stats.assistantMessages, 1);
+  assert.equal(stats.parentSessionPath, "/tmp/root.jsonl");
   assert.equal(stats.durationMs, 3_000);
   assert.equal(stats.totalTokens.totalTokens, 38);
   assert.deepEqual(stats.toolCalls, [{ name: "read", count: 1 }]);
   assert.equal(stats.models[0]?.modelId, "test-model");
+  assert.equal(stats.totalTokens.cost.reported, 0.01);
 });
 
 test("parseCurrentBranch estimates missing costs from model pricing", () => {
@@ -73,8 +79,84 @@ test("parseCurrentBranch estimates missing costs from model pricing", () => {
   );
 
   assert.equal(stats.totalTokens.cost.total, 7.5);
+  assert.equal(stats.totalTokens.cost.catalog, 7.5);
+  assert.equal(stats.totalTokens.cost.reported, 0);
+  assert.equal(stats.totalTokens.cost.estimated, 0);
   assert.equal(stats.models[0]?.cost, 7.5);
+  assert.equal(stats.models[0]?.catalogCost, 7.5);
   assert.equal(stats.models[0]?.pricingSource, "catalog");
+  assert.equal(stats.models[0]?.pricedTokens, 10_000_000);
+});
+
+test("parseCurrentBranch keeps estimated free-model value out of actual cost", () => {
+  const stats = parseCurrentBranch(
+    [
+      {
+        type: "message",
+        message: {
+          role: "assistant",
+          provider: "openrouter",
+          model: "demo-free",
+          usage: {
+            input: 1_000_000,
+            output: 500_000,
+            totalTokens: 1_500_000,
+            cost: { total: 0 },
+          },
+        },
+      },
+    ],
+    "ephemeral",
+    undefined,
+    () => ({
+      input: 1,
+      output: 2,
+      cacheRead: 0,
+      cacheWrite: 0,
+      source: "estimated",
+    }),
+  );
+
+  assert.equal(stats.totalTokens.cost.total, 0);
+  assert.equal(stats.totalTokens.cost.estimated, 2);
+  assert.equal(stats.models[0]?.cost, 0);
+  assert.equal(stats.models[0]?.estimatedCost, 2);
+  assert.equal(stats.models[0]?.pricedTokens, 1_500_000);
+  assert.equal(stats.models[0]?.pricingSource, "estimated");
+});
+
+test("parseCurrentBranch treats a known zero-rate catalog model as free", () => {
+  const stats = parseCurrentBranch(
+    [
+      {
+        type: "message",
+        message: {
+          role: "assistant",
+          provider: "free-provider",
+          model: "free-model",
+          usage: {
+            input: 1_000,
+            output: 500,
+            totalTokens: 1_500,
+            cost: { total: 0 },
+          },
+        },
+      },
+    ],
+    "ephemeral",
+    undefined,
+    () => ({
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      source: "catalog",
+    }),
+  );
+
+  assert.equal(stats.models[0]?.pricingSource, "catalog");
+  assert.equal(stats.totalTokens.cost.unknownTokens, 0);
+  assert.equal(stats.totalTokens.cost.pricedTokens, 1_500);
 });
 
 test("parseCurrentBranch marks missing model pricing as unknown", () => {
@@ -101,6 +183,9 @@ test("parseCurrentBranch marks missing model pricing as unknown", () => {
   );
 
   assert.equal(stats.models[0]?.pricingSource, "unknown");
+  assert.equal(stats.totalTokens.cost.unknownTokens, 1_500);
+  assert.equal(stats.totalTokens.cost.pricedTokens, 0);
+  assert.equal(stats.models[0]?.pricedTokens, 0);
 });
 
 test("parseCurrentBranch includes nested tool and compaction usage", () => {
@@ -164,7 +249,12 @@ test("parseSessionFile counts billed usage across all branches", async () => {
         role: "assistant",
         provider: "test",
         model: "old",
-        usage: { input: 100, output: 50, totalTokens: 150, cost: { total: 1 } },
+        usage: {
+          input: 100,
+          output: 50,
+          totalTokens: 150,
+          cost: { total: 1 },
+        },
       },
     },
     {
@@ -176,13 +266,21 @@ test("parseSessionFile counts billed usage across all branches", async () => {
         role: "assistant",
         provider: "test",
         model: "current",
-        usage: { input: 10, output: 5, totalTokens: 15, cost: { total: 0.1 } },
+        usage: {
+          input: 10,
+          output: 5,
+          totalTokens: 15,
+          cost: { total: 0.1 },
+        },
       },
     },
   ];
 
   try {
-    await writeFile(file, entries.map((entry) => JSON.stringify(entry)).join("\n"));
+    await writeFile(
+      file,
+      entries.map((entry) => JSON.stringify(entry)).join("\n"),
+    );
     const stats = await parseSessionFile(file);
 
     assert.equal(stats.assistantMessages, 2);
@@ -208,7 +306,12 @@ test("parseCurrentBranch attributes usage to the concrete response model", () =>
           provider: "gateway",
           model: "routed-alias",
           responseModel: "concrete-model",
-          usage: { input: 10, output: 5, totalTokens: 15, cost: { total: 0 } },
+          usage: {
+            input: 10,
+            output: 5,
+            totalTokens: 15,
+            cost: { total: 0 },
+          },
         },
       },
     ],
@@ -224,9 +327,42 @@ test("parseCurrentBranch attributes usage to the concrete response model", () =>
   assert.equal(stats.models[0]?.modelId, "concrete-model");
 });
 
+test("parseCurrentBranch keeps provider total mismatches as diagnostics", () => {
+  const stats = parseCurrentBranch(
+    [
+      {
+        type: "message",
+        message: {
+          role: "assistant",
+          provider: "test",
+          model: "mismatch",
+          usage: {
+            input: 10,
+            output: 5,
+            cacheRead: 2,
+            cacheWrite: 1,
+            totalTokens: 99,
+            cost: { total: 0.1 },
+          },
+        },
+      },
+    ],
+    "ephemeral",
+  );
+
+  assert.equal(stats.totalTokens.totalTokens, 18);
+  assert.equal(stats.totalTokens.reportedTotalTokens, 99);
+  assert.equal(stats.totalTokens.reportedTotalTokensMismatch, 81);
+});
+
 test("parseCurrentBranch ignores malformed usage fields", () => {
   const stats = parseCurrentBranch(
-    [{ type: "message", message: { role: "assistant", usage: { input: "invalid" } } }],
+    [
+      {
+        type: "message",
+        message: { role: "assistant", usage: { input: "invalid" } },
+      },
+    ],
     "ephemeral",
   );
 
