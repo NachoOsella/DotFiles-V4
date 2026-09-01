@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import { Data, Effect } from "effect";
 import { finalizeTotalTokens } from "./format.ts";
 import { calculateUsageCost, combinePricingSources } from "./pricing.ts";
@@ -16,6 +16,15 @@ export class SessionReadError extends Data.TaggedError("SessionReadError")<{
   readonly path: string;
   readonly cause: unknown;
 }> {}
+
+interface CachedSessionStats {
+  readonly modifiedMs: number;
+  readonly size: number;
+  readonly pricing?: ModelPricingResolver;
+  readonly stats: SessionStats;
+}
+
+const sessionStatsCache = new Map<string, CachedSessionStats>();
 
 /** Create an empty stats object for a session source. */
 export function createEmptyStats(file: string, name?: string): SessionStats {
@@ -52,11 +61,29 @@ export function parseSessionFileEffect(
   pricing?: ModelPricingResolver,
 ): Effect.Effect<SessionStats, SessionReadError> {
   return Effect.tryPromise({
-    try: () => readFile(filePath, "utf8"),
+    try: async () => {
+      const fileStats = await stat(filePath);
+      const cached = sessionStatsCache.get(filePath);
+      if (
+        cached?.modifiedMs === fileStats.mtimeMs &&
+        cached.size === fileStats.size &&
+        cached.pricing === pricing
+      ) {
+        return cached.stats;
+      }
+
+      const content = await readFile(filePath, "utf8");
+      const stats = parseSessionText(content, filePath, pricing);
+      sessionStatsCache.set(filePath, {
+        modifiedMs: fileStats.mtimeMs,
+        size: fileStats.size,
+        pricing,
+        stats,
+      });
+      return stats;
+    },
     catch: (cause) => new SessionReadError({ path: filePath, cause }),
-  }).pipe(
-    Effect.map((content) => parseSessionText(content, filePath, pricing)),
-  );
+  });
 }
 
 /** Promise adapter retained for callers outside an Effect pipeline. */
@@ -123,11 +150,14 @@ function parseSessionText(
     if (entry.type === "session_info" && typeof entry.name === "string") {
       stats.name = entry.name;
     }
-    if (entry.type === "session" && typeof entry.parentSession === "string") {
-      stats.parentSessionPath = entry.parentSession;
-    }
-    if (entry.type !== "session")
+    if (entry.type === "session") {
+      if (typeof entry.cwd === "string") stats.project = entry.cwd;
+      if (typeof entry.parentSession === "string") {
+        stats.parentSessionPath = entry.parentSession;
+      }
+    } else {
       collectEntry(stats, collectors, entry, pricing);
+    }
   }
 
   if (firstTimestamp !== undefined)

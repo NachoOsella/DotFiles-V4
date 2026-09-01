@@ -1,15 +1,15 @@
 /** Session statistics command backed by bounded, fault-tolerant Effect pipelines. */
 
 import { resolve } from "node:path";
-import {
-  SessionManager,
-  type ExtensionAPI,
-  type ExtensionCommandContext,
+import type {
+  ExtensionAPI,
+  ExtensionCommandContext,
 } from "@earendil-works/pi-coding-agent";
 import { matchesKey } from "@earendil-works/pi-tui";
 import { Effect } from "effect";
 import { showStatsModal } from "./modal.ts";
 import { mergeSessionStats } from "./aggregate.ts";
+import { discoverSessionFiles } from "./discovery.ts";
 import {
   buildAllStatsOutput,
   buildCurrentSessionOutput,
@@ -26,7 +26,8 @@ import type {
 
 const STATUS_KEY = "session-stats";
 const SUBAGENT_SESSION_PREFIX = "subagent:";
-const MAX_CONCURRENT_READS = 8;
+const MAX_CONCURRENT_READS = 16;
+const pricingResolvers = new WeakMap<object, ModelPricingResolver>();
 
 /** Paid catalog equivalents used to estimate the value of free endpoints. */
 const FREE_MODEL_PRICE_REFERENCES: Record<string, readonly [string, string][]> =
@@ -67,9 +68,19 @@ async function showAllSessionStats(
   ctx: ExtensionCommandContext,
 ): Promise<void> {
   const program = Effect.gen(function* () {
-    const sessions = yield* Effect.tryPromise(() =>
-      project ? SessionManager.list(ctx.cwd) : SessionManager.listAll(),
-    );
+    const discovered = yield* Effect.tryPromise(() => discoverSessionFiles());
+    const projectSessions = project
+      ? discovered.filter(
+          (session) => session.cwd && resolve(session.cwd) === resolve(ctx.cwd),
+        )
+      : discovered;
+    const cutoff = days ? Date.now() - days * 24 * 60 * 60 * 1000 : undefined;
+    const sessions =
+      cutoff === undefined
+        ? projectSessions
+        : projectSessions.filter(
+            (session) => session.created && session.created.getTime() >= cutoff,
+          );
     if (sessions.length === 0) return { kind: "empty" as const };
 
     yield* Effect.sync(() => {
@@ -299,7 +310,7 @@ async function loadCurrentSessionSubagentStats(
   if (currentFile === "ephemeral") return [];
 
   try {
-    const sessions = await SessionManager.listAll();
+    const sessions = await discoverSessionFiles();
     const currentPath = resolve(currentFile);
     const currentStart = ctx.sessionManager.getHeader()?.timestamp;
     const currentStartTime = currentStart
@@ -334,7 +345,7 @@ async function loadCurrentSessionSubagentStats(
         resolve(session.cwd) === resolve(ctx.cwd) &&
         session.name?.startsWith(SUBAGENT_SESSION_PREFIX) &&
         (Number.isNaN(currentStartTime) ||
-          session.created.getTime() >= currentStartTime),
+          (session.created?.getTime() ?? 0) >= currentStartTime),
     );
     const subagentSessions = [...linkedChildren, ...legacyChildren];
     const parsed = await Effect.runPromise(
@@ -412,7 +423,11 @@ function parseCommand(args: string): ParsedCommand {
 function createModelPricingResolver(
   ctx: ExtensionCommandContext,
 ): ModelPricingResolver {
-  return (provider, modelId) => {
+  const registry = ctx.modelRegistry as object;
+  const cached = pricingResolvers.get(registry);
+  if (cached) return cached;
+
+  const resolver: ModelPricingResolver = (provider, modelId) => {
     const directModel = ctx.modelRegistry.find(provider, modelId);
     if (directModel) {
       // A zero-rate catalog entry is known free usage, not missing pricing.
@@ -440,6 +455,8 @@ function createModelPricingResolver(
     // equivalent exists; the dashboard will show it as unknown instead.
     return undefined;
   };
+  pricingResolvers.set(registry, resolver);
+  return resolver;
 }
 
 function hasBillablePricing(pricing: {

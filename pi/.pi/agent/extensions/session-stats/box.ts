@@ -51,7 +51,7 @@ export function createDashboardFrame(outerWidth: number, theme?: Theme) {
         "accent",
         bold(theme, ` ${title.toUpperCase()} `),
       );
-      const remainder = Math.max(0, innerWidth - visibleWidth(label) - 2);
+      const remainder = Math.max(0, innerWidth - visibleWidth(label) - 1);
       return truncateToWidth(
         mutedBorder("├─") + label + mutedBorder(`${"─".repeat(remainder)}┤`),
         width,

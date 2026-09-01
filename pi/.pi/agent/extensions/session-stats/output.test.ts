@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { mergeSessionStats } from "./aggregate.ts";
+import { createDashboardFrame } from "./box.ts";
 import { calculateCacheReadShare, fmtCost } from "./format.ts";
 import {
   buildAllStatsOutput,
@@ -35,6 +36,13 @@ function session(overrides: Partial<SessionStats> = {}): SessionStats {
     ...overrides,
   };
 }
+
+test("section separators preserve the right dashboard border", () => {
+  const width = 60;
+  const section = createDashboardFrame(width).section("Overview");
+  assert.equal(visibleWidth(section), width);
+  assert.ok(section.endsWith("┤"));
+});
 
 test("fmtCost does not hide small non-zero estimates", () => {
   assert.equal(fmtCost(0.00001), "$0.000010");

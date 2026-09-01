@@ -102,6 +102,7 @@ export interface SessionStats {
 export interface SessionEntryLike {
   type?: unknown;
   timestamp?: unknown;
+  cwd?: unknown;
   name?: unknown;
   parentSession?: unknown;
   message?: unknown;
