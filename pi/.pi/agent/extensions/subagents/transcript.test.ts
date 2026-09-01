@@ -18,6 +18,7 @@ function createSnapshot(): SubagentSnapshot {
     prompt: "Review the project",
     cwd: "/tmp/project",
     status: "running",
+    ownedPaths: [],
     createdAt: 0,
     meta: { backend: "pi" },
     usage: {},

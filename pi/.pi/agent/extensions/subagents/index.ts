@@ -3,15 +3,18 @@
  *
  * Tools (for the parent LLM):
  * - subagent_spawn: fire-and-forget spawn (prompt, title, working_dir, model,
- *   reasoning_effort). Max 8 running at once.
+ *   reasoning_effort). Default max 8 running at once; configurable by environment.
  * - subagent_send: steer or queue a concise child instruction.
  * - subagent_wait: wait for children or mailbox activity.
- * - subagent_cancel: stop one or more running subagents.
+ * - subagent_cancel: compatibility alias for interrupting subagents.
+ * - subagent_interrupt: interrupt runs while keeping sessions reusable.
+ * - subagent_close: permanently close subagents and release resources.
  * - subagent_check: peek at a subagent's status and recent activity.
  * - subagent_list: list all subagents.
  *
  * Unawaited subagents queue their result as a follow-up message when they
  * settle. `/subagents` opens a picker + full interactive takeover view.
+ * Subagents are conversationally isolated, not OS-level sandboxes.
  *
  * Architecture: Effect v4 generators throughout (pi backend -> manager ->
  * runtime); this file is the async boundary where tool handlers run effects
@@ -44,6 +47,7 @@ import {
     type SubagentSnapshot,
 } from './src/domain.ts'
 import { formatActivityStatus, formatContextUtilization } from './src/format.ts'
+import { deliverMailbox as deliverMailboxToParent } from './src/delivery.ts'
 import { SubagentManager, type SubagentManagerShape } from './src/manager.ts'
 import type { AgentEnvelope } from './src/mailbox.ts'
 import { AGENT_ROLE_NAMES } from './src/roles.ts'
@@ -52,11 +56,15 @@ import {
     buildSubagentSpawnResult,
     SUBAGENT_CANCEL_PARAMETER_DESCRIPTIONS,
     SUBAGENT_CANCEL_TOOL_DESCRIPTION,
+    SUBAGENT_CLOSE_PARAMETER_DESCRIPTIONS,
+    SUBAGENT_CLOSE_TOOL_DESCRIPTION,
     SUBAGENT_CHECK_PARAMETER_DESCRIPTIONS,
     SUBAGENT_CHECK_TOOL_DESCRIPTION,
     SUBAGENT_LIST_TOOL_DESCRIPTION,
     SUBAGENT_SEND_PARAMETER_DESCRIPTIONS,
     SUBAGENT_SEND_TOOL_DESCRIPTION,
+    SUBAGENT_INTERRUPT_PARAMETER_DESCRIPTIONS,
+    SUBAGENT_INTERRUPT_TOOL_DESCRIPTION,
     SUBAGENT_SPAWN_PARAMETER_DESCRIPTIONS,
     SUBAGENT_SPAWN_PROMPT_GUIDELINES,
     SUBAGENT_SPAWN_PROMPT_SNIPPET,
@@ -124,14 +132,25 @@ function resolveChildProjectTrust(options: {
     }
 }
 
-export default function (pi: ExtensionAPI) {
+export interface SubagentsExtensionOptions {
+    /** Runtime factory used by integration tests and host-specific embeddings. */
+    readonly createRuntime?: () => SubagentRuntime
+}
+
+export function createSubagentsExtension(
+    pi: ExtensionAPI,
+    options: SubagentsExtensionOptions = {}
+) {
     let runtime: SubagentRuntime | undefined
     let managerPromise: Promise<SubagentManagerShape> | undefined
     let ui: ExtensionUIContext | undefined
     let unsubStatus: (() => void) | undefined
     let deliveryTimer: ReturnType<typeof setTimeout> | undefined
+    let deliveryInFlight: Promise<void> = Promise.resolve()
+    const deliveryAttempts = new Map<number, number>()
 
-    const getRuntime = () => (runtime ??= createSubagentRuntime())
+    const getRuntime = () =>
+        (runtime ??= options.createRuntime?.() ?? createSubagentRuntime())
 
     /** Resolve the manager service once per runtime and wire the extension hooks. */
     const getManager = () => {
@@ -139,6 +158,9 @@ export default function (pi: ExtensionAPI) {
             .runPromise(SubagentManager)
             .then((manager) => {
                 manager.setOnMailbox(onMailbox)
+                manager.view.setOnSettled((_snapshot, consumed) => {
+                    if (!consumed) scheduleMailboxDelivery()
+                })
                 unsubStatus?.()
                 unsubStatus = manager.view.subscribe(() =>
                     updateStatus(manager)
@@ -167,27 +189,30 @@ export default function (pi: ExtensionAPI) {
 
     const deliverMailbox = (
         manager: SubagentManagerShape,
-        sequences?: number[]
+        sequences?: ReadonlyArray<number>
     ) => {
-        const events = manager.drainMailbox({ sequences })
-        if (events.length === 0) return
-        pi.sendMessage(
-            {
-                customType: 'subagent-result',
-                content: buildMailboxMessage(events),
-                display: true,
-                details: { events },
-            },
-            {
-                deliverAs: 'steer',
-                triggerTurn: true,
-            }
+        const operation = () =>
+            deliverMailboxToParent(
+                manager,
+                (message, options) => pi.sendMessage(message, options),
+                deliveryAttempts,
+                sequences
+            )
+        const result = deliveryInFlight.then(operation, operation)
+        // Keep later deliveries serialized even if a host delivery rejects.
+        deliveryInFlight = result.then(
+            () => undefined,
+            () => undefined
         )
+        return result
     }
 
     const flushMailbox = () => {
         deliveryTimer = undefined
-        void getManager().then((manager) => deliverMailbox(manager))
+        void getManager().then(async (manager) => {
+            const result = await deliverMailbox(manager)
+            if (!result.delivered && result.retry) scheduleMailboxDelivery()
+        })
     }
 
     const scheduleMailboxDelivery = () => {
@@ -196,9 +221,13 @@ export default function (pi: ExtensionAPI) {
     }
 
     const onMailbox = (envelope: AgentEnvelope) => {
-        void getManager().then((manager) => {
+        void getManager().then(async (manager) => {
             if (envelope.kind === 'question') {
-                deliverMailbox(manager, [envelope.sequence])
+                const result = await deliverMailbox(manager, [
+                    envelope.sequence,
+                ])
+                if (!result.delivered && result.retry) scheduleMailboxDelivery()
+                else if (result.delivered) scheduleMailboxDelivery()
                 return
             }
             scheduleMailboxDelivery()
@@ -212,6 +241,7 @@ export default function (pi: ExtensionAPI) {
     pi.on('session_shutdown', async () => {
         if (deliveryTimer) clearTimeout(deliveryTimer)
         deliveryTimer = undefined
+        deliveryAttempts.clear()
         unsubStatus?.()
         unsubStatus = undefined
         ui?.setStatus('subagents', undefined)
@@ -266,8 +296,15 @@ export default function (pi: ExtensionAPI) {
                         SUBAGENT_SPAWN_PARAMETER_DESCRIPTIONS.reasoningEffort,
                 })
             ),
+            owned_paths: Type.Optional(
+                Type.Array(Type.String(), {
+                    maxItems: 64,
+                    description:
+                        SUBAGENT_SPAWN_PARAMETER_DESCRIPTIONS.ownedPaths,
+                })
+            ),
         }),
-        async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+        async execute(_toolCallId, params, signal, _onUpdate, ctx) {
             const manager = await getManager()
             const cwd = path.resolve(ctx.cwd, params.working_dir ?? '.')
             if (!fs.existsSync(cwd) || !fs.statSync(cwd).isDirectory()) {
@@ -285,6 +322,10 @@ export default function (pi: ExtensionAPI) {
                     cwd,
                     model: params.model,
                     reasoningEffort: params.reasoning_effort,
+                    ownedPaths: params.owned_paths
+                        ?.map((value) => value.trim())
+                        .filter(Boolean)
+                        .map((value) => path.resolve(cwd, value)),
                     parent: {
                         parentCwd: ctx.cwd,
                         parentSession: ctx.sessionManager.getSessionFile(),
@@ -299,7 +340,11 @@ export default function (pi: ExtensionAPI) {
                         inheritedThinkingLevel: pi.getThinkingLevel(),
                         modelRegistry: ctx.modelRegistry,
                     },
-                })
+                }),
+                {
+                    signal,
+                    interruptMessage: 'Subagent spawn aborted.',
+                }
             )
 
             return {
@@ -311,6 +356,7 @@ export default function (pi: ExtensionAPI) {
                             taskName: snap.taskName ?? snap.title,
                             role: snap.role ?? 'default',
                             modelLabel: formatModelWithThinking(snap.meta),
+                            ownershipWarning: snap.ownershipWarning,
                         }),
                     },
                 ],
@@ -320,6 +366,8 @@ export default function (pi: ExtensionAPI) {
                     role: snap.role,
                     cwd,
                     model: formatModelWithThinking(snap.meta),
+                    owned_paths: snap.ownedPaths,
+                    ownership_warning: snap.ownershipWarning,
                 },
             }
         },
@@ -334,12 +382,6 @@ export default function (pi: ExtensionAPI) {
                 Type.Array(Type.String(), {
                     maxItems: 64,
                     description: SUBAGENT_WAIT_PARAMETER_DESCRIPTIONS.ids,
-                })
-            ),
-            timeout_ms: Type.Optional(
-                Type.Integer({
-                    minimum: 0,
-                    description: SUBAGENT_WAIT_PARAMETER_DESCRIPTIONS.timeoutMs,
                 })
             ),
             after_sequence: Type.Optional(
@@ -357,7 +399,6 @@ export default function (pi: ExtensionAPI) {
                 const result = await runTool(
                     getRuntime(),
                     manager.waitForMailbox({
-                        timeoutMs: params.timeout_ms,
                         afterSequence: params.after_sequence,
                     }),
                     { signal, interruptMessage: 'Mailbox wait aborted.' }
@@ -387,7 +428,7 @@ export default function (pi: ExtensionAPI) {
                     `Unknown subagent id(s): ${unknown.join(', ')}. Known: ${known.join(', ') || 'none'}.`
                 )
             }
-            await runTool(
+            const waitResult = await runTool(
                 getRuntime(),
                 manager.waitFor(ids, (pending) => {
                     onUpdate?.({
@@ -406,7 +447,7 @@ export default function (pi: ExtensionAPI) {
                 }
             )
 
-            const events = manager.drainMailbox({ agentIds: ids })
+            const events = waitResult.events
             const sections: string[] = []
             let remainingBytes = WAIT_OUTPUT_MAX_BYTES
             for (const id of ids) {
@@ -426,7 +467,18 @@ export default function (pi: ExtensionAPI) {
                 sections.push(section)
                 remainingBytes -= Buffer.byteLength(section, 'utf8')
             }
-            const bounded = truncateHead(sections.join('\n\n---\n\n'), {
+            const gapWarnings = events
+                .filter((event) => event.kind === 'gap')
+                .map((event) => event.text)
+            const body = [
+                gapWarnings.length > 0
+                    ? `Mailbox warning:\n${gapWarnings.join('\n')}`
+                    : undefined,
+                ...sections,
+            ]
+                .filter((section): section is string => section !== undefined)
+                .join('\n\n---\n\n')
+            const bounded = truncateHead(body, {
                 maxBytes: WAIT_OUTPUT_MAX_BYTES,
                 maxLines: DEFAULT_MAX_LINES,
             })
@@ -436,7 +488,9 @@ export default function (pi: ExtensionAPI) {
                     events,
                     next_sequence:
                         events.at(-1)?.sequence ?? params.after_sequence ?? 0,
-                    timed_out: false,
+                    timed_out: waitResult.timedOut,
+                    pending: waitResult.pending,
+                    completed: waitResult.completed,
                     results: ids.map((id) => {
                         const snap = manager.view.get(id)
                         return {
@@ -468,19 +522,23 @@ export default function (pi: ExtensionAPI) {
                 })
             ),
         }),
-        async execute(_toolCallId, params) {
+        async execute(_toolCallId, params, signal) {
             const manager = await getManager()
             const snap = manager.view.get(params.id)
             if (!snap) throw new Error(`Unknown subagent id "${params.id}".`)
             await runTool(
                 getRuntime(),
-                manager.send(params.id, params.message, params.delivery)
+                manager.send(params.id, params.message, params.delivery),
+                {
+                    signal,
+                    interruptMessage: 'Subagent send aborted.',
+                }
             )
             return {
                 content: [{ type: 'text', text: `Sent to ${params.id}.` }],
                 details: {
                     id: params.id,
-                    delivery: params.delivery ?? 'steer',
+                    delivery: params.delivery ?? 'follow-up',
                 },
             }
         },
@@ -495,7 +553,7 @@ export default function (pi: ExtensionAPI) {
                 description: SUBAGENT_CANCEL_PARAMETER_DESCRIPTIONS.ids,
             }),
         }),
-        async execute(_toolCallId, params) {
+        async execute(_toolCallId, params, signal) {
             const manager = await getManager()
             const ids = [...new Set(params.ids)]
             if (ids.length === 0)
@@ -509,7 +567,10 @@ export default function (pi: ExtensionAPI) {
                 )
             }
 
-            const report = await runTool(getRuntime(), manager.cancel(ids))
+            const report = await runTool(getRuntime(), manager.interrupt(ids), {
+                signal,
+                interruptMessage: 'Subagent interrupt aborted.',
+            })
 
             const lines = report.map((entry) =>
                 entry.cancelled
@@ -526,6 +587,88 @@ export default function (pi: ExtensionAPI) {
                         status: entry.status,
                     })),
                 },
+            }
+        },
+    })
+
+    pi.registerTool({
+        name: 'subagent_interrupt',
+        label: 'Interrupt Subagents',
+        description: SUBAGENT_INTERRUPT_TOOL_DESCRIPTION,
+        parameters: Type.Object({
+            ids: Type.Array(Type.String(), {
+                description: SUBAGENT_INTERRUPT_PARAMETER_DESCRIPTIONS.ids,
+            }),
+        }),
+        async execute(_toolCallId, params, signal) {
+            const manager = await getManager()
+            const ids = [...new Set(params.ids)]
+            if (ids.length === 0)
+                throw new Error('Provide at least one subagent id.')
+            const unknown = ids.filter((id) => !manager.view.get(id))
+            if (unknown.length > 0)
+                throw new Error(
+                    `Unknown subagent id(s): ${unknown.join(', ')}.`
+                )
+            const report = await runTool(getRuntime(), manager.interrupt(ids), {
+                signal,
+                interruptMessage: 'Subagent interrupt aborted.',
+            })
+            return {
+                content: [
+                    {
+                        type: 'text',
+                        text: report
+                            .map((entry) =>
+                                entry.cancelled
+                                    ? `Interrupted ${entry.id} "${entry.title}".`
+                                    : `${entry.id} "${entry.title}" was already ${entry.status}.`
+                            )
+                            .join('\n'),
+                    },
+                ],
+                details: { results: report },
+            }
+        },
+    })
+
+    pi.registerTool({
+        name: 'subagent_close',
+        label: 'Close Subagents',
+        description: SUBAGENT_CLOSE_TOOL_DESCRIPTION,
+        parameters: Type.Object({
+            ids: Type.Array(Type.String(), {
+                description: SUBAGENT_CLOSE_PARAMETER_DESCRIPTIONS.ids,
+            }),
+        }),
+        async execute(_toolCallId, params, signal) {
+            const manager = await getManager()
+            const ids = [...new Set(params.ids)]
+            if (ids.length === 0)
+                throw new Error('Provide at least one subagent id.')
+            const unknown = ids.filter((id) => !manager.view.get(id))
+            if (unknown.length > 0)
+                throw new Error(
+                    `Unknown subagent id(s): ${unknown.join(', ')}.`
+                )
+            const report = await runTool(getRuntime(), manager.close(ids), {
+                signal,
+                interruptMessage: 'Subagent close aborted.',
+            })
+            return {
+                content: [
+                    {
+                        type: 'text',
+                        text: report
+                            .map((entry) =>
+                                entry.closed
+                                    ? `Closed ${entry.id} "${entry.title}".`
+                                    : `Could not close ${entry.id} "${entry.title}".`
+                            )
+                            .join('\n'),
+                    },
+                ],
+                details: { results: report },
             }
         },
     })
@@ -597,6 +740,7 @@ export default function (pi: ExtensionAPI) {
                         runtime: 'pi',
                         status: snap.status,
                     })),
+                    metrics: manager.getMetrics(),
                 },
             }
         },
@@ -669,4 +813,8 @@ export default function (pi: ExtensionAPI) {
             await openSubagentPicker(ctx, manager.view)
         },
     })
+}
+
+export default function (pi: ExtensionAPI) {
+    createSubagentsExtension(pi)
 }

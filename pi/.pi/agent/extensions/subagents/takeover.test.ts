@@ -4,6 +4,7 @@ import { formatModelWithThinking } from "./src/domain.ts";
 import {
   preserveScrolledOffset,
   reconcileDashboardSelection,
+  transcriptCacheKey,
   type DashboardSelection,
 } from "./src/ui/takeover.ts";
 
@@ -31,6 +32,18 @@ test("keeps scrolled transcript content anchored as streamed output grows", () =
   assert.equal(nextOffset, 55);
   assert.equal(previousLineCount - previousOffset, nextLineCount - nextOffset);
   assert.equal(preserveScrolledOffset(0, previousLineCount, nextLineCount), 0);
+});
+
+test("transcript cache identity changes with explicit versions", () => {
+  const base = { id: "sa-1", version: 4, transcriptVersion: 10 };
+  assert.notEqual(
+    transcriptCacheKey(base, 80),
+    transcriptCacheKey({ ...base, transcriptVersion: 11 }, 80),
+  );
+  assert.notEqual(
+    transcriptCacheKey({ id: base.id, version: 4 }, 80),
+    transcriptCacheKey({ id: base.id, version: 5 }, 80),
+  );
 });
 
 test("dashboard selection follows its subagent id and falls back by row", () => {

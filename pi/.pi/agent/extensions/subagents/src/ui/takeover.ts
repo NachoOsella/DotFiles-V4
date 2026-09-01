@@ -48,6 +48,8 @@ function statusGlyph(snap: SubagentSnapshot, theme: Theme): string {
             return theme.fg('success', '■')
         case 'error':
             return theme.fg('error', '■')
+        case 'closed':
+            return theme.fg('muted', '■')
     }
 }
 
@@ -59,6 +61,8 @@ function statusWord(snap: SubagentSnapshot, theme: Theme): string {
             return theme.fg('success', 'done')
         case 'error':
             return theme.fg('error', 'failed')
+        case 'closed':
+            return theme.fg('muted', 'closed')
     }
 }
 
@@ -424,6 +428,16 @@ export function preserveScrolledOffset(
     return Math.max(0, scrollOffset + nextLineCount - previousLineCount)
 }
 
+/** Stable cache identity for transcript and live activity rendering. */
+export function transcriptCacheKey(
+    snap: Pick<SubagentSnapshot, 'id' | 'version' | 'transcriptVersion'>,
+    width: number
+) {
+    return [snap.id, snap.transcriptVersion ?? snap.version ?? 0, width].join(
+        '|'
+    )
+}
+
 export class TakeoverView implements Component, Focusable {
     private tui: TUI
     private theme: Theme
@@ -569,31 +583,12 @@ export class TakeoverView implements Component, Focusable {
         this.tui.requestRender()
     }
 
-    /** Cheap identity of everything that changes the rendered transcript. */
+    /** Cache identity is version-based, never derived from content lengths. */
     private currentTranscriptKey(
         snap: SubagentSnapshot,
         width: number
     ): string {
-        const items = snap.transcript
-        const last = items[items.length - 1]
-        return [
-            width,
-            snap.status,
-            snap.turns,
-            items.length,
-            last?.kind ?? '',
-            snap.liveTools
-                .map(
-                    (t) =>
-                        `${t.toolId}:${t.outputPreview?.length ?? 0}:${t.done ? 1 : 0}`
-                )
-                .join(','),
-            snap.queued.length,
-            snap.liveAssistant?.text.length ?? 0,
-            snap.liveAssistant?.thinking.length ?? 0,
-            snap.errorText?.length ?? 0,
-            snap.finalText.length,
-        ].join('|')
+        return transcriptCacheKey(snap, width)
     }
 
     private transcript(snap: SubagentSnapshot, width: number): string[] {

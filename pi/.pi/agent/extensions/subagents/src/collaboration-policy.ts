@@ -4,6 +4,8 @@ export const SUBAGENT_ORCHESTRATION_TOOL_NAMES = [
   "subagent_send",
   "subagent_wait",
   "subagent_cancel",
+  "subagent_interrupt",
+  "subagent_close",
   "subagent_check",
   "subagent_list",
 ] as const;
@@ -18,7 +20,7 @@ export function isSubagentOrchestrationTool(name: string): boolean {
 
 /** Short guidance for a parent that can delegate work. */
 export const COLLABORATION_POLICY =
-  "Delegate only when independent context, specialization, or parallel work is useful. Keep small, sequential, or overlapping work in the main thread. Give each subagent one self-contained task and separate file ownership. Use the cheapest capable model, then verify and integrate its work."
+  "Default to doing the work yourself. Delegate only when it provides a clear advantage through meaningful parallelism, independent context, specialization, or context reduction. Parallelizable does not automatically mean worth delegating. Do not delegate small, sequential, tightly coupled, or quickly solvable work, or work whose result you would immediately wait for. Use one bounded assistant while continuing useful work; orchestrate only multiple substantial independent workstreams. Give each subagent one self-contained task with clear ownership. All agents share the filesystem: never overwrite, revert, or modify unrelated parallel work. Verify and integrate delegated work yourself before presenting it as complete."
 
 /** Returns whether the parent has the spawn tool that makes delegation possible. */
 export function hasCollaborationPolicy(tools: Iterable<string>): boolean {

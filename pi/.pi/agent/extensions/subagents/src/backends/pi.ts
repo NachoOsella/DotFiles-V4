@@ -4,7 +4,7 @@
  * Each subagent is an in-process `AgentSession` (a port of v1
  * subagents/manager.ts + shared/child-session.ts):
  * - real session files visible in /resume, child resources loaded per-cwd
- *   with trust gating, and the child tool denylist;
+ *   with trust gating, and an explicit built-in child tool allowlist;
  * - `session.subscribe()` events translated to normalized SubagentEvents;
  * - send() steers a streaming run or starts a fresh prompt() when idle;
  * - interrupt clears the queue and aborts; closing the session scope emits
@@ -41,6 +41,9 @@ import type {
 } from '../domain.ts'
 import { SendError, SpawnError } from '../domain.ts'
 import {
+    CODING_TOOL_NAMES,
+    READ_ONLY_TOOL_NAMES,
+    REVIEW_TOOL_NAMES,
     isAgentRoleName,
     resolveAgentRole,
     withAgentRoleContextFile,
@@ -54,12 +57,27 @@ export const CHILD_EXCLUDED_TOOL_NAMES = [
     'subagent_spawn',
     'subagent_wait',
     'subagent_cancel',
+    'subagent_interrupt',
+    'subagent_close',
     'subagent_send',
     'subagent_check',
     'subagent_list',
     'workflow',
     'ask_user',
 ] as const
+
+/** Return the complete built-in allowlist for a selected child role. */
+export function childToolNames(
+    role: ReturnType<typeof resolveAgentRole>,
+    canReportToParent: boolean
+): ReadonlyArray<string> {
+    const roleTools = role.readOnly
+        ? role.name === 'explorer'
+            ? READ_ONLY_TOOL_NAMES
+            : REVIEW_TOOL_NAMES
+        : CODING_TOOL_NAMES
+    return [...roleTools, ...(canReportToParent ? ['report_to_parent'] : [])]
+}
 
 // --- Model + effort resolution -----------------------------------------------
 
@@ -78,6 +96,18 @@ function resolvePiModel(
     hint: string | undefined,
     inherited: { provider: string; id: string } | undefined
 ): Model<any> | undefined {
+    if (hint === '@cheapest' || hint === '@capable') {
+        const candidates = modelRuntime.getAvailableSnapshot()
+        if (candidates.length === 0) {
+            return inherited
+                ? modelRuntime.getModel(inherited.provider, inherited.id)
+                : undefined
+        }
+        return [...candidates].sort((left, right) => {
+            if (hint === '@cheapest') return modelCost(left) - modelCost(right)
+            return modelCapability(right) - modelCapability(left)
+        })[0]
+    }
     if (!hint) {
         if (!inherited) return undefined
         return modelRuntime.getModel(inherited.provider, inherited.id)
@@ -109,6 +139,23 @@ function resolvePiModel(
  * registry. Copy those registrations into the child runtime, where the SDK
  * now owns model lookup and request authentication.
  */
+function modelCost(model: Model<any>) {
+    return (
+        model.cost.input +
+        model.cost.output +
+        model.cost.cacheRead +
+        model.cost.cacheWrite
+    )
+}
+
+function modelCapability(model: Model<any>) {
+    return (
+        (model.reasoning ? 1_000_000_000 : 0) +
+        model.contextWindow +
+        model.maxTokens
+    )
+}
+
 function copyParentProviderRegistrations(
     parentRegistry:
         NonNullable<SpawnTask['parent']['modelRegistry']> | undefined,
@@ -263,20 +310,21 @@ function messageRole(msg: unknown): Message['role'] | undefined {
 }
 
 function lastAssistantMessage(
-    session: AgentSession
+    session: AgentSession,
+    fromMessageIndex = 0
 ): AssistantMessage | undefined {
     const messages = session.messages
-    for (let i = messages.length - 1; i >= 0; i--) {
+    for (let i = messages.length - 1; i >= fromMessageIndex; i--) {
         const msg = messages[i]
         if (messageRole(msg) === 'assistant') return msg as AssistantMessage
     }
     return undefined
 }
 
-/** Final assistant text output (last assistant message with text), v1 semantics. */
-function finalOutput(session: AgentSession): string {
+/** Final assistant text output produced after the supplied run boundary. */
+function finalOutput(session: AgentSession, fromMessageIndex = 0): string {
     const messages = session.messages
-    for (let i = messages.length - 1; i >= 0; i--) {
+    for (let i = messages.length - 1; i >= fromMessageIndex; i--) {
         const msg = messages[i]
         if (messageRole(msg) !== 'assistant') continue
         const text = (msg as AssistantMessage).content
@@ -376,9 +424,15 @@ export interface ChildReport {
     readonly message: string
 }
 
+export type PiSessionFactory = (
+    options: Parameters<typeof createAgentSession>[0]
+) => ReturnType<typeof createAgentSession>
+
 export interface PiBackendOptions {
     /** Receives bounded questions from the child-only report_to_parent tool. */
     readonly onChildReport?: (report: ChildReport) => void | Promise<void>
+    /** Injectable SDK boundary used by integration tests and alternate runtimes. */
+    readonly sessionFactory?: PiSessionFactory
 }
 
 function createChildReportTool(
@@ -435,7 +489,8 @@ function createChildReportTool(
 
 const makePiSession = (
     task: SpawnTask,
-    onChildReport: PiBackendOptions['onChildReport']
+    onChildReport: PiBackendOptions['onChildReport'],
+    sessionFactory: PiSessionFactory = createAgentSession
 ): Effect.Effect<SubagentSession, SpawnError, Scope.Scope> =>
     Effect.gen(function* () {
         const agentDir = getAgentDir()
@@ -481,17 +536,8 @@ const makePiSession = (
                 )
                 const canReportToParent =
                     !!task.reportToParent || !!onChildReport
-                const childTools = role.readOnly
-                    ? [
-                          'read',
-                          'grep',
-                          'find',
-                          'ls',
-                          'lsp',
-                          ...(canReportToParent ? ['report_to_parent'] : []),
-                      ]
-                    : undefined
-                const { session } = await createAgentSession({
+                const childTools = [...childToolNames(role, canReportToParent)]
+                const { session } = await sessionFactory({
                     cwd: task.cwd,
                     sessionManager: SessionManager.create(task.cwd, undefined, {
                         parentSession: task.parent.parentSession,
@@ -516,6 +562,13 @@ const makePiSession = (
                 // the scope finalizer that owns cleanup is only registered later.
                 try {
                     await session.bindExtensions({ mode: 'print' })
+                    // Re-apply the role allowlist after extensions register tools.
+                    // Hooks still run in-process; the allowlist limits callable tools,
+                    // not arbitrary side effects from trusted extensions.
+                    session.setActiveToolsByName(childTools)
+                    // Give each queued follow-up its own lifecycle so manager run IDs
+                    // remain one-to-one with child runs.
+                    session.setFollowUpMode('one-at-a-time')
                 } catch (error) {
                     await shutdownAndDisposeChildSession(session)
                     throw error
@@ -527,11 +580,16 @@ const makePiSession = (
 
         const state = {
             closed: false,
-            /** prompt() rejection for the active run; folded into RunSettled. */
-            runError: undefined as string | undefined,
-            /** One terminal event per run: lifecycle, prompt-rejection, and abort
-             * fallbacks can all race to settle; the first wins. */
-            settled: false,
+            runCounter: 0,
+            activeRun: undefined as
+                | {
+                      id: string
+                      startMessageIndex: number
+                      settled: boolean
+                      error?: string
+                  }
+                | undefined,
+            pendingFollowUpRunIds: [] as string[],
         }
 
         const events = yield* Queue.make<SubagentEvent, Cause.Done>()
@@ -580,29 +638,47 @@ const makePiSession = (
                 tokens: usage?.tokens ?? undefined,
                 contextWindow:
                     activeModel()?.contextWindow ?? usage?.contextWindow,
+                runId: state.activeRun?.id,
             })
         }
 
+        const nextRunId = () =>
+            `${task.agentId ?? 'subagent'}:run-${++state.runCounter}`
+
+        const beginRun = (runId = nextRunId()) => {
+            state.activeRun = {
+                id: runId,
+                startMessageIndex: session.messages.length,
+                settled: false,
+            }
+            emit({ _tag: 'RunStarted', runId })
+            return runId
+        }
+
         const settle = () => {
-            if (state.settled) return
-            state.settled = true
-            const last = lastAssistantMessage(session)
-            const partialText = finalOutput(session) || undefined
+            const run = state.activeRun
+            if (!run || run.settled) return
+            run.settled = true
+            const last = lastAssistantMessage(session, run.startMessageIndex)
+            const partialText =
+                finalOutput(session, run.startMessageIndex) || undefined
             if (last?.stopReason === 'aborted') {
                 emit({
                     _tag: 'RunSettled',
+                    runId: run.id,
                     outcome: { _tag: 'Interrupted', partialText },
                 })
                 return
             }
             const errorText =
-                state.runError ??
+                run.error ??
                 (last?.stopReason === 'error'
                     ? (last.errorMessage ?? 'Run failed')
                     : undefined)
             if (errorText !== undefined) {
                 emit({
                     _tag: 'RunSettled',
+                    runId: run.id,
                     outcome: {
                         _tag: 'Failed',
                         errorText: boundedError(errorText),
@@ -613,7 +689,11 @@ const makePiSession = (
             }
             emit({
                 _tag: 'RunSettled',
-                outcome: { _tag: 'Completed', finalText: finalOutput(session) },
+                runId: run.id,
+                outcome: {
+                    _tag: 'Completed',
+                    finalText: finalOutput(session, run.startMessageIndex),
+                },
             })
         }
 
@@ -623,8 +703,10 @@ const makePiSession = (
                 case 'agent_start':
                     // Extensions may register tools between runs; guard new ones too.
                     toolTimeout.apply(session)
-                    state.settled = false
-                    emit({ _tag: 'RunStarted' })
+                    if (!state.activeRun || state.activeRun.settled) {
+                        const runId = state.pendingFollowUpRunIds.shift()
+                        if (runId) beginRun(runId)
+                    }
                     break
                 case 'message_update': {
                     const streamEvent = event.assistantMessageEvent
@@ -633,12 +715,14 @@ const makePiSession = (
                             _tag: 'AssistantDelta',
                             kind: 'text',
                             delta: streamEvent.delta,
+                            runId: state.activeRun?.id,
                         })
                     } else if (streamEvent.type === 'thinking_delta') {
                         emit({
                             _tag: 'AssistantDelta',
                             kind: 'thinking',
                             delta: streamEvent.delta,
+                            runId: state.activeRun?.id,
                         })
                     }
                     break
@@ -647,16 +731,26 @@ const makePiSession = (
                     const role = messageRole(event.message)
                     if (role === 'user') {
                         const text = userText(event.message as Message)
-                        if (text.trim()) emit({ _tag: 'UserMessage', text })
+                        if (text.trim())
+                            emit({
+                                _tag: 'UserMessage',
+                                text,
+                                runId: state.activeRun?.id,
+                            })
                     } else if (role === 'assistant') {
                         emit({
                             _tag: 'AssistantMessage',
                             parts: assistantParts(
                                 event.message as AssistantMessage
                             ),
+                            runId: state.activeRun?.id,
                         })
                         emitUsage()
-                        emit({ _tag: 'MetaChanged', meta: currentMeta() })
+                        emit({
+                            _tag: 'MetaChanged',
+                            meta: currentMeta(),
+                            runId: state.activeRun?.id,
+                        })
                     }
                     // toolResult messages are covered by tool_execution_end.
                     break
@@ -667,6 +761,7 @@ const makePiSession = (
                         toolId: event.toolCallId,
                         name: event.toolName,
                         argsPreview: safeJson(event.args),
+                        runId: state.activeRun?.id,
                     })
                     break
                 case 'tool_execution_update':
@@ -674,6 +769,7 @@ const makePiSession = (
                         _tag: 'ToolUpdate',
                         toolId: event.toolCallId,
                         outputPreview: toolPreview(event.partialResult),
+                        runId: state.activeRun?.id,
                     })
                     break
                 case 'tool_execution_end':
@@ -683,11 +779,13 @@ const makePiSession = (
                         name: event.toolName,
                         isError: event.isError,
                         outputPreview: toolPreview(event.result),
+                        runId: state.activeRun?.id,
                     })
                     break
                 case 'queue_update':
                     emit({
                         _tag: 'QueueChanged',
+                        runId: state.activeRun?.id,
                         queued: [
                             ...event.steering.map((text) => ({
                                 text,
@@ -701,7 +799,11 @@ const makePiSession = (
                     })
                     break
                 case 'thinking_level_changed':
-                    emit({ _tag: 'MetaChanged', meta: currentMeta() })
+                    emit({
+                        _tag: 'MetaChanged',
+                        meta: currentMeta(),
+                        runId: state.activeRun?.id,
+                    })
                     break
                 case 'agent_settled':
                     settle()
@@ -710,28 +812,29 @@ const makePiSession = (
         }
         const unsubscribe = session.subscribe(handleEvent)
 
-        yield* Effect.addFinalizer(() =>
-            Effect.promise(async () => {
-                state.closed = true
-                unsubscribe()
-                try {
-                    session.clearQueue()
-                } catch {
-                    // Continue with abort/dispose.
-                }
-                await waitBounded(session.abort(), CHILD_SHUTDOWN_TIMEOUT_MS)
-                await shutdownAndDisposeChildSession(session)
-                Queue.endUnsafe(events)
-            })
-        )
+        const closeSession = Effect.promise(async () => {
+            if (state.closed) return
+            state.closed = true
+            unsubscribe()
+            try {
+                session.clearQueue()
+            } catch {
+                // Continue with abort/dispose.
+            }
+            state.pendingFollowUpRunIds = []
+            await waitBounded(session.abort(), CHILD_SHUTDOWN_TIMEOUT_MS)
+            await shutdownAndDisposeChildSession(session)
+            Queue.endUnsafe(events)
+        })
+        yield* Effect.addFinalizer(() => closeSession)
 
-        /** Start a fresh run (v1 manager.run): fire-and-forget, errors -> events. */
-        const startRun = (text: string) => {
-            state.runError = undefined
-            state.settled = false
-            emit({ _tag: 'RunStarted' })
+        /** Start a fresh run and convert prompt failures into terminal events. */
+        const startRun = (text: string, runId?: string) => {
+            beginRun(runId)
             void session.prompt(text).catch((error) => {
-                state.runError = boundedError(error)
+                if (state.activeRun && !state.activeRun.settled) {
+                    state.activeRun.error = boundedError(error)
+                }
                 // Preflight failures may never start the agent lifecycle, so no
                 // agent_settled will arrive for them.
                 if (!session.isStreaming) settle()
@@ -744,12 +847,16 @@ const makePiSession = (
         ).pipe(Effect.ignore)
 
         emit({ _tag: 'MetaChanged', meta: currentMeta() })
-        startRun(task.prompt)
+        startRun(task.prompt, task.runId)
 
         return {
             meta: Effect.sync(currentMeta),
             events: Stream.fromQueue(events),
-            send: (text, delivery: SendDelivery = 'steer') =>
+            send: (
+                text,
+                delivery: SendDelivery = 'follow-up',
+                runId?: string
+            ) =>
                 Effect.suspend((): Effect.Effect<void, SendError> => {
                     if (state.closed) {
                         return new SendError({
@@ -759,16 +866,36 @@ const makePiSession = (
                     if (session.isStreaming) {
                         // Queue through the SDK so queue_update and transcript events stay
                         // aligned with the child session's native state.
+                        const queuedRunId =
+                            delivery === 'follow-up'
+                                ? (runId ?? nextRunId())
+                                : undefined
+                        if (queuedRunId)
+                            state.pendingFollowUpRunIds.push(queuedRunId)
                         return Effect.tryPromise({
                             try: () =>
                                 delivery === 'follow-up'
                                     ? session.followUp(text)
                                     : session.steer(text),
-                            catch: (error) =>
-                                new SendError({ message: boundedError(error) }),
+                            catch: (error) => {
+                                if (queuedRunId) {
+                                    const index =
+                                        state.pendingFollowUpRunIds.lastIndexOf(
+                                            queuedRunId
+                                        )
+                                    if (index >= 0)
+                                        state.pendingFollowUpRunIds.splice(
+                                            index,
+                                            1
+                                        )
+                                }
+                                return new SendError({
+                                    message: boundedError(error),
+                                })
+                            },
                         }).pipe(Effect.asVoid)
                     }
-                    return Effect.sync(() => startRun(text))
+                    return Effect.sync(() => startRun(text, runId))
                 }),
             interrupt: Effect.promise(async () => {
                 if (state.closed) return
@@ -777,6 +904,7 @@ const makePiSession = (
                 } catch {
                     // Abort regardless.
                 }
+                state.pendingFollowUpRunIds = []
                 await session.abort().catch(() => undefined)
                 // Only resolve once streaming has actually stopped: reporting the
                 // interrupt as complete while the run keeps working would let the
@@ -787,14 +915,20 @@ const makePiSession = (
                 }
                 // No streaming run means no agent_settled will arrive; emit the
                 // terminal event (once) so the run cannot look running forever.
-                if (!state.closed && !state.settled) {
-                    state.settled = true
+                if (
+                    !state.closed &&
+                    state.activeRun &&
+                    !state.activeRun.settled
+                ) {
+                    state.activeRun.settled = true
                     emit({
                         _tag: 'RunSettled',
+                        runId: state.activeRun.id,
                         outcome: { _tag: 'Interrupted' },
                     })
                 }
             }),
+            close: closeSession,
         } satisfies SubagentSession
     })
 
@@ -810,7 +944,8 @@ export function createPiBackend(
         },
         // In-process SDK: always available.
         available: Effect.succeed(true),
-        spawn: (task) => makePiSession(task, options.onChildReport),
+        spawn: (task) =>
+            makePiSession(task, options.onChildReport, options.sessionFactory),
     }
 }
 

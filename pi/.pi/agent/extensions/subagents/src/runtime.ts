@@ -10,17 +10,20 @@ import { Cause, Exit, Layer, ManagedRuntime, type Effect } from "effect";
 import { BackendRegistry, type SubagentBackend } from "./backend.ts";
 import { piBackend } from "./backends/pi.ts";
 import type { BackendName } from "./domain.ts";
+import { makeSubagentManagerLayer } from "./manager.ts";
+import { loadSubagentConfig, type SubagentConfig } from "./config.ts";
 
 const BackendRegistryLive = Layer.sync(BackendRegistry, () =>
   new Map<BackendName, SubagentBackend>([[piBackend.name, piBackend]]),
 );
 
-import { SubagentManagerLive } from "./manager.ts";
-
-const AppLayer = SubagentManagerLive.pipe(Layer.provide(BackendRegistryLive));
-
-export function createSubagentRuntime() {
-  return ManagedRuntime.make(AppLayer);
+export function createSubagentRuntime(
+  config: SubagentConfig = loadSubagentConfig(),
+) {
+  const appLayer = makeSubagentManagerLayer(config).pipe(
+    Layer.provide(BackendRegistryLive),
+  );
+  return ManagedRuntime.make(appLayer);
 }
 
 export type SubagentRuntime = ReturnType<typeof createSubagentRuntime>;

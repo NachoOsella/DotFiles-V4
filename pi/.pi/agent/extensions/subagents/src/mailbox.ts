@@ -1,6 +1,7 @@
 import { Effect, Result } from 'effect'
 
-export type AgentMessageKind = 'question' | 'result' | 'error' | 'cancelled'
+export type AgentMessageKind =
+    'question' | 'result' | 'error' | 'cancelled' | 'gap'
 
 export interface AgentEnvelope {
     readonly sequence: number
@@ -8,15 +9,18 @@ export interface AgentEnvelope {
     readonly taskName: string
     readonly role: string
     readonly kind: AgentMessageKind
+    readonly runId?: string
     readonly text: string
     readonly createdAt: number
+    readonly droppedEvents?: number
 }
 
 export interface AgentMessage {
     readonly agentId: string
     readonly taskName: string
     readonly role: string
-    readonly kind: AgentMessageKind
+    readonly kind: Exclude<AgentMessageKind, 'gap'>
+    readonly runId?: string
     readonly text: string
     readonly createdAt?: number
     /**
@@ -36,6 +40,8 @@ export interface MailboxDrainOptions {
     readonly agentIds?: Iterable<string>
     /** Only deliver these exact mailbox sequences. */
     readonly sequences?: Iterable<number>
+    /** Only deliver messages from these runs; gap notices still match. */
+    readonly runIds?: Iterable<string>
     /** Only deliver messages with a larger sequence number. */
     readonly afterSequence?: number
 }
@@ -59,6 +65,10 @@ export interface AgentMailbox {
      * Queue a message for one delivery. Returns undefined for a duplicate key.
      */
     publish(message: AgentMessage): AgentEnvelope | undefined
+    /** Inspect queued messages without consuming them. */
+    peek(options?: MailboxDrainOptions): ReadonlyArray<AgentEnvelope>
+    /** Mark selected messages as delivered and remove them from the queue. */
+    ack(sequences: Iterable<number>): void
     /** Deliver and consume queued messages in sequence order. */
     drain(options?: MailboxDrainOptions): ReadonlyArray<AgentEnvelope>
     /** Remove selected messages without delivering them. */
@@ -81,6 +91,8 @@ interface StoredEnvelope {
     readonly envelope: AgentEnvelope
     readonly textBytes: number
 }
+
+type DeliveryState = 'pending' | 'delivered' | 'consumed'
 
 function positiveInteger(
     value: number | undefined,
@@ -118,9 +130,8 @@ function truncateUtf8(text: string, maxBytes: number) {
 }
 
 /**
- * A single-consumer mailbox for parent-visible subagent messages. Delivery
- * removes an envelope, so automatic draining and explicit waits cannot emit
- * the same message twice.
+ * A bounded, single-consumer mailbox. Automatic delivery uses peek/ack so a
+ * synchronous parent-delivery failure leaves the event queued for retry.
  */
 export function createAgentMailbox(limits: MailboxLimits = {}): AgentMailbox {
     const maxEvents = positiveInteger(
@@ -136,13 +147,24 @@ export function createAgentMailbox(limits: MailboxLimits = {}): AgentMailbox {
     const pending: StoredEnvelope[] = []
     const retainedKeys = new Set<string>()
     const retainedKeyOrder: string[] = []
+    const deliveryStates = new Map<number, DeliveryState>()
     const waiters = new Set<() => void>()
+    let gap: StoredEnvelope | undefined
     let nextSequence = 1
     let textBytes = 0
     let closed = false
 
     const notify = () => {
         for (const waiter of [...waiters]) waiter()
+    }
+
+    const rememberDelivery = (sequence: number, state: DeliveryState) => {
+        deliveryStates.set(sequence, state)
+        while (deliveryStates.size > maxEvents * 2) {
+            const oldest = deliveryStates.keys().next().value
+            if (oldest === undefined) break
+            deliveryStates.delete(oldest)
+        }
     }
 
     const forgetKey = (key: string | undefined) => {
@@ -152,44 +174,141 @@ export function createAgentMailbox(limits: MailboxLimits = {}): AgentMailbox {
         if (index >= 0) retainedKeyOrder.splice(index, 1)
     }
 
-    const removeAt = (index: number) => {
-        const [removed] = pending.splice(index, 1)
-        if (!removed) return
-        textBytes -= removed.textBytes
-        // A consumed key stays in the bounded window. It still rejects retries.
+    const removeStored = (stored: StoredEnvelope) => {
+        if (gap?.envelope.sequence === stored.envelope.sequence) {
+            gap = undefined
+            return
+        }
+        const index = pending.indexOf(stored)
+        if (index >= 0) {
+            pending.splice(index, 1)
+            textBytes -= stored.textBytes
+        }
+    }
+
+    const removeSequence = (sequence: number, state: DeliveryState) => {
+        const stored =
+            gap?.envelope.sequence === sequence
+                ? gap
+                : pending.find(
+                      (candidate) => candidate.envelope.sequence === sequence
+                  )
+        if (!stored) return
+        rememberDelivery(sequence, state)
+        removeStored(stored)
     }
 
     const evictOldest = () => {
         const removed = pending.shift()
-        if (!removed) return
+        if (!removed) return undefined
         textBytes -= removed.textBytes
+        rememberDelivery(removed.envelope.sequence, 'consumed')
+        return removed
+    }
+
+    const addGap = (droppedEvents: number) => {
+        if (droppedEvents <= 0) return
+        const text = truncateUtf8(
+            `Mailbox gap: ${droppedEvents} event${droppedEvents === 1 ? '' : 's'} were dropped because the mailbox limit was reached.`,
+            maxTextBytes
+        )
+        if (gap) {
+            const envelope: AgentEnvelope = {
+                ...gap.envelope,
+                text: truncateUtf8(
+                    `Mailbox gap: at least ${
+                        (gap.envelope.droppedEvents ?? 0) + droppedEvents
+                    } events were dropped because the mailbox limit was reached.`,
+                    maxTextBytes
+                ),
+                droppedEvents:
+                    (gap.envelope.droppedEvents ?? 0) + droppedEvents,
+            }
+            gap = {
+                envelope,
+                textBytes: Buffer.byteLength(envelope.text, 'utf8'),
+            }
+            return
+        }
+        const envelope: AgentEnvelope = {
+            sequence: nextSequence++,
+            agentId: 'mailbox',
+            taskName: 'mailbox-gap',
+            role: 'system',
+            kind: 'gap',
+            text,
+            createdAt: Date.now(),
+            droppedEvents,
+        }
+        gap = {
+            envelope,
+            textBytes: Buffer.byteLength(text, 'utf8'),
+        }
     }
 
     const trim = () => {
+        let droppedEvents = 0
         while (pending.length > maxEvents || textBytes > maxTextBytes) {
-            evictOldest()
+            if (!evictOldest()) break
+            droppedEvents++
         }
+        addGap(droppedEvents)
         while (retainedKeyOrder.length > maxEvents) {
             forgetKey(retainedKeyOrder[0])
         }
     }
 
-    const takeAfter = (afterSequence: number) => {
-        const delivered: AgentEnvelope[] = []
-        for (let index = 0; index < pending.length;) {
-            const stored = pending[index]
-            if (stored.envelope.sequence > afterSequence) {
-                delivered.push(stored.envelope)
-                removeAt(index)
-            } else {
-                index++
-            }
+    const allStored = () =>
+        [gap, ...pending]
+            .filter((stored): stored is StoredEnvelope => stored !== undefined)
+            .sort((a, b) => a.envelope.sequence - b.envelope.sequence)
+
+    const matches = (
+        envelope: AgentEnvelope,
+        options: MailboxDrainOptions,
+        afterSequence: number
+    ) => {
+        const agentIds = options.agentIds
+            ? new Set(options.agentIds)
+            : undefined
+        const sequences = options.sequences
+            ? new Set(options.sequences)
+            : undefined
+        const runIds = options.runIds ? new Set(options.runIds) : undefined
+        return (
+            envelope.sequence > afterSequence &&
+            (!agentIds ||
+                envelope.kind === 'gap' ||
+                agentIds.has(envelope.agentId)) &&
+            (!sequences || sequences.has(envelope.sequence)) &&
+            (!runIds ||
+                envelope.kind === 'gap' ||
+                (envelope.runId !== undefined && runIds.has(envelope.runId)))
+        )
+    }
+
+    const selected = (options: MailboxDrainOptions = {}) => {
+        const afterSequence = options.afterSequence ?? 0
+        if (!Number.isSafeInteger(afterSequence) || afterSequence < 0) {
+            throw new RangeError(
+                'afterSequence must be a non-negative safe integer.'
+            )
         }
-        return delivered
+        return allStored().filter((stored) =>
+            matches(stored.envelope, options, afterSequence)
+        )
+    }
+
+    const takeAfter = (afterSequence: number) => {
+        const delivered = selected({ afterSequence })
+        for (const stored of delivered) {
+            removeSequence(stored.envelope.sequence, 'consumed')
+        }
+        return delivered.map((stored) => stored.envelope)
     }
 
     const hasAfter = (afterSequence: number) =>
-        pending.some((stored) => stored.envelope.sequence > afterSequence)
+        allStored().some((stored) => stored.envelope.sequence > afterSequence)
 
     const waitForMatching = (afterSequence: number) =>
         Effect.callback<void>((resume) => {
@@ -260,6 +379,7 @@ export function createAgentMailbox(limits: MailboxLimits = {}): AgentMailbox {
                 taskName: message.taskName,
                 role: message.role,
                 kind: message.kind,
+                ...(message.runId ? { runId: message.runId } : {}),
                 text,
                 createdAt: message.createdAt ?? Date.now(),
             }
@@ -268,6 +388,7 @@ export function createAgentMailbox(limits: MailboxLimits = {}): AgentMailbox {
                 textBytes: Buffer.byteLength(text, 'utf8'),
             })
             textBytes += Buffer.byteLength(text, 'utf8')
+            rememberDelivery(envelope.sequence, 'pending')
             if (message.deduplicationKey) {
                 retainedKeys.add(message.deduplicationKey)
                 retainedKeyOrder.push(message.deduplicationKey)
@@ -276,40 +397,24 @@ export function createAgentMailbox(limits: MailboxLimits = {}): AgentMailbox {
             notify()
             return envelope
         },
+        peek(options: MailboxDrainOptions = {}) {
+            return selected(options).map((stored) => stored.envelope)
+        },
+        ack(sequences) {
+            for (const sequence of new Set(sequences)) {
+                removeSequence(sequence, 'delivered')
+            }
+        },
         drain(options: MailboxDrainOptions = {}) {
-            const afterSequence = options.afterSequence ?? 0
-            if (!Number.isSafeInteger(afterSequence) || afterSequence < 0) {
-                throw new RangeError(
-                    'afterSequence must be a non-negative safe integer.'
-                )
+            const events = selected(options)
+            for (const stored of events) {
+                removeSequence(stored.envelope.sequence, 'consumed')
             }
-            const agentIds = options.agentIds
-                ? new Set(options.agentIds)
-                : undefined
-            const sequences = options.sequences
-                ? new Set(options.sequences)
-                : undefined
-            const events: AgentEnvelope[] = []
-            for (let index = 0; index < pending.length;) {
-                const envelope = pending[index].envelope
-                if (
-                    envelope.sequence > afterSequence &&
-                    (!agentIds || agentIds.has(envelope.agentId)) &&
-                    (!sequences || sequences.has(envelope.sequence))
-                ) {
-                    events.push(envelope)
-                    removeAt(index)
-                } else {
-                    index++
-                }
-            }
-            return events
+            return events.map((stored) => stored.envelope)
         },
         consume(sequences) {
-            const selected = new Set(sequences)
-            for (let index = pending.length - 1; index >= 0; index--) {
-                if (selected.has(pending[index].envelope.sequence))
-                    removeAt(index)
+            for (const sequence of new Set(sequences)) {
+                removeSequence(sequence, 'consumed')
             }
         },
         wait,
@@ -318,7 +423,7 @@ export function createAgentMailbox(limits: MailboxLimits = {}): AgentMailbox {
             notify()
         },
         get size() {
-            return pending.length
+            return pending.length + (gap ? 1 : 0)
         },
         get retainedTextBytes() {
             return textBytes

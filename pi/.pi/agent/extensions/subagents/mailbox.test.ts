@@ -10,6 +10,7 @@ function message(
         taskName: string
         role: string
         kind: 'question' | 'result' | 'error' | 'cancelled'
+        runId: string
         deduplicationKey: string
     }> = {}
 ) {
@@ -60,18 +61,49 @@ test('mailbox bounds retained events and text and deduplicates stable keys', () 
         undefined
     )
 
-    assert.equal(mailbox.size, 2)
+    assert.equal(mailbox.size, 3)
     assert.equal(mailbox.retainedTextBytes, 4)
+    const retained = mailbox.drain()
     assert.deepEqual(
-        mailbox.drain().map((envelope) => [envelope.sequence, envelope.text]),
+        retained.map((envelope) => [envelope.sequence, envelope.text]),
         [
             [2, 'cd'],
             [3, 'ef'],
+            [4, 'Mail'],
         ]
     )
+    assert.equal(retained.at(-1)?.droppedEvents, 1)
 
     const truncatingMailbox = createAgentMailbox({ maxTextBytes: 4 })
     assert.equal(truncatingMailbox.publish(message('abcdef'))?.text, 'abcd')
+})
+
+test('run filters keep an ID wait from consuming another run or question', () => {
+    const mailbox = createAgentMailbox()
+    mailbox.publish(message('question', { kind: 'question' }))
+    mailbox.publish(message('old', { runId: 'run-1' }))
+    mailbox.publish(message('current', { runId: 'run-2' }))
+
+    assert.deepEqual(
+        mailbox
+            .drain({ agentIds: ['sa-1'], runIds: ['run-2'] })
+            .map((event) => event.text),
+        ['current']
+    )
+    assert.deepEqual(
+        mailbox.drain().map((event) => event.text),
+        ['question', 'old']
+    )
+})
+
+test('peek and ack keep failed delivery events pending', () => {
+    const mailbox = createAgentMailbox()
+    const envelope = mailbox.publish(message('pending'))
+
+    assert.deepEqual(mailbox.peek(), [envelope])
+    assert.deepEqual(mailbox.peek(), [envelope])
+    mailbox.ack([envelope?.sequence ?? 0])
+    assert.deepEqual(mailbox.drain(), [])
 })
 
 test('drain can consume selected agents without stealing other results', () => {

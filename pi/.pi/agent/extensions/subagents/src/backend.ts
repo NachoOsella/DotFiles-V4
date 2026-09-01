@@ -37,16 +37,22 @@ export interface SubagentSession {
     readonly events: Stream.Stream<SubagentEvent>
     /**
      * Deliver to an active run or start a fresh run when idle. The default keeps
-     * v1 manager.send behavior while callers that support it can request a
-     * follow-up turn explicitly.
+     * Normal sends queue a follow-up turn; callers can request steer explicitly
+     * when they need to redirect an active run.
      */
-    send(text: string, delivery?: SendDelivery): Effect.Effect<void, SendError>
+    send(
+        text: string,
+        delivery?: SendDelivery,
+        runId?: string
+    ): Effect.Effect<void, SendError>
     /**
      * Interrupt the active run. Resolves once the backend acknowledges; the
      * corresponding RunSettled(Interrupted) arrives on `events`. Callers bound
      * this with a timeout and fall back to closing the session scope.
      */
     readonly interrupt: Effect.Effect<void>
+    /** Permanently close the backend session and release its resources. */
+    readonly close: Effect.Effect<void>
 }
 
 export interface SubagentBackend {

@@ -24,7 +24,10 @@ export const REASONING_EFFORTS = [
 ] as const
 export type ReasoningEffort = (typeof REASONING_EFFORTS)[number]
 
-export type SubagentStatus = 'running' | 'done' | 'error'
+export type SubagentStatus = 'running' | 'done' | 'error' | 'closed'
+
+export type SubagentRunStatus =
+    'running' | 'completed' | 'failed' | 'interrupted'
 
 /** Parent-session context resolved by the tool layer and passed opaquely. */
 export interface ParentContext {
@@ -48,6 +51,8 @@ export interface SpawnTask {
     readonly role?: string
     /** Assigned by the manager before the backend creates the child session. */
     readonly agentId?: string
+    /** Assigned by the manager for the first run. */
+    readonly runId?: string
     /** Child-only questions enter the parent manager mailbox through this hook. */
     readonly reportToParent?: (message: string) => void
     readonly cwd: string
@@ -55,7 +60,19 @@ export interface SpawnTask {
     readonly model?: string
     /** Pi thinking level. */
     readonly reasoningEffort?: ReasoningEffort
+    /** Optional absolute or cwd-relative paths this task intends to modify. */
+    readonly ownedPaths?: ReadonlyArray<string>
     readonly parent: ParentContext
+}
+
+export interface SubagentRun {
+    readonly id: string
+    readonly agentId: string
+    readonly status: SubagentRunStatus
+    readonly startedAt: number
+    readonly finishedAt?: number
+    readonly output?: string
+    readonly error?: string
 }
 
 export interface SubagentMeta {
@@ -112,6 +129,7 @@ export interface LiveToolState {
 export interface QueuedMessage {
     readonly text: string
     readonly kind: 'steer' | 'follow-up'
+    readonly runId?: string
 }
 
 // --- Events ------------------------------------------------------------------
@@ -133,29 +151,41 @@ export type RunOutcome =
  */
 export type SubagentEvent =
     // lifecycle (a session can run multiple turns via send())
-    | { readonly _tag: 'RunStarted' }
-    | { readonly _tag: 'RunSettled'; readonly outcome: RunOutcome }
+    | { readonly _tag: 'RunStarted'; readonly runId: string }
+    | {
+          readonly _tag: 'RunSettled'
+          readonly runId: string
+          readonly outcome: RunOutcome
+      }
     // transcript building blocks
-    | { readonly _tag: 'UserMessage'; readonly text: string }
+    | {
+          readonly _tag: 'UserMessage'
+          readonly text: string
+          readonly runId?: string
+      }
     | {
           readonly _tag: 'AssistantDelta'
           readonly kind: 'text' | 'thinking'
           readonly delta: string
+          readonly runId?: string
       }
     | {
           readonly _tag: 'AssistantMessage'
           readonly parts: ReadonlyArray<TranscriptPart>
+          readonly runId?: string
       }
     | {
           readonly _tag: 'ToolStart'
           readonly toolId: string
           readonly name: string
           readonly argsPreview?: string
+          readonly runId?: string
       }
     | {
           readonly _tag: 'ToolUpdate'
           readonly toolId: string
           readonly outputPreview?: string
+          readonly runId?: string
       }
     | {
           readonly _tag: 'ToolEnd'
@@ -163,20 +193,31 @@ export type SubagentEvent =
           readonly name: string
           readonly isError: boolean
           readonly outputPreview?: string
+          readonly runId?: string
       }
     // bookkeeping
     | {
           readonly _tag: 'QueueChanged'
           readonly queued: ReadonlyArray<QueuedMessage>
+          readonly runId?: string
       }
     | {
           readonly _tag: 'UsageChanged'
           readonly tokens?: number
           readonly contextWindow?: number
+          readonly runId?: string
       }
-    | { readonly _tag: 'MetaChanged'; readonly meta: Partial<SubagentMeta> }
+    | {
+          readonly _tag: 'MetaChanged'
+          readonly meta: Partial<SubagentMeta>
+          readonly runId?: string
+      }
     /** Non-fatal diagnostics. Fatal failures arrive as a RunSettled outcome. */
-    | { readonly _tag: 'BackendError'; readonly message: string }
+    | {
+          readonly _tag: 'BackendError'
+          readonly message: string
+          readonly runId?: string
+      }
 
 // --- Snapshot ---------------------------------------------------------------
 
@@ -192,11 +233,17 @@ export interface SubagentSnapshot {
     readonly role?: string
     /** Increments for every visible snapshot change. */
     readonly version?: number
+    /** Explicit cache identity for transcript and live activity rendering. */
+    readonly transcriptVersion?: number
     /** Sequence of the most recent terminal mailbox envelope, when published. */
     readonly lastMailboxSequence?: number
     readonly prompt: string
     readonly cwd: string
     readonly status: SubagentStatus
+    readonly currentRunId?: string
+    readonly lastRun?: SubagentRun
+    readonly ownedPaths: ReadonlyArray<string>
+    readonly ownershipWarning?: string
     readonly createdAt: number
     readonly settledAt?: number
     readonly errorText?: string

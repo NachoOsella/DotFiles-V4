@@ -21,6 +21,9 @@ test('the collaboration policy appears only when spawning is available', () => {
         COLLABORATION_POLICY
     )
     assert.deepEqual(SUBAGENT_SPAWN_PROMPT_GUIDELINES, [COLLABORATION_POLICY])
+    assert.match(COLLABORATION_POLICY, /Default to doing the work yourself/)
+    assert.match(COLLABORATION_POLICY, /one bounded assistant/)
+    assert.doesNotMatch(COLLABORATION_POLICY, /cheapest capable model/)
 })
 
 test('the orchestration tool set is identifiable for child filtering', () => {

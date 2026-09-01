@@ -13,7 +13,7 @@ import {
     type AgentRole,
 } from './src/roles.ts'
 
-test('built-in roles have short one-sentence instructions', () => {
+test('built-in roles have focused instructions and expected permissions', () => {
     assert.deepEqual(AGENT_ROLE_NAMES, [
         'default',
         'explorer',
@@ -25,12 +25,18 @@ test('built-in roles have short one-sentence instructions', () => {
     for (const name of AGENT_ROLE_NAMES) {
         const role = AGENT_ROLES[name]
         assert.equal(role.name, name)
-        assert.ok(role.instructions.length <= 180)
-        assert.equal(role.instructions.split('.').filter(Boolean).length, 1)
+        assert.ok(role.instructions.length > 0)
     }
     assert.equal(AGENT_ROLES.explorer.readOnly, true)
+    assert.equal(AGENT_ROLES.explorer.defaultModel, '@cheapest')
+    assert.equal(AGENT_ROLES.explorer.defaultReasoningEffort, 'minimal')
+    assert.equal(AGENT_ROLES.worker.defaultModel, '@capable')
     assert.equal(AGENT_ROLES.reviewer.readOnly, true)
+    assert.equal(AGENT_ROLES.reviewer.defaultModel, '@capable')
+    assert.equal(AGENT_ROLES.reviewer.defaultReasoningEffort, 'high')
     assert.equal(AGENT_ROLES.tester.readOnly, true)
+    assert.ok(AGENT_ROLES.reviewer.instructions.includes('concurrency'))
+    assert.ok(AGENT_ROLES.tester.instructions.includes('tests'))
 })
 
 test('roles resolve to default and reject unknown names', () => {
@@ -78,7 +84,7 @@ test('the role context file is injected once', () => {
     assert.equal(repeated, withRole)
     assert.deepEqual(withRole[1], {
         path: SUBAGENT_ROLE_CONTEXT_FILE_PATH,
-        content: `${CHILD_BASE_POLICY}\n${AGENT_ROLES.explorer.instructions}`,
+        content: `${CHILD_BASE_POLICY}\n\nRole: ${AGENT_ROLES.explorer.instructions}`,
     })
     assert.equal(childPolicyForRole(AGENT_ROLES.default), CHILD_BASE_POLICY)
 })

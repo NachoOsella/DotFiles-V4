@@ -95,6 +95,8 @@ const makeStubSession = (
             closed: false,
             /** True between the driver dequeuing a prompt and registering its turn fiber. */
             dispatching: false,
+            runCounter: 0,
+            activeRunId: undefined as string | undefined,
         }
 
         const events = yield* Queue.make<SubagentEvent, Cause.Done>()
@@ -118,9 +120,13 @@ const makeStubSession = (
 
         const pause = Effect.sleep(Duration.millis(profile.cadenceMs))
 
-        const runTurn = (userText: string, turn: number) =>
+        const nextRunId = () =>
+            `${task.agentId ?? sessionId}:run-${++state.runCounter}`
+
+        const runTurn = (userText: string, turn: number, runId: string) =>
             Effect.gen(function* () {
-                yield* emit({ _tag: 'RunStarted' })
+                state.activeRunId = runId
+                yield* emit({ _tag: 'RunStarted', runId })
                 const failing = userText.trimStart().startsWith('FAIL:')
 
                 const thinking =
@@ -130,6 +136,7 @@ const makeStubSession = (
                         _tag: 'AssistantDelta',
                         kind: 'thinking',
                         delta,
+                        runId,
                     })
                     yield* pause
                 }
@@ -151,18 +158,21 @@ const makeStubSession = (
                             argsPreview,
                         },
                     ],
+                    runId,
                 })
                 yield* emit({
                     _tag: 'ToolStart',
                     toolId,
                     name: profile.toolName,
                     argsPreview,
+                    runId,
                 })
                 yield* pause
                 yield* emit({
                     _tag: 'ToolUpdate',
                     toolId,
                     outputPreview: 'src docs package.json',
+                    runId,
                 })
                 yield* pause
                 yield* emit({
@@ -171,22 +181,26 @@ const makeStubSession = (
                     name: profile.toolName,
                     isError: false,
                     outputPreview: 'src docs package.json',
+                    runId,
                 })
                 yield* emit({
                     _tag: 'UsageChanged',
                     tokens: Math.min(profile.contextWindow, 2400 * (turn + 1)),
                     contextWindow: profile.contextWindow,
+                    runId,
                 })
 
                 if (failing) {
                     yield* pause
                     yield* emit({
                         _tag: 'RunSettled',
+                        runId,
                         outcome: {
                             _tag: 'Failed',
                             errorText: `[stub:${profile.backend}] task failed as requested by FAIL: prefix`,
                         },
                     })
+                    state.activeRunId = undefined
                     return
                 }
 
@@ -195,12 +209,18 @@ const makeStubSession = (
                     `This is a stubbed ${profile.backend} subagent turn ${turn + 1}. ` +
                     `The real backend integration will replace this scripted output.`
                 for (const delta of chunked(finalText, 24)) {
-                    yield* emit({ _tag: 'AssistantDelta', kind: 'text', delta })
+                    yield* emit({
+                        _tag: 'AssistantDelta',
+                        kind: 'text',
+                        delta,
+                        runId,
+                    })
                     yield* pause
                 }
                 yield* emit({
                     _tag: 'AssistantMessage',
                     parts: [{ type: 'text', text: finalText }],
+                    runId,
                 })
                 yield* emit({
                     _tag: 'UsageChanged',
@@ -209,11 +229,14 @@ const makeStubSession = (
                         2400 * (turn + 1) + 900
                     ),
                     contextWindow: profile.contextWindow,
+                    runId,
                 })
                 yield* emit({
                     _tag: 'RunSettled',
+                    runId,
                     outcome: { _tag: 'Completed', finalText },
                 })
+                state.activeRunId = undefined
             })
 
         const queuedView = (): ReadonlyArray<QueuedMessage> => state.pending
@@ -225,14 +248,24 @@ const makeStubSession = (
                 const message = yield* Queue.take(inbox)
                 state.dispatching = true
                 state.pending.shift()
-                yield* emit({ _tag: 'QueueChanged', queued: queuedView() })
-                yield* emit({ _tag: 'UserMessage', text: message.text })
                 const turn = state.turnCount++
+                const runId = message.runId ?? nextRunId()
+                yield* emit({
+                    _tag: 'QueueChanged',
+                    queued: queuedView(),
+                    runId,
+                })
+                yield* emit({
+                    _tag: 'UserMessage',
+                    text: message.text,
+                    runId,
+                })
                 const fiber = yield* Effect.forkChild(
-                    runTurn(message.text, turn).pipe(
+                    runTurn(message.text, turn, runId).pipe(
                         Effect.onInterrupt(() =>
                             emit({
                                 _tag: 'RunSettled',
+                                runId,
                                 outcome: { _tag: 'Interrupted' },
                             }).pipe(Effect.ignore)
                         )
@@ -241,32 +274,44 @@ const makeStubSession = (
                 yield* Ref.set(activeTurn, fiber)
                 state.dispatching = false
                 yield* Fiber.await(fiber)
+                state.activeRunId = undefined
                 yield* Ref.set(activeTurn, undefined)
             }
         })
         yield* Effect.forkScoped(driver.pipe(Effect.ignore))
 
-        yield* Effect.addFinalizer(() =>
-            Effect.gen(function* () {
-                state.closed = true
-                yield* Queue.end(inbox).pipe(Effect.ignore)
-                yield* Queue.end(events).pipe(Effect.ignore)
-            })
-        )
+        const closeSession = Effect.gen(function* () {
+            state.closed = true
+            yield* Queue.end(inbox).pipe(Effect.ignore)
+            yield* Queue.end(events).pipe(Effect.ignore)
+        })
+        yield* Effect.addFinalizer(() => closeSession)
 
-        const submit = (text: string, delivery: SendDelivery = 'steer') =>
+        const submit = (
+            text: string,
+            delivery: SendDelivery = 'follow-up',
+            runId?: string
+        ) =>
             Effect.gen(function* () {
                 if (state.closed) {
                     return yield* new SendError({
                         message: 'Subagent session is closed.',
                     })
                 }
-                const message = { text, kind: delivery } satisfies QueuedMessage
+                const message = {
+                    text,
+                    kind: delivery,
+                    ...(runId ? { runId } : {}),
+                } satisfies QueuedMessage
                 state.pending.push(message)
                 const busy = (yield* Ref.get(activeTurn)) !== undefined
                 if (busy) {
                     // Show the queued steer line until the driver picks it up.
-                    yield* emit({ _tag: 'QueueChanged', queued: queuedView() })
+                    yield* emit({
+                        _tag: 'QueueChanged',
+                        queued: queuedView(),
+                        runId: state.activeRunId,
+                    })
                 }
                 yield* Queue.offer(inbox, message)
             })
@@ -279,7 +324,7 @@ const makeStubSession = (
         )
         yield* emit({ _tag: 'MetaChanged', meta: state.meta })
         // The session cannot be closed yet, so the initial submit cannot fail.
-        yield* submit(task.prompt).pipe(Effect.orDie)
+        yield* submit(task.prompt, 'steer', task.runId).pipe(Effect.orDie)
 
         return {
             meta: Effect.sync(() => state.meta),
@@ -294,7 +339,11 @@ const makeStubSession = (
                     Effect.orElseSucceed(() => [])
                 )
                 state.pending = []
-                yield* emit({ _tag: 'QueueChanged', queued: [] })
+                yield* emit({
+                    _tag: 'QueueChanged',
+                    queued: [],
+                    runId: state.activeRunId,
+                })
                 while (true) {
                     const fiber = yield* Ref.get(activeTurn)
                     if (fiber) {
@@ -305,6 +354,10 @@ const makeStubSession = (
                         if (cleared.length > 0) {
                             yield* emit({
                                 _tag: 'RunSettled',
+                                runId:
+                                    cleared[0]?.runId ??
+                                    state.activeRunId ??
+                                    nextRunId(),
                                 outcome: { _tag: 'Interrupted' },
                             })
                         }
@@ -316,6 +369,7 @@ const makeStubSession = (
                         if (cleared.length > 0) {
                             yield* emit({
                                 _tag: 'RunSettled',
+                                runId: cleared[0]?.runId ?? nextRunId(),
                                 outcome: { _tag: 'Interrupted' },
                             })
                         }
@@ -324,5 +378,6 @@ const makeStubSession = (
                     yield* Effect.sleep(Duration.millis(5))
                 }
             }),
+            close: closeSession,
         } satisfies SubagentSession
     })
