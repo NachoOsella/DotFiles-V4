@@ -73,6 +73,17 @@ tester. immediatelyWaited says whether the parent immediately waits for the
 children instead of continuing useful work.
 `.trim()
 
+/** Return true when any spawn is immediately followed by an ID wait. */
+export function hasImmediateWait(
+    calls: ReadonlyArray<{ readonly name: string }>
+) {
+    return calls.some(
+        (call, index) =>
+            call.name === 'subagent_spawn' &&
+            calls[index + 1]?.name === 'subagent_wait'
+    )
+}
+
 /** Compare a recorded model trace with one of the delegation scenarios. */
 export function evaluateDelegation(
     scenario: DelegationEvalCase,

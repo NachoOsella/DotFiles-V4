@@ -4,13 +4,11 @@ import * as path from 'node:path'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { fileURLToPath } from 'node:url'
-import {
-    COLLABORATION_POLICY,
-    SUBAGENT_ORCHESTRATION_TOOL_NAMES,
-} from './collaboration-policy.ts'
+import { SUBAGENT_ORCHESTRATION_TOOL_NAMES } from './collaboration-policy.ts'
 import {
     DELEGATION_EVALS,
     evaluateDelegation,
+    hasImmediateWait,
     type DelegationEvalCase,
     type DelegationEvalResult,
     type DelegationMode,
@@ -102,16 +100,10 @@ function observedDelegation(
     calls: ReadonlyArray<BehaviorToolCall>
 ): BehavioralDelegationObservation {
     const roles = spawnRoles(calls)
-    const lastSpawn = calls.reduce(
-        (index, call, currentIndex) =>
-            call.name === 'subagent_spawn' ? currentIndex : index,
-        -1
-    )
     return {
         agentCount: roles.length,
         roles,
-        immediatelyWaited:
-            lastSpawn >= 0 && calls[lastSpawn + 1]?.name === 'subagent_wait',
+        immediatelyWaited: hasImmediateWait(calls),
         calls,
     }
 }
@@ -133,20 +125,19 @@ function modeAccuracy(
     )
 }
 
-async function runScenario(
-    options: BehavioralDelegationOptions,
-    scenario: DelegationEvalCase,
-    logPath: string
-): Promise<BehavioralDelegationRun> {
-    const instructions = `${COLLABORATION_POLICY}
-
-Act as the parent agent for the task below. Decide whether delegation helps and
-use the collaboration tools to make that decision. The tools are intercepted by
-the evaluator, so do not wait for real child work and do not merely describe the
-calls you would make. Finish with a brief answer after making the decision.
+export function buildBehaviorEvalPrompt(scenario: DelegationEvalCase) {
+    return `Act as the parent agent for the task below.
+Use the available collaboration tools normally when delegation is useful.
+Tool calls are intercepted and do not launch real child work.
 
 Task: ${scenario.prompt}`
-    const args = [
+}
+
+export function buildBehaviorEvalArgs(
+    options: BehavioralDelegationOptions,
+    instructions: string
+) {
+    return [
         '--no-session',
         '--no-extensions',
         '--mode',
@@ -155,14 +146,23 @@ Task: ${scenario.prompt}`
         SUBAGENT_ORCHESTRATION_TOOL_NAMES.join(','),
         '--extension',
         behaviorToolsPath,
-        '--append-system-prompt',
-        COLLABORATION_POLICY,
         '--model',
         options.model,
         '--print',
         '--',
         instructions,
     ]
+}
+
+async function runScenario(
+    options: BehavioralDelegationOptions,
+    scenario: DelegationEvalCase,
+    logPath: string
+): Promise<BehavioralDelegationRun> {
+    const args = buildBehaviorEvalArgs(
+        options,
+        buildBehaviorEvalPrompt(scenario)
+    )
     let response: string | undefined
     let failure: string | undefined
     try {
@@ -267,13 +267,16 @@ export async function runBehavioralDelegationEvals(
     }
 }
 
-const model = process.env.PI_SUBAGENTS_EVAL_MODEL?.trim()
-if (!model) {
-    console.error(
-        'Set PI_SUBAGENTS_EVAL_MODEL to run the behavioral delegation evaluation.'
-    )
-    process.exitCode = 2
-} else {
+async function main() {
+    const model = process.env.PI_SUBAGENTS_EVAL_MODEL?.trim()
+    if (!model) {
+        console.error(
+            'Set PI_SUBAGENTS_EVAL_MODEL to run the behavioral delegation evaluation.'
+        )
+        process.exitCode = 2
+        return
+    }
+
     const requestedNames = process.env.PI_SUBAGENTS_EVAL_CASES?.split(',')
         .map((name) => name.trim())
         .filter(Boolean)
@@ -296,24 +299,32 @@ if (!model) {
             ].join(', ')}`
         )
         process.exitCode = 2
-    } else {
-        const timeoutMs = Number.parseInt(
-            process.env.PI_SUBAGENTS_EVAL_TIMEOUT_MS ?? '120000',
-            10
-        )
-        const suite = await runBehavioralDelegationEvals(
-            {
-                model,
-                command: process.env.PI_SUBAGENTS_EVAL_COMMAND,
-                cwd: process.cwd(),
-                timeoutMs:
-                    Number.isFinite(timeoutMs) && timeoutMs > 0
-                        ? timeoutMs
-                        : 120_000,
-            },
-            scenarios
-        )
-        console.log(JSON.stringify(suite, null, 2))
-        if (!suite.passed) process.exitCode = 1
+        return
     }
+
+    const timeoutMs = Number.parseInt(
+        process.env.PI_SUBAGENTS_EVAL_TIMEOUT_MS ?? '120000',
+        10
+    )
+    const suite = await runBehavioralDelegationEvals(
+        {
+            model,
+            command: process.env.PI_SUBAGENTS_EVAL_COMMAND,
+            cwd: process.cwd(),
+            timeoutMs:
+                Number.isFinite(timeoutMs) && timeoutMs > 0
+                    ? timeoutMs
+                    : 120_000,
+        },
+        scenarios
+    )
+    console.log(JSON.stringify(suite, null, 2))
+    if (!suite.passed) process.exitCode = 1
 }
+
+if (
+    process.argv[1] &&
+    path.resolve(process.argv[1]) ===
+        path.resolve(fileURLToPath(import.meta.url))
+)
+    await main()

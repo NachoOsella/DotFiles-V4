@@ -471,42 +471,61 @@ export function createSubagentsExtension(
 
             const events = waitResult.events
             for (const event of events) deliveryAttempts.delete(event.sequence)
-            const sections: string[] = []
-            let remainingBytes = WAIT_OUTPUT_MAX_BYTES
-            for (const id of ids) {
-                const snap = manager.view.get(id)
-                if (!snap) continue
-                let section = `## ${snap.id} ${snap.taskName ?? snap.title} (${snap.role ?? 'default'})`
-                if (snap.errorText) section += `\nError: ${snap.errorText}`
-                const budget = Math.max(
-                    512,
-                    Math.min(
-                        WAIT_PER_AGENT_MAX_BYTES,
-                        remainingBytes - Buffer.byteLength(section, 'utf8') - 2
-                    )
-                )
-                section += `\n\n${truncatedOutput(snap, budget)}`
-                if (Buffer.byteLength(section, 'utf8') > remainingBytes) break
-                sections.push(section)
-                remainingBytes -= Buffer.byteLength(section, 'utf8')
-            }
             const questions = events.filter(
                 (event) => event.kind === 'question'
             )
+            const questionWake =
+                questions.length > 0 && waitResult.pending.length > 0
+            const sections: string[] = []
+            if (!questionWake) {
+                let remainingBytes = WAIT_OUTPUT_MAX_BYTES
+                for (const id of ids) {
+                    const snap = manager.view.get(id)
+                    if (!snap) continue
+                    let section = `## ${snap.id} ${snap.taskName ?? snap.title} (${snap.role ?? 'default'})`
+                    if (snap.errorText) section += `\nError: ${snap.errorText}`
+                    const budget = Math.max(
+                        512,
+                        Math.min(
+                            WAIT_PER_AGENT_MAX_BYTES,
+                            remainingBytes - Buffer.byteLength(section, 'utf8') - 2
+                        )
+                    )
+                    section += `\n\n${truncatedOutput(snap, budget)}`
+                    if (Buffer.byteLength(section, 'utf8') > remainingBytes)
+                        break
+                    sections.push(section)
+                    remainingBytes -= Buffer.byteLength(section, 'utf8')
+                }
+            }
+            const questionMessage =
+                questions.length > 0
+                    ? buildMailboxMessage(questions)
+                    : undefined
             const gapWarnings = events
                 .filter((event) => event.kind === 'gap')
                 .map((event) => event.text)
-            const body = [
-                questions.length > 0
-                    ? buildMailboxMessage(questions)
-                    : undefined,
+            const gapWarning =
                 gapWarnings.length > 0
                     ? `Mailbox warning:\n${gapWarnings.join('\n')}`
-                    : undefined,
-                ...sections,
-            ]
-                .filter((section): section is string => section !== undefined)
-                .join('\n\n---\n\n')
+                    : undefined
+            const body = questionWake
+                ? [
+                      questionMessage,
+                      `Still running: ${waitResult.pending.join(', ')}`,
+                      gapWarning,
+                  ]
+                      .filter(
+                          (section): section is string =>
+                              section !== undefined
+                      )
+                      .join('\n\n')
+                : [questionMessage, gapWarning, ...sections]
+                      .filter(
+                          (section): section is string =>
+                              section !== undefined
+                      )
+                      .join('\n\n---\n\n')
             const bounded = truncateHead(body, {
                 maxBytes: WAIT_OUTPUT_MAX_BYTES,
                 maxLines: DEFAULT_MAX_LINES,

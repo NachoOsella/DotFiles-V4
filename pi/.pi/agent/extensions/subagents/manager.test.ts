@@ -698,6 +698,32 @@ test('ID waits wake on a requested child question without settling other work', 
     )
 })
 
+test('zero-timeout ID waits return an already pending question', async () => {
+    const gated = makeGatedBackend()
+    await withManager(
+        async (manager, runtime) => {
+            const snap = await runTool(
+                runtime,
+                manager.spawn('pi', task('Question first'))
+            )
+            gated.sessionFor(snap.id).ask('Which option should I choose?')
+
+            const result = await runTool(
+                runtime,
+                manager.waitFor([snap.id], undefined, 0)
+            )
+            assert.equal(result.timedOut, false)
+            assert.deepEqual(result.pending, [snap.id])
+            assert.deepEqual(
+                result.events.map((event) => [event.kind, event.text]),
+                [['question', 'Which option should I choose?']]
+            )
+        },
+        undefined,
+        createTestRegistry(gated.backend)
+    )
+})
+
 test('ID waits respect timeout and leave pending agents running', async () => {
     await withManager(async (manager, runtime) => {
         const snap = await runTool(

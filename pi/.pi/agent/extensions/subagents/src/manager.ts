@@ -1200,10 +1200,16 @@ const makeManager = (config: SubagentConfig) =>
                         ? loop
                         : timeoutMs === 0
                           ? Effect.sync(() => {
+                                const questions = questionEvents()
                                 const pending = pendingIds()
-                                return collectResult(
-                                    currentResult(pending.length > 0)
-                                )
+                                return questions.length > 0
+                                    ? collectResult(
+                                          currentResult(false),
+                                          questions
+                                      )
+                                    : collectResult(
+                                          currentResult(pending.length > 0)
+                                      )
                             })
                           : loop.pipe(
                                 Effect.timeout(timeoutMs),
