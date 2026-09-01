@@ -7,7 +7,7 @@ hl.window_rule({
 })
 
 -- Workspace assignments.
-hl.window_rule({ name = "spotify-workspace", match = { class = "^(Spotify)$" }, workspace = "6" })
+hl.window_rule({ name = "spotify-workspace", match = { class = "^(?i)spotify$" }, workspace = "6" })
 hl.window_rule({ name = "vesktop-workspace", match = { class = "^(vesktop)$" }, workspace = "7" })
 
 hl.window_rule({

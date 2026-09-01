@@ -139,7 +139,7 @@ Key pointer actions:
 - **SystemTray:** icons, activation, secondary activation, scrolling, and native menus
 - **Notifications:** server, actions, images, history, and expiration when explicitly enabled
 
-Memory is read from `/proc/meminfo`. Network throughput is calculated from `/sys/class/net/<interface>/statistics` every five seconds. These reads are consolidated in shared services and do not spawn processes.
+Total and used memory are read from `/proc/meminfo`. Per-program usage comes from proportional set size (PSS) values reported by `ps`. Network throughput is calculated from `/sys/class/net/<interface>/statistics` every five seconds.
 
 ## Media selection
 

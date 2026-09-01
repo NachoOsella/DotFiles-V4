@@ -157,7 +157,7 @@ PopupWindow {
 
                         anchors.right: parent.right
                         anchors.verticalCenter: parent.verticalCenter
-                        text: SystemService.formatMemory(modelData.rssKiB)
+                        text: SystemService.formatMemory(modelData.pssKiB)
                         color: Theme.aqua
                         font.pixelSize: Settings.smallFontSize - 1
                     }

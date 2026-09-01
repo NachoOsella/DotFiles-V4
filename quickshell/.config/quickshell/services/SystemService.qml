@@ -13,15 +13,15 @@ Singleton {
     property var topMemoryPrograms: []
     property bool memoryProgramsBusy: false
 
-    function formatMemory(rssKiB: real): string {
-        if (rssKiB >= 1048576)
-            return (rssKiB / 1048576).toFixed(1) + " GiB";
-        return Math.max(0, Math.round(rssKiB / 1024)) + " MiB";
+    function formatMemory(memoryKiB: real): string {
+        if (memoryKiB >= 1048576)
+            return (memoryKiB / 1048576).toFixed(1) + " GiB";
+        return Math.max(0, Math.round(memoryKiB / 1024)) + " MiB";
     }
 
     function refreshTopMemoryPrograms(): void {
-        if (!topMemoryProcess.running)
-            topMemoryProcess.exec(["ps", "-eo", "rss=,comm="]);
+        if (!memoryProcess.running)
+            memoryProcess.exec(["ps", "-eo", "pss=,comm="]);
     }
 
     function updateTopMemoryPrograms(output: string): void {
@@ -31,16 +31,16 @@ Singleton {
             if (!match)
                 continue;
 
-            const rssKiB = Number(match[1]);
+            const pssKiB = Number(match[1]);
             const name = match[2];
-            if (Number.isFinite(rssKiB) && name.length > 0)
-                memoryByProgram[name] = (memoryByProgram[name] || 0) + rssKiB;
+            if (Number.isFinite(pssKiB) && name.length > 0)
+                memoryByProgram[name] = (memoryByProgram[name] || 0) + pssKiB;
         }
 
         const programs = [];
         for (const name in memoryByProgram)
-            programs.push({ name: name, rssKiB: memoryByProgram[name] });
-        programs.sort((first, second) => second.rssKiB - first.rssKiB);
+            programs.push({ name: name, pssKiB: memoryByProgram[name] });
+        programs.sort((first, second) => second.pssKiB - first.pssKiB);
         topMemoryPrograms = programs.slice(0, 10);
     }
 
@@ -51,14 +51,16 @@ Singleton {
             if (match)
                 values[match[1]] = Number(match[2]);
         }
-        const total = values.MemTotal || 0;
-        const available = values.MemAvailable || 0;
-        if (total <= 0)
+
+        const totalKiB = values.MemTotal || 0;
+        const availableKiB = values.MemAvailable || 0;
+        if (totalKiB <= 0)
             return;
-        const used = total - available;
-        memoryPercentage = used / total;
-        memoryUsedGiB = used / 1048576;
-        memoryTotalGiB = total / 1048576;
+
+        const usedKiB = totalKiB - availableKiB;
+        memoryPercentage = usedKiB / totalKiB;
+        memoryUsedGiB = usedKiB / 1048576;
+        memoryTotalGiB = totalKiB / 1048576;
     }
 
     FileView {
@@ -70,14 +72,14 @@ Singleton {
     }
 
     Process {
-        id: topMemoryProcess
+        id: memoryProcess
 
-        stdout: StdioCollector { id: topMemoryOutput }
+        stdout: StdioCollector { id: memoryOutput }
 
         onRunningChanged: root.memoryProgramsBusy = running
         onExited: function(exitCode) {
             if (exitCode === 0)
-                root.updateTopMemoryPrograms(topMemoryOutput.text);
+                root.updateTopMemoryPrograms(memoryOutput.text);
         }
     }
 
