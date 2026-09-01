@@ -284,6 +284,10 @@ const makeStubSession = (
             state.closed = true
             yield* Queue.end(inbox).pipe(Effect.ignore)
             yield* Queue.end(events).pipe(Effect.ignore)
+            return {
+                terminal: true,
+                resourcesReleased: true,
+            } as const
         })
         yield* Effect.addFinalizer(() => closeSession)
 

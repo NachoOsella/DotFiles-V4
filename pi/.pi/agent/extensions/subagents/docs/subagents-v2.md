@@ -12,20 +12,20 @@ Parallelism alone is not a reason to spawn. The parent remains responsible for v
 
 ## Lifecycle
 
-An agent can execute multiple runs. Each run has a stable `runId`, status, output, and error. `subagent_interrupt` stops the current run and keeps the session reusable. `subagent_close` stops work, releases the backend scope, and permanently closes the entry. Its result reports `closed: false` when a backend or scope close fails or times out. `subagent_cancel` remains an alias for interrupt. `subagent_wait` has no model-facing timeout: an ID wait remains active until every listed child finishes or fails; a mailbox wait remains active until a message arrives.
+An agent can execute multiple runs. Each run has a stable `runId`, status, output, and error. `subagent_interrupt` stops the current run and keeps the session reusable. `subagent_close` stops work and permanently closes the entry. Its result reports `terminal: true` once reuse is impossible and separately reports `resourcesReleased: false` when backend or scope cleanup was incomplete. `subagent_cancel` remains an alias for interrupt. `subagent_wait` has no model-facing timeout: an ID wait remains active until every listed child finishes, fails, is interrupted, or is closed; a mailbox wait remains active until a message arrives.
 
 ## Messaging
 
-Normal completion results are delivered as a `followUp` message so they do not interrupt an active parent turn. Normal `subagent_send` calls also queue a follow-up by default; use `steer` only to redirect an active run. Child questions use steering because they require immediate parent attention. Delivery uses peek, send, and acknowledge; failed delivery leaves the event pending for a later retry.
+Normal completion results are delivered as a `followUp` message so they do not interrupt an active parent turn. Normal `subagent_send` calls also queue a follow-up by default; use `steer` only to redirect an active run. Child questions use steering because they require immediate parent attention. Automatic delivery claims an event before sending and acknowledges it only after success; failed delivery releases the claim and leaves the event pending for bounded-backoff retry.
 
-Mailbox overflow produces a visible gap event. A gap means the parent did not receive a complete retained history.
+Mailbox overflow produces a visible gap event. A gap means the parent did not receive a complete retained history. Automatic delivery claims an event before awaiting the host sender; explicit waits cannot consume an event while it is claimed. Failed sends release the claim and retry with bounded backoff.
 
 ## Roles and tools
 
-- `explorer`: read-only investigation.
+- `explorer`: investigation with no built-in edit/write tools.
 - `worker`: bounded implementation with the normal coding tools.
-- `tester`: validation tools including `bash`, but no write tools.
-- `reviewer`: inspection and validation tools including `bash`, but no write tools.
+- `tester`: validation tools including `bash`, but no built-in edit/write tools. Shell commands can still modify the shared filesystem, so the role prompt forbids source edits.
+- `reviewer`: inspection and validation tools including `bash`, but no built-in edit/write tools. Shell commands can still modify the shared filesystem, so the role prompt forbids source edits.
 
 The role tool allowlist is reapplied after extension binding. Child sessions do not receive subagent orchestration tools.
 
@@ -37,8 +37,9 @@ The defaults are `maxRunning = 8` and `maxTracked = 64`. Override them with envi
 - `PI_SUBAGENTS_MAX_TRACKED`
 - `PI_SUBAGENTS_<ROLE>_MODEL`
 - `PI_SUBAGENTS_<ROLE>_REASONING`
+- `PI_SUBAGENTS_<ROLE>_EXTENSION_TOOLS` (comma-separated trusted extension tool names)
 
-`<ROLE>` is `DEFAULT`, `EXPLORER`, `WORKER`, `REVIEWER`, or `TESTER`. Explicit spawn model and reasoning values take precedence over role configuration, followed by role defaults and inherited parent values. Explorer and tester use the lowest-cost available model; worker and reviewer use the capability-ranked available model when no model is configured.
+`<ROLE>` is `DEFAULT`, `EXPLORER`, `WORKER`, `REVIEWER`, or `TESTER`. Model selection is explicit: the spawn model wins, followed by configured role model, inherited parent model, and finally the Pi SDK default. Reasoning selection is independent: explicit spawn effort, configured role effort, role default, then inherited parent effort. Roles do not infer model quality or rank available models.
 
 ## Ownership
 

@@ -32,10 +32,9 @@ export interface AgentRole {
     readonly name: string
     readonly description: string
     readonly instructions: string
-    readonly defaultModel?: string
     readonly defaultReasoningEffort?: ReasoningEffort
-    /** Read-only is a behavioral contract; bash remains available for checks. */
-    readonly readOnly?: boolean
+    /** Whether built-in edit/write tools are available; bash is not restricted. */
+    readonly canUseWriteTools?: boolean
 }
 
 /** Base policy included in every child session. */
@@ -62,38 +61,34 @@ export const AGENT_ROLES: Readonly<Record<AgentRoleName, AgentRole>> = {
     },
     explorer: {
         name: 'explorer',
-        description: 'Cheap read-only codebase investigator.',
-        defaultModel: '@cheapest',
+        description: 'Codebase investigator.',
         defaultReasoningEffort: 'minimal',
         instructions:
             'Find relevant code, dependencies, patterns, usages, and references. Do not modify files. Cite useful file paths and execution paths in the final report.',
-        readOnly: true,
+        canUseWriteTools: false,
     },
     worker: {
         name: 'worker',
         description: 'Implementation-focused child agent.',
-        defaultModel: '@capable',
         defaultReasoningEffort: 'high',
         instructions:
             'Implement one clearly bounded change, make the smallest complete change, run focused validation, and do not modify unrelated code.',
     },
     reviewer: {
         name: 'reviewer',
-        description: 'Read-only code reviewer.',
-        defaultModel: '@capable',
+        description: 'Code reviewer with validation access.',
         defaultReasoningEffort: 'high',
         instructions:
-            'Review completed work for material correctness, security, concurrency, maintainability, regressions, and missing tests. Report concrete findings only; do not rewrite the implementation unless explicitly requested.',
-        readOnly: true,
+            'Review completed work for material correctness, security, concurrency, maintainability, regressions, and missing tests. Report concrete findings only; do not rewrite application source unless explicitly requested. Shell access is for inspection and validation, not a filesystem security boundary.',
+        canUseWriteTools: false,
     },
     tester: {
         name: 'tester',
-        description: 'Read-only validation agent.',
-        defaultModel: '@cheapest',
+        description: 'Validation agent with shell access.',
         defaultReasoningEffort: 'low',
         instructions:
-            'Run focused tests, builds, linters, reproduction steps, and validation commands. Classify failures clearly and do not modify application source unless explicitly requested.',
-        readOnly: true,
+            'Run focused tests, builds, linters, reproduction steps, and validation commands. Classify failures clearly and do not modify application source unless explicitly requested. Shell access is for validation, not a filesystem security boundary.',
+        canUseWriteTools: false,
     },
 }
 
@@ -142,9 +137,7 @@ export function resolveAgentExecutionOptions(
     return {
         model:
             options.model ??
-            options.roleModel ??
-            options.role.defaultModel ??
-            options.parentModel,
+            options.roleModel ?? options.parentModel,
         reasoningEffort:
             options.reasoningEffort ??
             options.roleReasoningEffort ??

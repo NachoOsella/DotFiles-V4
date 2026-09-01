@@ -7,16 +7,22 @@
 import * as path from 'node:path'
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { Effect, Layer, ManagedRuntime, Stream } from 'effect'
+import { Cause, Effect, Layer, ManagedRuntime, Queue, Stream } from 'effect'
 import {
     BackendRegistry,
+    type BackendCloseResult,
     type SubagentBackend,
     type SubagentSession,
 } from './src/backend.ts'
 import { makeStubBackend } from './src/backends/stub.ts'
 import type { SubagentConfig } from './src/config.ts'
 import { SendError } from './src/domain.ts'
-import type { BackendName, ParentContext, SpawnTask } from './src/domain.ts'
+import type {
+    BackendName,
+    ParentContext,
+    SpawnTask,
+    SubagentEvent,
+} from './src/domain.ts'
 import {
     MAX_SPAWN_PROMPT_BYTES,
     SubagentManager,
@@ -70,13 +76,72 @@ const failingLifecycleBackend: SubagentBackend = {
             ) as unknown as Effect.Effect<void>,
             close: Effect.fail(
                 new Error('fake close failed')
-            ) as unknown as Effect.Effect<void>,
+            ) as unknown as Effect.Effect<BackendCloseResult>,
         } satisfies SubagentSession),
 }
 
 const parent: ParentContext = {
     parentCwd: process.cwd(),
     projectTrusted: false,
+}
+
+function makeGatedBackend() {
+    let current:
+        | {
+              emit(event: SubagentEvent): Promise<void>
+              end(): Promise<void>
+              sent: Array<{ text: string; runId?: string }>
+          }
+        | undefined
+    const backend: SubagentBackend = {
+        name: 'pi',
+        capabilities: {
+            steering: true,
+            modelSelection: false,
+            reasoningEffort: false,
+        },
+        available: Effect.succeed(true),
+        spawn: (spawnTask) =>
+            Effect.gen(function* () {
+                const events = yield* Queue.make<SubagentEvent, Cause.Done>()
+                const sent: Array<{ text: string; runId?: string }> = []
+                current = {
+                    sent,
+                    emit: (event) =>
+                        Effect.runPromise(Queue.offer(events, event)).then(
+                            () => undefined
+                        ),
+                    end: () =>
+                        Effect.runPromise(Queue.end(events)).then(
+                            () => undefined
+                        ),
+                }
+                return {
+                    meta: Effect.succeed({
+                        backend: 'pi',
+                        modelLabel: 'gated',
+                    }),
+                    events: Stream.fromQueue(events),
+                    send: (text: string, _delivery, runId?: string) =>
+                        Effect.sync(() => sent.push({ text, runId })),
+                    interrupt: Effect.void,
+                    close: Effect.gen(function* () {
+                        yield* Queue.end(events).pipe(Effect.ignore)
+                        return {
+                            terminal: true,
+                            resourcesReleased: true,
+                        } as const
+                    }),
+                } satisfies SubagentSession
+            }),
+    }
+    return {
+        backend,
+        session: () => {
+            if (!current) throw new Error('gated session was not spawned')
+            return current
+        },
+    }
 }
 
 function task(
@@ -339,6 +404,190 @@ test('spawn rejects prompts above the byte limit', async () => {
             /prompt exceeds/
         )
     })
+})
+
+test('ID waits stay pending across the settle-to-queued-run transition', async () => {
+    const gated = makeGatedBackend()
+    await withManager(
+        async (manager, runtime) => {
+            const snap = await runTool(
+                runtime,
+                manager.spawn(
+                    'pi',
+                    task('first run', { taskName: 'gated-wait' })
+                )
+            )
+            const firstRunId = snap.currentRunId
+            assert.ok(firstRunId)
+            await runTool(runtime, manager.send(snap.id, 'second run'))
+            await runTool(runtime, manager.send(snap.id, 'third run'))
+            const waiting = runTool(runtime, manager.waitFor([snap.id]))
+            let waitFinished = false
+            void waiting.then(() => {
+                waitFinished = true
+            })
+
+            await gated.session().emit({
+                _tag: 'RunSettled',
+                runId: firstRunId,
+                outcome: { _tag: 'Completed', finalText: 'first output' },
+            })
+            while (manager.view.get(snap.id)?.status !== 'done')
+                await new Promise((resolve) => setImmediate(resolve))
+            await new Promise((resolve) => setImmediate(resolve))
+            assert.equal(waitFinished, false)
+
+            const secondRunId = gated.session().sent[0]?.runId
+            const thirdRunId = gated.session().sent[1]?.runId
+            assert.ok(secondRunId)
+            assert.ok(thirdRunId)
+            assert.notEqual(secondRunId, thirdRunId)
+            await gated
+                .session()
+                .emit({ _tag: 'RunStarted', runId: secondRunId })
+            await gated.session().emit({
+                _tag: 'RunSettled',
+                runId: secondRunId,
+                outcome: { _tag: 'Completed', finalText: 'second output' },
+            })
+            await new Promise((resolve) => setImmediate(resolve))
+            assert.equal(waitFinished, false)
+
+            await gated
+                .session()
+                .emit({ _tag: 'RunStarted', runId: thirdRunId })
+            await gated.session().emit({
+                _tag: 'RunSettled',
+                runId: thirdRunId,
+                outcome: { _tag: 'Completed', finalText: 'third output' },
+            })
+            const result = await waiting
+            assert.deepEqual(result.pending, [])
+            assert.deepEqual(result.completed, [snap.id])
+            assert.equal(manager.view.get(snap.id)?.lastRun?.id, thirdRunId)
+            const stableOutput = manager.view.get(snap.id)?.finalText
+            await gated.session().emit({
+                _tag: 'RunStarted',
+                runId: secondRunId,
+            })
+            await gated.session().emit({
+                _tag: 'RunSettled',
+                runId: secondRunId,
+                outcome: { _tag: 'Failed', errorText: 'late failure' },
+            })
+            assert.equal(manager.view.get(snap.id)?.finalText, stableOutput)
+            assert.equal(manager.view.get(snap.id)?.lastRun?.id, thirdRunId)
+        },
+        undefined,
+        createTestRegistry(gated.backend)
+    )
+})
+
+test('an ended backend stream fails queued runs instead of stranding a wait', async () => {
+    const gated = makeGatedBackend()
+    await withManager(
+        async (manager, runtime) => {
+            const snap = await runTool(
+                runtime,
+                manager.spawn('pi', task('first run', { taskName: 'gated-end' }))
+            )
+            const firstRunId = snap.currentRunId
+            assert.ok(firstRunId)
+            await runTool(runtime, manager.send(snap.id, 'queued run'))
+            const waiting = runTool(runtime, manager.waitFor([snap.id]))
+            await gated.session().emit({
+                _tag: 'RunSettled',
+                runId: firstRunId,
+                outcome: { _tag: 'Completed', finalText: 'first output' },
+            })
+            await gated.session().end()
+            const result = await waiting
+            assert.deepEqual(result.pending, [])
+            assert.equal(manager.view.get(snap.id)?.status, 'error')
+            assert.match(
+                manager.view.get(snap.id)?.errorText ?? '',
+                /queued run/
+            )
+        },
+        undefined,
+        createTestRegistry(gated.backend)
+    )
+})
+
+test('interrupt discards queued follow-ups after the prior run settles', async () => {
+    const gated = makeGatedBackend()
+    await withManager(
+        async (manager, runtime) => {
+            const snap = await runTool(
+                runtime,
+                manager.spawn(
+                    'pi',
+                    task('first run', { taskName: 'gated-interrupt' })
+                )
+            )
+            const firstRunId = snap.currentRunId
+            assert.ok(firstRunId)
+            await runTool(runtime, manager.send(snap.id, 'queued run'))
+            await gated.session().emit({
+                _tag: 'RunSettled',
+                runId: firstRunId,
+                outcome: { _tag: 'Completed', finalText: 'first output' },
+            })
+            while (manager.view.get(snap.id)?.status !== 'done')
+                await new Promise((resolve) => setImmediate(resolve))
+
+            const report = await runTool(runtime, manager.interrupt([snap.id]))
+            assert.equal(report[0]?.cancelled, true)
+            const after = manager.view.get(snap.id)
+            assert.equal(after?.status, 'error')
+            assert.equal(after?.lastRun?.status, 'interrupted')
+            assert.equal(after?.lastRun?.id, gated.session().sent[0]?.runId)
+            await gated.session().emit({
+                _tag: 'RunStarted',
+                runId: after?.lastRun?.id ?? '',
+            })
+            assert.equal(
+                manager.view.get(snap.id)?.lastRun?.status,
+                'interrupted'
+            )
+        },
+        undefined,
+        createTestRegistry(gated.backend)
+    )
+})
+
+test('close makes a queued follow-up terminal without starting it', async () => {
+    const gated = makeGatedBackend()
+    await withManager(
+        async (manager, runtime) => {
+            const snap = await runTool(
+                runtime,
+                manager.spawn('pi', task('first run', { taskName: 'gated-close' }))
+            )
+            const firstRunId = snap.currentRunId
+            assert.ok(firstRunId)
+            await runTool(runtime, manager.send(snap.id, 'queued run'))
+            await gated.session().emit({
+                _tag: 'RunSettled',
+                runId: firstRunId,
+                outcome: { _tag: 'Completed', finalText: 'first output' },
+            })
+            while (manager.view.get(snap.id)?.status !== 'done')
+                await new Promise((resolve) => setImmediate(resolve))
+
+            const report = await runTool(runtime, manager.close([snap.id]))
+            assert.equal(report[0]?.terminal, true)
+            assert.equal(report[0]?.resourcesReleased, true)
+            assert.equal(manager.view.get(snap.id)?.status, 'closed')
+            assert.equal(gated.session().sent.length, 1)
+            await assert.rejects(
+                runTool(runtime, manager.send(snap.id, 'after close')),
+                /closed/
+            )
+        },
+        undefined,
+        createTestRegistry(gated.backend)
+    )
 })
 
 test('idle Pi subagents can start another turn with a distinct run id', async () => {

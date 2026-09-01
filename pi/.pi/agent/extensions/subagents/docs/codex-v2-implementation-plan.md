@@ -62,7 +62,7 @@ All agents share the same working tree. The main thread owns decomposition, file
 Inject this policy only when `subagent_spawn` is active. Child sessions exclude that tool, so they do not receive the policy.
 
 ```text
-Delegate only when independent context, specialization, or parallel work is useful. Keep small, sequential, or overlapping work in the main thread. Give each subagent one self-contained task and avoid duplicating its work. Agents share the working tree, so parallel write tasks need separate file ownership. Use the cheapest model likely to succeed, verify returned work, and integrate results in the main thread.
+Delegate only when independent context, specialization, or parallel work is useful. Keep small, sequential, or overlapping work in the main thread. Give each subagent one self-contained task and avoid duplicating its work. Agents share the working tree, so parallel write tasks need separate file ownership. Select models explicitly, verify returned work, and integrate results in the main thread.
 ```
 
 This is guidance, not a mode. Explicit user instructions about delegation still take priority.
@@ -156,17 +156,25 @@ export interface AgentRole {
   readonly name: string;
   readonly description: string;
   readonly instructions: string;
-  readonly defaultModel?: string;
   readonly defaultReasoningEffort?: ReasoningEffort;
-  readonly readOnly?: boolean;
+  /** Controls built-in edit/write tools; shell access remains possible. */
+  readonly canUseWriteTools?: boolean;
 }
 ```
 
-Resolution order:
+Model resolution order:
 
-1. Explicit spawn model and reasoning effort.
-2. Role defaults.
-3. Parent model and thinking level.
+1. Explicit spawn model.
+2. Configured role model.
+3. Parent model.
+4. The Pi SDK default when no model is supplied.
+
+Reasoning-effort resolution is independent:
+
+1. Explicit spawn reasoning effort.
+2. Configured role reasoning effort.
+3. The role's reasoning default, when defined.
+4. Parent reasoning effort.
 
 Add role instructions through a virtual context file in `DefaultResourceLoader.agentsFilesOverride`. Do not copy them into every user task.
 

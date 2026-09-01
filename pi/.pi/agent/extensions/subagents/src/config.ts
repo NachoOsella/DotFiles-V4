@@ -11,6 +11,10 @@ export interface SubagentConfig {
     readonly roleReasoningEfforts: Partial<
         Record<AgentRoleName, ReasoningEffort>
     >
+    /** Explicitly trusted extension tools, never orchestration tools. */
+    readonly allowedExtensionTools?: Partial<
+        Record<AgentRoleName, ReadonlyArray<string>>
+    >
 }
 
 function positiveInteger(
@@ -41,10 +45,18 @@ function reasoning(value: string | undefined): ReasoningEffort | undefined {
     )
 }
 
+function extensionTools(value: string | undefined) {
+    const tools = value
+        ?.split(',')
+        .map((tool) => tool.trim())
+        .filter(Boolean)
+    return tools && tools.length > 0 ? [...new Set(tools)] : undefined
+}
+
 /**
  * Runtime configuration is intentionally small and environment-based. Model
- * names remain installation-specific, so there are no unsafe hard-coded cheap
- * model identifiers in the extension.
+ * names remain installation-specific, so the extension does not hard-code
+ * model identifiers.
  */
 export function loadSubagentConfig(
     environment: NodeJS.ProcessEnv = process.env
@@ -73,6 +85,23 @@ export function loadSubagentConfig(
             worker: reasoning(environment.PI_SUBAGENTS_WORKER_REASONING),
             reviewer: reasoning(environment.PI_SUBAGENTS_REVIEWER_REASONING),
             default: reasoning(environment.PI_SUBAGENTS_DEFAULT_REASONING),
+        },
+        allowedExtensionTools: {
+            explorer: extensionTools(
+                environment.PI_SUBAGENTS_EXPLORER_EXTENSION_TOOLS
+            ),
+            tester: extensionTools(
+                environment.PI_SUBAGENTS_TESTER_EXTENSION_TOOLS
+            ),
+            worker: extensionTools(
+                environment.PI_SUBAGENTS_WORKER_EXTENSION_TOOLS
+            ),
+            reviewer: extensionTools(
+                environment.PI_SUBAGENTS_REVIEWER_EXTENSION_TOOLS
+            ),
+            default: extensionTools(
+                environment.PI_SUBAGENTS_DEFAULT_EXTENSION_TOOLS
+            ),
         },
     }
 }

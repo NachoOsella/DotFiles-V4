@@ -27,16 +27,15 @@ test('built-in roles have focused instructions and expected permissions', () => 
         assert.equal(role.name, name)
         assert.ok(role.instructions.length > 0)
     }
-    assert.equal(AGENT_ROLES.explorer.readOnly, true)
-    assert.equal(AGENT_ROLES.explorer.defaultModel, '@cheapest')
+    assert.equal(AGENT_ROLES.explorer.canUseWriteTools, false)
     assert.equal(AGENT_ROLES.explorer.defaultReasoningEffort, 'minimal')
-    assert.equal(AGENT_ROLES.worker.defaultModel, '@capable')
-    assert.equal(AGENT_ROLES.reviewer.readOnly, true)
-    assert.equal(AGENT_ROLES.reviewer.defaultModel, '@capable')
+    assert.equal(AGENT_ROLES.reviewer.canUseWriteTools, false)
     assert.equal(AGENT_ROLES.reviewer.defaultReasoningEffort, 'high')
-    assert.equal(AGENT_ROLES.tester.readOnly, true)
+    assert.equal(AGENT_ROLES.tester.canUseWriteTools, false)
     assert.ok(AGENT_ROLES.reviewer.instructions.includes('concurrency'))
+    assert.ok(AGENT_ROLES.reviewer.instructions.includes('Shell access'))
     assert.ok(AGENT_ROLES.tester.instructions.includes('tests'))
+    assert.ok(AGENT_ROLES.tester.instructions.includes('Shell access'))
 })
 
 test('roles resolve to default and reject unknown names', () => {
@@ -51,17 +50,17 @@ test('explicit execution settings override role and parent defaults', () => {
         name: 'worker',
         description: 'Test role.',
         instructions: 'Do the work.',
-        defaultModel: 'role/model',
         defaultReasoningEffort: 'high',
     }
 
     assert.deepEqual(
         resolveAgentExecutionOptions({
             role,
+            roleModel: 'configured/role',
             parentModel: 'parent/model',
             parentReasoningEffort: 'low',
         }),
-        { model: 'role/model', reasoningEffort: 'high' }
+        { model: 'configured/role', reasoningEffort: 'high' }
     )
     assert.deepEqual(
         resolveAgentExecutionOptions({
@@ -72,6 +71,34 @@ test('explicit execution settings override role and parent defaults', () => {
             parentReasoningEffort: 'low',
         }),
         { model: 'explicit/model', reasoningEffort: 'max' }
+    )
+    assert.deepEqual(
+        resolveAgentExecutionOptions({
+            role: AGENT_ROLES.explorer,
+            parentModel: 'parent/model',
+            parentReasoningEffort: 'low',
+        }),
+        { model: 'parent/model', reasoningEffort: 'minimal' }
+    )
+    assert.deepEqual(
+        resolveAgentExecutionOptions({
+            role: AGENT_ROLES.worker,
+            parentModel: 'parent/model',
+            parentReasoningEffort: 'low',
+        }),
+        { model: 'parent/model', reasoningEffort: 'high' }
+    )
+    assert.deepEqual(
+        resolveAgentExecutionOptions({
+            role: AGENT_ROLES.reviewer,
+            roleModel: 'configured/reviewer',
+            parentModel: 'parent/model',
+        }),
+        { model: 'configured/reviewer', reasoningEffort: 'high' }
+    )
+    assert.deepEqual(
+        resolveAgentExecutionOptions({ role: AGENT_ROLES.default }),
+        { model: undefined, reasoningEffort: undefined }
     )
 })
 

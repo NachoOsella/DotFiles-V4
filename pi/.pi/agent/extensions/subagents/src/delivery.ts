@@ -21,37 +21,54 @@ export type ParentDeliverySender = (
 
 export interface DeliveryResult {
     readonly delivered: boolean
+    /** A retry is scheduled while failed events remain in the mailbox. */
     readonly retry: boolean
+    /** Delay before the next retry, when retry is true. */
+    readonly retryAfterMs?: number
+    /** Events that exceeded the fast retry budget but remain retryable. */
+    readonly stalledSequences?: ReadonlyArray<number>
 }
 
-const MAX_DELIVERY_RETRIES = 3
+/** One timer is enough; the delay grows and then remains capped. */
+export const DELIVERY_RETRY_DELAYS_MS = [
+    250, 1_000, 3_000, 10_000, 30_000,
+] as const
+const FAST_RETRY_COUNT = 3
 
 function recordFailure(
     events: ReadonlyArray<AgentEnvelope>,
     attempts: Map<number, number>
 ) {
-    let retry = false
+    let retryAfterMs = 0
+    const stalledSequences: number[] = []
     for (const event of events) {
         const nextAttempt = (attempts.get(event.sequence) ?? 0) + 1
-        if (nextAttempt <= MAX_DELIVERY_RETRIES) {
-            attempts.set(event.sequence, nextAttempt)
-            retry = true
-        } else {
-            // Keep the event pending, but wait for a later delivery opportunity.
-            attempts.delete(event.sequence)
-        }
+        attempts.set(event.sequence, nextAttempt)
+        const delay =
+            DELIVERY_RETRY_DELAYS_MS[
+                Math.min(nextAttempt - 1, DELIVERY_RETRY_DELAYS_MS.length - 1)
+            ]
+        retryAfterMs = Math.max(retryAfterMs, delay)
+        if (nextAttempt > FAST_RETRY_COUNT)
+            stalledSequences.push(event.sequence)
     }
-    return retry
+    return { retryAfterMs, stalledSequences }
 }
 
-/** Deliver pending envelopes without consuming them before the host accepts them. */
+/**
+ * Claim pending envelopes before awaiting the host. A wait or another flush can
+ * only see unclaimed events; failed sends release the exact claims for retry.
+ */
 export async function deliverMailbox(
-    manager: Pick<SubagentManagerShape, 'peekMailbox' | 'ackMailbox'>,
+    manager: Pick<
+        SubagentManagerShape,
+        'claimMailbox' | 'releaseMailbox' | 'ackMailbox'
+    >,
     sendMessage: ParentDeliverySender,
     attempts: Map<number, number>,
     sequences?: ReadonlyArray<number>
 ): Promise<DeliveryResult> {
-    const events = manager.peekMailbox({ sequences })
+    const events = manager.claimMailbox({ sequences })
     if (events.length === 0) return { delivered: true, retry: false }
 
     // Questions need steering, while ordinary results must remain follow-ups.
@@ -66,29 +83,52 @@ export async function deliverMailbox(
         else batches.push([event])
     }
 
+    const claimed = new Set(events.map((event) => event.sequence))
     let delivered = true
     let retry = false
-    for (const batch of batches) {
-        try {
-            await sendMessage(
-                {
-                    customType: 'subagent-result',
-                    content: buildMailboxMessage(batch),
-                    display: true,
-                    details: { events: batch },
-                },
-                {
-                    deliverAs:
-                        batch[0]?.kind === 'question' ? 'steer' : 'followUp',
-                    triggerTurn: true,
+    let retryAfterMs = 0
+    const stalledSequences: number[] = []
+    try {
+        for (const batch of batches) {
+            try {
+                await sendMessage(
+                    {
+                        customType: 'subagent-result',
+                        content: buildMailboxMessage(batch),
+                        display: true,
+                        details: { events: batch },
+                    },
+                    {
+                        deliverAs:
+                            batch[0]?.kind === 'question'
+                                ? 'steer'
+                                : 'followUp',
+                        triggerTurn: true,
+                    }
+                )
+                manager.ackMailbox(batch.map((event) => event.sequence))
+                for (const event of batch) {
+                    claimed.delete(event.sequence)
+                    attempts.delete(event.sequence)
                 }
-            )
-            manager.ackMailbox(batch.map((event) => event.sequence))
-            for (const event of batch) attempts.delete(event.sequence)
-        } catch {
-            delivered = false
-            retry = recordFailure(batch, attempts) || retry
+            } catch {
+                delivered = false
+                const failure = recordFailure(batch, attempts)
+                retry = true
+                retryAfterMs = Math.max(retryAfterMs, failure.retryAfterMs)
+                stalledSequences.push(...failure.stalledSequences)
+            }
         }
+    } finally {
+        // This also covers an unexpected formatter/ack failure and ensures no
+        // event is left permanently in-flight after this delivery attempt.
+        if (claimed.size > 0) manager.releaseMailbox(claimed)
     }
-    return { delivered, retry }
+
+    return {
+        delivered,
+        retry,
+        ...(retry ? { retryAfterMs } : {}),
+        ...(stalledSequences.length > 0 ? { stalledSequences } : {}),
+    }
 }

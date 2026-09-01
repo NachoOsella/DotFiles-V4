@@ -55,6 +55,7 @@ if (!model) {
             JSON.stringify(
                 {
                     passed: suite.passed,
+                    summary: suite.summary,
                     runs: suite.runs.map(
                         ({ scenario, observation, result }) => ({
                             name: scenario.name,

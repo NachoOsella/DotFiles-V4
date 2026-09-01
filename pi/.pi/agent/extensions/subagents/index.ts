@@ -147,6 +147,7 @@ export function createSubagentsExtension(
     let unsubStatus: (() => void) | undefined
     let deliveryTimer: ReturnType<typeof setTimeout> | undefined
     let deliveryInFlight: Promise<void> = Promise.resolve()
+    let deliveryStopped = false
     const deliveryAttempts = new Map<number, number>()
 
     const getRuntime = () =>
@@ -209,24 +210,31 @@ export function createSubagentsExtension(
 
     const flushMailbox = () => {
         deliveryTimer = undefined
+        if (deliveryStopped) return
         void getManager().then(async (manager) => {
+            if (deliveryStopped) return
             const result = await deliverMailbox(manager)
-            if (!result.delivered && result.retry) scheduleMailboxDelivery()
+            if (!deliveryStopped && !result.delivered && result.retry)
+                scheduleMailboxDelivery(result.retryAfterMs)
         })
     }
 
-    const scheduleMailboxDelivery = () => {
-        if (deliveryTimer) return
-        deliveryTimer = setTimeout(flushMailbox, DELIVERY_BATCH_MS)
+    const scheduleMailboxDelivery = (delayMs = DELIVERY_BATCH_MS) => {
+        if (deliveryStopped || deliveryTimer) return
+        deliveryTimer = setTimeout(flushMailbox, delayMs)
     }
 
     const onMailbox = (envelope: AgentEnvelope) => {
+        if (deliveryStopped) return
         void getManager().then(async (manager) => {
+            if (deliveryStopped) return
             if (envelope.kind === 'question') {
                 const result = await deliverMailbox(manager, [
                     envelope.sequence,
                 ])
-                if (!result.delivered && result.retry) scheduleMailboxDelivery()
+                if (deliveryStopped) return
+                if (!result.delivered && result.retry)
+                    scheduleMailboxDelivery(result.retryAfterMs)
                 else if (result.delivered) scheduleMailboxDelivery()
                 return
             }
@@ -235,10 +243,12 @@ export function createSubagentsExtension(
     }
 
     pi.on('session_start', (_event, ctx) => {
+        deliveryStopped = false
         if (ctx.hasUI) ui = ctx.ui
     })
 
     pi.on('session_shutdown', async () => {
+        deliveryStopped = true
         if (deliveryTimer) clearTimeout(deliveryTimer)
         deliveryTimer = undefined
         deliveryAttempts.clear()
@@ -403,6 +413,8 @@ export function createSubagentsExtension(
                     }),
                     { signal, interruptMessage: 'Mailbox wait aborted.' }
                 )
+                for (const event of result.events)
+                    deliveryAttempts.delete(event.sequence)
                 return {
                     content: [
                         {
@@ -448,6 +460,7 @@ export function createSubagentsExtension(
             )
 
             const events = waitResult.events
+            for (const event of events) deliveryAttempts.delete(event.sequence)
             const sections: string[] = []
             let remainingBytes = WAIT_OUTPUT_MAX_BYTES
             for (const id of ids) {
@@ -660,11 +673,13 @@ export function createSubagentsExtension(
                     {
                         type: 'text',
                         text: report
-                            .map((entry) =>
-                                entry.closed
-                                    ? `Closed ${entry.id} "${entry.title}".`
-                                    : `Could not close ${entry.id} "${entry.title}".`
-                            )
+                            .map((entry) => {
+                                if (!entry.terminal)
+                                    return `Could not close ${entry.id} "${entry.title}".`
+                                if (entry.resourcesReleased)
+                                    return `Closed ${entry.id} "${entry.title}".`
+                                return `Closed ${entry.id} "${entry.title}"; resource cleanup was incomplete${entry.error ? `: ${entry.error}` : '.'}`
+                            })
                             .join('\n'),
                     },
                 ],

@@ -65,11 +65,15 @@ export interface AgentMailbox {
      * Queue a message for one delivery. Returns undefined for a duplicate key.
      */
     publish(message: AgentMessage): AgentEnvelope | undefined
-    /** Inspect queued messages without consuming them. */
+    /** Inspect pending messages without consuming or claiming them. */
     peek(options?: MailboxDrainOptions): ReadonlyArray<AgentEnvelope>
-    /** Mark selected messages as delivered and remove them from the queue. */
+    /** Atomically claim pending messages for one asynchronous consumer. */
+    claim(options?: MailboxDrainOptions): ReadonlyArray<AgentEnvelope>
+    /** Release claims after a failed asynchronous delivery. */
+    release(sequences: Iterable<number>): void
+    /** Mark selected claimed messages as delivered and remove them from the queue. */
     ack(sequences: Iterable<number>): void
-    /** Deliver and consume queued messages in sequence order. */
+    /** Deliver and consume pending messages in sequence order. */
     drain(options?: MailboxDrainOptions): ReadonlyArray<AgentEnvelope>
     /** Remove selected messages without delivering them. */
     consume(sequences: Iterable<number>): void
@@ -92,7 +96,7 @@ interface StoredEnvelope {
     readonly textBytes: number
 }
 
-type DeliveryState = 'pending' | 'delivered' | 'consumed'
+type DeliveryState = 'pending' | 'in-flight' | 'delivered' | 'consumed'
 
 function positiveInteger(
     value: number | undefined,
@@ -130,8 +134,8 @@ function truncateUtf8(text: string, maxBytes: number) {
 }
 
 /**
- * A bounded, single-consumer mailbox. Automatic delivery uses peek/ack so a
- * synchronous parent-delivery failure leaves the event queued for retry.
+ * A bounded, single-process mailbox. Automatic delivery claims an event before
+ * awaiting the parent sender; explicit drains only see unclaimed pending events.
  */
 export function createAgentMailbox(limits: MailboxLimits = {}): AgentMailbox {
     const maxEvents = positiveInteger(
@@ -150,6 +154,7 @@ export function createAgentMailbox(limits: MailboxLimits = {}): AgentMailbox {
     const deliveryStates = new Map<number, DeliveryState>()
     const waiters = new Set<() => void>()
     let gap: StoredEnvelope | undefined
+    let deferredDroppedEvents = 0
     let nextSequence = 1
     let textBytes = 0
     let closed = false
@@ -161,7 +166,9 @@ export function createAgentMailbox(limits: MailboxLimits = {}): AgentMailbox {
     const rememberDelivery = (sequence: number, state: DeliveryState) => {
         deliveryStates.set(sequence, state)
         while (deliveryStates.size > maxEvents * 2) {
-            const oldest = deliveryStates.keys().next().value
+            const oldest = [...deliveryStates].find(
+                ([, current]) => current !== 'in-flight'
+            )?.[0]
             if (oldest === undefined) break
             deliveryStates.delete(oldest)
         }
@@ -187,19 +194,38 @@ export function createAgentMailbox(limits: MailboxLimits = {}): AgentMailbox {
     }
 
     const removeSequence = (sequence: number, state: DeliveryState) => {
-        const stored =
-            gap?.envelope.sequence === sequence
-                ? gap
-                : pending.find(
-                      (candidate) => candidate.envelope.sequence === sequence
-                  )
+        const isGap = gap?.envelope.sequence === sequence
+        const stored = isGap
+            ? gap
+            : pending.find(
+                  (candidate) => candidate.envelope.sequence === sequence
+              )
         if (!stored) return
+        const current = deliveryStates.get(sequence) ?? 'pending'
+        if (state === 'consumed' && current !== 'pending') return
+        if (
+            state === 'delivered' &&
+            current !== 'pending' &&
+            current !== 'in-flight'
+        )
+            return
         rememberDelivery(sequence, state)
         removeStored(stored)
+        if (isGap && state === 'delivered' && deferredDroppedEvents > 0) {
+            const dropped = deferredDroppedEvents
+            deferredDroppedEvents = 0
+            addGap(dropped)
+        }
     }
 
     const evictOldest = () => {
-        const removed = pending.shift()
+        const index = pending.findIndex(
+            (stored) =>
+                (deliveryStates.get(stored.envelope.sequence) ?? 'pending') ===
+                'pending'
+        )
+        if (index < 0) return undefined
+        const [removed] = pending.splice(index, 1)
         if (!removed) return undefined
         textBytes -= removed.textBytes
         rememberDelivery(removed.envelope.sequence, 'consumed')
@@ -213,6 +239,10 @@ export function createAgentMailbox(limits: MailboxLimits = {}): AgentMailbox {
             maxTextBytes
         )
         if (gap) {
+            if (deliveryStates.get(gap.envelope.sequence) === 'in-flight') {
+                deferredDroppedEvents += droppedEvents
+                return
+            }
             const envelope: AgentEnvelope = {
                 ...gap.envelope,
                 text: truncateUtf8(
@@ -228,6 +258,7 @@ export function createAgentMailbox(limits: MailboxLimits = {}): AgentMailbox {
                 envelope,
                 textBytes: Buffer.byteLength(envelope.text, 'utf8'),
             }
+            rememberDelivery(envelope.sequence, 'pending')
             return
         }
         const envelope: AgentEnvelope = {
@@ -244,11 +275,52 @@ export function createAgentMailbox(limits: MailboxLimits = {}): AgentMailbox {
             envelope,
             textBytes: Buffer.byteLength(text, 'utf8'),
         }
+        rememberDelivery(envelope.sequence, 'pending')
+    }
+
+    const mergeDeferredGap = () => {
+        if (
+            deferredDroppedEvents <= 0 ||
+            !gap ||
+            deliveryStates.get(gap.envelope.sequence) !== 'in-flight'
+        )
+            return
+        const envelope: AgentEnvelope = {
+            ...gap.envelope,
+            text: truncateUtf8(
+                `Mailbox gap: at least ${(gap.envelope.droppedEvents ?? 0) + deferredDroppedEvents} events were dropped because the mailbox limit was reached.`,
+                maxTextBytes
+            ),
+            droppedEvents:
+                (gap.envelope.droppedEvents ?? 0) + deferredDroppedEvents,
+        }
+        deferredDroppedEvents = 0
+        gap = {
+            envelope,
+            textBytes: Buffer.byteLength(envelope.text, 'utf8'),
+        }
+        rememberDelivery(envelope.sequence, 'in-flight')
     }
 
     const trim = () => {
         let droppedEvents = 0
-        while (pending.length > maxEvents || textBytes > maxTextBytes) {
+        const pendingStats = () => {
+            let count = 0
+            let bytes = 0
+            for (const stored of pending) {
+                if (
+                    (deliveryStates.get(stored.envelope.sequence) ??
+                        'pending') !== 'pending'
+                )
+                    continue
+                count++
+                bytes += stored.textBytes
+            }
+            return { count, bytes }
+        }
+        while (true) {
+            const stats = pendingStats()
+            if (stats.count <= maxEvents && stats.bytes <= maxTextBytes) break
             if (!evictOldest()) break
             droppedEvents++
         }
@@ -294,8 +366,11 @@ export function createAgentMailbox(limits: MailboxLimits = {}): AgentMailbox {
                 'afterSequence must be a non-negative safe integer.'
             )
         }
-        return allStored().filter((stored) =>
-            matches(stored.envelope, options, afterSequence)
+        return allStored().filter(
+            (stored) =>
+                (deliveryStates.get(stored.envelope.sequence) ?? 'pending') ===
+                    'pending' &&
+                matches(stored.envelope, options, afterSequence)
         )
     }
 
@@ -308,7 +383,11 @@ export function createAgentMailbox(limits: MailboxLimits = {}): AgentMailbox {
     }
 
     const hasAfter = (afterSequence: number) =>
-        allStored().some((stored) => stored.envelope.sequence > afterSequence)
+        allStored().some(
+            (stored) =>
+                (deliveryStates.get(stored.envelope.sequence) ?? 'pending') ===
+                    'pending' && stored.envelope.sequence > afterSequence
+        )
 
     const waitForMatching = (afterSequence: number) =>
         Effect.callback<void>((resume) => {
@@ -399,6 +478,22 @@ export function createAgentMailbox(limits: MailboxLimits = {}): AgentMailbox {
         },
         peek(options: MailboxDrainOptions = {}) {
             return selected(options).map((stored) => stored.envelope)
+        },
+        claim(options: MailboxDrainOptions = {}) {
+            const events = selected(options)
+            for (const stored of events)
+                rememberDelivery(stored.envelope.sequence, 'in-flight')
+            return events.map((stored) => stored.envelope)
+        },
+        release(sequences) {
+            let released = false
+            for (const sequence of new Set(sequences)) {
+                if (deliveryStates.get(sequence) !== 'in-flight') continue
+                mergeDeferredGap()
+                rememberDelivery(sequence, 'pending')
+                released = true
+            }
+            if (released) notify()
         },
         ack(sequences) {
             for (const sequence of new Set(sequences)) {

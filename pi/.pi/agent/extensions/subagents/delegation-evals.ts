@@ -38,9 +38,20 @@ export interface DelegationEvalRun {
     readonly response?: string
 }
 
+export interface DelegationEvalSummary {
+    readonly passRate: number
+    readonly soloOverDelegationRate: number
+    readonly assistantAccuracy: number
+    readonly orchestratorAccuracy: number
+    readonly averageAgentsRequested: number
+    readonly immediateWaitRate: number
+    readonly roleSelectionAccuracy: number
+}
+
 export interface DelegationEvalSuiteResult {
     readonly passed: boolean
     readonly runs: ReadonlyArray<DelegationEvalRun>
+    readonly summary: DelegationEvalSummary
 }
 
 const DELEGATION_EVAL_INSTRUCTIONS = `
@@ -153,9 +164,60 @@ export async function runDelegationEvals(
             })
         }
     }
+    const observed = runs.filter(
+        (run): run is DelegationEvalRun & { observation: DelegationObservation } =>
+            run.observation !== undefined
+    )
+    const ratio = (numerator: number, denominator: number) =>
+        denominator === 0 ? 0 : numerator / denominator
+    const byMode = (mode: DelegationMode) =>
+        observed.filter((run) => run.scenario.expectedMode === mode)
+    const delegated = observed.filter((run) => run.observation.agentCount > 0)
+    const roleCases = observed.filter(
+        (run) => (run.scenario.expectedRoles?.length ?? 0) > 0
+    )
+    const roleMatches = roleCases.filter((run) =>
+        run.scenario.expectedRoles?.every((role) =>
+            run.observation.roles.includes(role)
+        )
+    )
     return {
         passed: runs.every((run) => run.result.passed),
         runs,
+        summary: {
+            passRate: ratio(
+                runs.filter((run) => run.result.passed).length,
+                runs.length
+            ),
+            soloOverDelegationRate: ratio(
+                byMode('solo').filter(
+                    (run) => run.observation.agentCount > 0
+                ).length,
+                byMode('solo').length
+            ),
+            assistantAccuracy: ratio(
+                byMode('assistant').filter((run) => run.result.passed).length,
+                byMode('assistant').length
+            ),
+            orchestratorAccuracy: ratio(
+                byMode('orchestrator').filter((run) => run.result.passed)
+                    .length,
+                byMode('orchestrator').length
+            ),
+            averageAgentsRequested: ratio(
+                observed.reduce(
+                    (total, run) => total + run.observation.agentCount,
+                    0
+                ),
+                observed.length
+            ),
+            immediateWaitRate: ratio(
+                delegated.filter((run) => run.observation.immediatelyWaited)
+                    .length,
+                delegated.length
+            ),
+            roleSelectionAccuracy: ratio(roleMatches.length, roleCases.length),
+        },
     }
 }
 
@@ -275,6 +337,44 @@ export const DELEGATION_EVALS: ReadonlyArray<DelegationEvalCase> = [
         prompt: 'Change this timeout from 10 seconds to 15 seconds.',
         expectedMode: 'solo',
         expectedAgentRange: [0, 0],
+    },
+    {
+        name: 'related-files-local-fix',
+        prompt: 'Read these two related files and fix a localized bug.',
+        expectedMode: 'solo',
+        expectedAgentRange: [0, 0],
+    },
+    {
+        name: 'single-symbol-explanation',
+        prompt: 'Find one symbol definition and explain it.',
+        expectedMode: 'solo',
+        expectedAgentRange: [0, 0],
+    },
+    {
+        name: 'small-change-focused-test',
+        prompt: 'Implement a small change and run one focused test.',
+        expectedMode: 'solo',
+        expectedAgentRange: [0, 0],
+    },
+    {
+        name: 'tightly-coupled-three-file-change',
+        prompt: 'Make the same small change across three tightly coupled files.',
+        expectedMode: 'solo',
+        expectedAgentRange: [0, 0],
+    },
+    {
+        name: 'compatibility-investigation',
+        prompt: 'Investigate an unrelated compatibility concern while I implement the feature.',
+        expectedMode: 'assistant',
+        expectedAgentRange: [1, 1],
+        expectedRoles: ['explorer'],
+    },
+    {
+        name: 'independent-backend-frontend-change',
+        prompt: 'Implement backend and frontend changes that can proceed independently.',
+        expectedMode: 'orchestrator',
+        expectedAgentRange: [2, 2],
+        expectedRoles: ['worker'],
     },
     {
         name: 'endpoint-with-deprecation-search',

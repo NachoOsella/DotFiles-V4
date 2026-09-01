@@ -60,6 +60,8 @@ export interface SpawnTask {
     readonly model?: string
     /** Pi thinking level. */
     readonly reasoningEffort?: ReasoningEffort
+    /** Trusted extension tools selected by the manager for this role. */
+    readonly allowedExtensionTools?: ReadonlyArray<string>
     /** Optional absolute or cwd-relative paths this task intends to modify. */
     readonly ownedPaths?: ReadonlyArray<string>
     readonly parent: ParentContext

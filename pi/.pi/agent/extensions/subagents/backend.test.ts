@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { Duration, Effect, Ref, Stream } from 'effect'
+import { Duration, Effect, Fiber, Ref, Stream } from 'effect'
 import {
     CHILD_EXCLUDED_TOOL_NAMES,
     childToolNames,
     createPiBackend,
+    resolvePiModel,
     type PiSessionFactory,
 } from './src/backends/pi.ts'
 import {
@@ -27,6 +28,39 @@ const task: SpawnTask = {
     title: 'backend test',
     cwd: process.cwd(),
     parent,
+}
+
+function makeMinimalSdkSession(overrides: Record<string, unknown> = {}) {
+    const listeners = new Set<(event: unknown) => void>()
+    return {
+        messages: [],
+        thinkingLevel: 'medium',
+        sessionFile: undefined,
+        model: undefined,
+        isStreaming: false,
+        sessionManager: { appendSessionInfo: async () => undefined },
+        extensionRunner: {
+            hasHandlers: () => false,
+            emit: async () => undefined,
+        },
+        getContextUsage: () => undefined,
+        getAllTools: () => [],
+        getToolDefinition: () => undefined,
+        bindExtensions: async () => undefined,
+        setActiveToolsByName: () => undefined,
+        setFollowUpMode: () => undefined,
+        subscribe: (listener: (event: unknown) => void) => {
+            listeners.add(listener)
+            return () => listeners.delete(listener)
+        },
+        clearQueue: () => undefined,
+        abort: async () => undefined,
+        dispose: () => undefined,
+        prompt: async () => undefined,
+        followUp: async () => undefined,
+        steer: async () => undefined,
+        ...overrides,
+    } as unknown as AgentSession
 }
 
 test('stub session preserves steer and follow-up queue semantics', async () => {
@@ -96,7 +130,11 @@ test('Pi backend applies child filtering and aborts through the SDK session', as
             emit: async () => undefined,
         },
         getContextUsage: () => undefined,
-        getAllTools: () => [],
+        getAllTools: () =>
+            [
+                { name: 'safe-extension' },
+                { name: 'unconfigured-extension' },
+            ] as any,
         getToolDefinition: () => undefined,
         bindExtensions: async () => undefined,
         setActiveToolsByName: (names: ReadonlyArray<string>) => {
@@ -132,19 +170,163 @@ test('Pi backend applies child filtering and aborts through the SDK session', as
                 const session = yield* backend.spawn({
                     ...task,
                     role: 'reviewer',
+                    allowedExtensionTools: [
+                        'safe-extension',
+                        'subagent_wait',
+                        'ask_user',
+                        'edit',
+                    ],
                 })
                 assert.deepEqual(capturedOptions?.tools, [...REVIEW_TOOL_NAMES])
                 assert.ok(
                     capturedOptions?.excludeTools?.includes('subagent_spawn')
                 )
-                assert.deepEqual(activeTools, capturedOptions?.tools)
+                assert.deepEqual(activeTools, [
+                    ...REVIEW_TOOL_NAMES,
+                    'safe-extension',
+                ])
+                assert.equal(
+                    activeTools.includes('unconfigured-extension'),
+                    false
+                )
+                assert.equal(activeTools.includes('subagent_wait'), false)
+                assert.equal(activeTools.includes('ask_user'), false)
+                assert.equal(activeTools.includes('edit'), false)
                 yield* session.interrupt
                 assert.equal(abortCalled, true)
+                const closeResult = yield* session.close
+                assert.deepEqual(closeResult, {
+                    terminal: true,
+                    resourcesReleased: true,
+                })
+                const repeatedClose = yield* session.close
+                assert.deepEqual(repeatedClose, closeResult)
             })
         )
     )
     assert.equal(disposed, true)
     assert.equal(listeners.size, 0)
+})
+
+test('Pi close reports shutdown hook and dispose failures without losing terminality', async () => {
+    let disposed = false
+    const sessionFactory: PiSessionFactory = async () =>
+        ({
+            session: makeMinimalSdkSession({
+                extensionRunner: {
+                    hasHandlers: () => true,
+                    emit: async () => {
+                        throw new Error('shutdown hook failed')
+                    },
+                },
+                dispose: () => {
+                    disposed = true
+                    throw new Error('dispose failed')
+                },
+            }),
+        }) as Awaited<ReturnType<PiSessionFactory>>
+    const backend = createPiBackend({
+        sessionFactory,
+        cleanupTimeoutMs: 5,
+    })
+
+    const result = await Effect.runPromise(
+        Effect.scoped(
+            Effect.gen(function* () {
+                const session = yield* backend.spawn(task)
+                const close = yield* session.close
+                assert.equal(close.terminal, true)
+                assert.equal(close.resourcesReleased, false)
+                assert.match(close.error ?? '', /shutdown hook|dispose/)
+                assert.equal((yield* session.close).resourcesReleased, false)
+                return close
+            })
+        )
+    )
+    assert.equal(result.terminal, true)
+    assert.equal(disposed, true)
+})
+
+test('Pi close reports an abort timeout while keeping the session terminal', async () => {
+    const sessionFactory: PiSessionFactory = async () =>
+        ({
+            session: makeMinimalSdkSession({
+                abort: () => new Promise<void>(() => undefined),
+            }),
+        }) as Awaited<ReturnType<PiSessionFactory>>
+    const backend = createPiBackend({ sessionFactory, cleanupTimeoutMs: 5 })
+
+    const close = await Effect.runPromise(
+        Effect.scoped(
+            Effect.gen(function* () {
+                const session = yield* backend.spawn(task)
+                return yield* session.close
+            })
+        )
+    )
+    assert.equal(close.terminal, true)
+    assert.equal(close.resourcesReleased, false)
+    assert.match(close.error ?? '', /abort/)
+})
+
+test('model routing treats aliases as ordinary explicit model identifiers', () => {
+    const explicit = {
+        provider: 'provider-a',
+        id: '@cheapest',
+    }
+    const runtime = {
+        getModel: (provider: string, id: string) =>
+            provider === 'provider-a' && id === '@cheapest'
+                ? explicit
+                : undefined,
+        getModels: () => [explicit],
+    } as any
+    assert.equal(
+        resolvePiModel(runtime, '@cheapest', undefined),
+        explicit
+    )
+    assert.throws(
+        () => resolvePiModel(runtime, '@capable', undefined),
+        /Unknown model/
+    )
+    assert.equal(resolvePiModel(runtime, undefined, undefined), undefined)
+})
+
+test('Pi idle sends do not reuse the explicit initial run id', async () => {
+    const backend = createPiBackend({
+        sessionFactory: async () =>
+            ({
+                session: makeMinimalSdkSession(),
+            }) as Awaited<ReturnType<PiSessionFactory>>,
+    })
+    const runIds = await Effect.runPromise(
+        Effect.scoped(
+            Effect.gen(function* () {
+                const session = yield* backend.spawn({
+                    ...task,
+                    agentId: 'sa-1',
+                    runId: 'sa-1:run-1',
+                })
+                const seen = yield* Ref.make<string[]>([])
+                const collector = yield* Stream.runForEach(
+                    session.events,
+                    (event) =>
+                        event._tag === 'RunStarted'
+                            ? Ref.update(seen, (current) => [
+                                  ...current,
+                                  event.runId,
+                              ])
+                            : Effect.void
+                ).pipe(Effect.forkScoped)
+                yield* session.send('second turn')
+                yield* Effect.sleep(Duration.millis(5))
+                yield* session.close
+                yield* Fiber.join(collector)
+                return yield* Ref.get(seen)
+            })
+        )
+    )
+    assert.deepEqual(runIds, ['sa-1:run-1', 'sa-1:run-2'])
 })
 
 test('role tool sets match their intended capabilities', () => {

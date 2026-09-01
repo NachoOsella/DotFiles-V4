@@ -16,6 +16,13 @@ import type {
 
 export type SendDelivery = 'steer' | 'follow-up'
 
+/** Best-effort close status reported after the session becomes terminal. */
+export interface BackendCloseResult {
+    readonly terminal: true
+    readonly resourcesReleased: boolean
+    readonly error?: string
+}
+
 export interface BackendCapabilities {
     /** Can send() steer a live run (vs. only starting a fresh run when idle). */
     readonly steering: boolean
@@ -51,8 +58,8 @@ export interface SubagentSession {
      * this with a timeout and fall back to closing the session scope.
      */
     readonly interrupt: Effect.Effect<void>
-    /** Permanently close the backend session and release its resources. */
-    readonly close: Effect.Effect<void>
+    /** Permanently close the backend session and report cleanup certainty. */
+    readonly close: Effect.Effect<BackendCloseResult>
 }
 
 export interface SubagentBackend {

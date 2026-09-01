@@ -29,6 +29,7 @@ import { Type } from 'typebox'
 import type { Cause, Scope } from 'effect'
 import { Effect, Queue, Stream } from 'effect'
 import type {
+    BackendCloseResult,
     SendDelivery,
     SubagentBackend,
     SubagentSession,
@@ -52,7 +53,7 @@ import {
 const CHILD_SHUTDOWN_TIMEOUT_MS = 5_000
 const CHILD_TOOL_CALL_TIMEOUT_MS = 3 * 60 * 1_000
 
-/** Tools that headless children must not receive. Everything else stays enabled. */
+/** Tools that headless children must not receive, even when configured. */
 export const CHILD_EXCLUDED_TOOL_NAMES = [
     'subagent_spawn',
     'subagent_wait',
@@ -66,17 +67,36 @@ export const CHILD_EXCLUDED_TOOL_NAMES = [
     'ask_user',
 ] as const
 
-/** Return the complete built-in allowlist for a selected child role. */
+const BUILT_IN_TOOL_NAMES = new Set([
+    ...CODING_TOOL_NAMES,
+    ...CHILD_EXCLUDED_TOOL_NAMES,
+    'report_to_parent',
+])
+
+/** Return the role allowlist plus explicitly trusted, registered extensions. */
 export function childToolNames(
     role: ReturnType<typeof resolveAgentRole>,
-    canReportToParent: boolean
+    canReportToParent: boolean,
+    allowedExtensionTools: ReadonlyArray<string> = [],
+    registeredToolNames: ReadonlyArray<string> = []
 ): ReadonlyArray<string> {
-    const roleTools = role.readOnly
-        ? role.name === 'explorer'
-            ? READ_ONLY_TOOL_NAMES
-            : REVIEW_TOOL_NAMES
-        : CODING_TOOL_NAMES
-    return [...roleTools, ...(canReportToParent ? ['report_to_parent'] : [])]
+    const roleTools =
+        role.canUseWriteTools === false
+            ? role.name === 'explorer'
+                ? READ_ONLY_TOOL_NAMES
+                : REVIEW_TOOL_NAMES
+            : CODING_TOOL_NAMES
+    const registered = new Set(registeredToolNames)
+    const extensionTools = allowedExtensionTools.filter(
+        (name) => !BUILT_IN_TOOL_NAMES.has(name) && registered.has(name)
+    )
+    return [
+        ...new Set([
+            ...roleTools,
+            ...(canReportToParent ? ['report_to_parent'] : []),
+            ...extensionTools,
+        ]),
+    ]
 }
 
 // --- Model + effort resolution -----------------------------------------------
@@ -86,28 +106,14 @@ type ThinkingLevel = NonNullable<
 >
 
 /**
- * Resolve the generic model hint against the child runtime (v1 semantics):
- * "provider/model-id" is exact; a bare id prefers the inherited provider,
- * then must be unambiguous across providers. No hint inherits the parent
- * model; with nothing to inherit, the SDK default applies.
+ * Resolve an explicit model hint against the child runtime. No hint inherits
+ * the parent model; with nothing to inherit, the SDK default applies.
  */
-function resolvePiModel(
+export function resolvePiModel(
     modelRuntime: ModelRuntime,
     hint: string | undefined,
     inherited: { provider: string; id: string } | undefined
 ): Model<any> | undefined {
-    if (hint === '@cheapest' || hint === '@capable') {
-        const candidates = modelRuntime.getAvailableSnapshot()
-        if (candidates.length === 0) {
-            return inherited
-                ? modelRuntime.getModel(inherited.provider, inherited.id)
-                : undefined
-        }
-        return [...candidates].sort((left, right) => {
-            if (hint === '@cheapest') return modelCost(left) - modelCost(right)
-            return modelCapability(right) - modelCapability(left)
-        })[0]
-    }
     if (!hint) {
         if (!inherited) return undefined
         return modelRuntime.getModel(inherited.provider, inherited.id)
@@ -139,23 +145,6 @@ function resolvePiModel(
  * registry. Copy those registrations into the child runtime, where the SDK
  * now owns model lookup and request authentication.
  */
-function modelCost(model: Model<any>) {
-    return (
-        model.cost.input +
-        model.cost.output +
-        model.cost.cacheRead +
-        model.cost.cacheWrite
-    )
-}
-
-function modelCapability(model: Model<any>) {
-    return (
-        (model.reasoning ? 1_000_000_000 : 0) +
-        model.contextWindow +
-        model.maxTokens
-    )
-}
-
 function copyParentProviderRegistrations(
     parentRegistry:
         NonNullable<SpawnTask['parent']['modelRegistry']> | undefined,
@@ -198,42 +187,49 @@ async function createChildResources(
 
 function waitBounded(operation: Promise<unknown>, timeoutMs: number) {
     let timer: ReturnType<typeof setTimeout> | undefined
-    const timeout = new Promise<void>((resolve) => {
-        timer = setTimeout(resolve, timeoutMs)
+    const timeout = new Promise<boolean>((resolve) => {
+        timer = setTimeout(() => resolve(false), timeoutMs)
     })
     return Promise.race([
         operation.then(
-            () => undefined,
-            () => undefined
+            () => true,
+            () => false
         ),
         timeout,
-    ])
-        .catch(() => {})
-        .finally(() => {
-            if (timer) clearTimeout(timer)
-        })
+    ]).finally(() => {
+        if (timer) clearTimeout(timer)
+    })
 }
 
-/** Emit child session_shutdown (bounded), then dispose. Never throws. */
-async function shutdownAndDisposeChildSession(session: AgentSession) {
+/** Emit shutdown and dispose without overstating cleanup certainty. */
+async function shutdownAndDisposeChildSession(
+    session: AgentSession,
+    timeoutMs = CHILD_SHUTDOWN_TIMEOUT_MS
+): Promise<BackendCloseResult> {
+    const errors: string[] = []
     try {
         if (session.extensionRunner.hasHandlers('session_shutdown')) {
-            await waitBounded(
+            const completed = await waitBounded(
                 session.extensionRunner.emit({
                     type: 'session_shutdown',
                     reason: 'quit',
                 }),
-                CHILD_SHUTDOWN_TIMEOUT_MS
+                timeoutMs
             )
+            if (!completed) errors.push('session_shutdown failed or timed out')
         }
-    } catch {
-        // Extension runner inspection/emission is best-effort during teardown.
-    } finally {
-        try {
-            session.dispose()
-        } catch {
-            // Disposal is terminal and must remain idempotent for callers.
-        }
+    } catch (error) {
+        errors.push(`session_shutdown failed: ${boundedError(error)}`)
+    }
+    try {
+        session.dispose()
+    } catch (error) {
+        errors.push(`session dispose failed: ${boundedError(error)}`)
+    }
+    return {
+        terminal: true,
+        resourcesReleased: errors.length === 0,
+        ...(errors.length > 0 ? { error: errors.join('; ') } : {}),
     }
 }
 
@@ -433,6 +429,8 @@ export interface PiBackendOptions {
     readonly onChildReport?: (report: ChildReport) => void | Promise<void>
     /** Injectable SDK boundary used by integration tests and alternate runtimes. */
     readonly sessionFactory?: PiSessionFactory
+    /** Cleanup timeout override for embedders and deterministic tests. */
+    readonly cleanupTimeoutMs?: number
 }
 
 function createChildReportTool(
@@ -490,7 +488,8 @@ function createChildReportTool(
 const makePiSession = (
     task: SpawnTask,
     onChildReport: PiBackendOptions['onChildReport'],
-    sessionFactory: PiSessionFactory = createAgentSession
+    sessionFactory: PiSessionFactory = createAgentSession,
+    cleanupTimeoutMs = CHILD_SHUTDOWN_TIMEOUT_MS
 ): Effect.Effect<SubagentSession, SpawnError, Scope.Scope> =>
     Effect.gen(function* () {
         const agentDir = getAgentDir()
@@ -562,10 +561,20 @@ const makePiSession = (
                 // the scope finalizer that owns cleanup is only registered later.
                 try {
                     await session.bindExtensions({ mode: 'print' })
-                    // Re-apply the role allowlist after extensions register tools.
-                    // Hooks still run in-process; the allowlist limits callable tools,
-                    // not arbitrary side effects from trusted extensions.
-                    session.setActiveToolsByName(childTools)
+                    // Extensions are trusted code, so only explicitly configured
+                    // names that actually registered are added to the role base.
+                    const registeredToolNames = session
+                        .getAllTools()
+                        .map(({ name }) => name)
+                    const activeTools = childToolNames(
+                        role,
+                        canReportToParent,
+                        task.allowedExtensionTools,
+                        registeredToolNames
+                    )
+                    // Hooks still run in-process; this allowlist limits callable
+                    // tools, not arbitrary side effects from trusted extensions.
+                    session.setActiveToolsByName([...activeTools])
                     // Give each queued follow-up its own lifecycle so manager run IDs
                     // remain one-to-one with child runs.
                     session.setFollowUpMode('one-at-a-time')
@@ -580,7 +589,7 @@ const makePiSession = (
 
         const state = {
             closed: false,
-            runCounter: 0,
+            runCounter: Number(task.runId?.match(/:run-(\d+)$/)?.[1] ?? 0),
             activeRun: undefined as
                 | {
                       id: string
@@ -812,19 +821,38 @@ const makePiSession = (
         }
         const unsubscribe = session.subscribe(handleEvent)
 
-        const closeSession = Effect.promise(async () => {
-            if (state.closed) return
-            state.closed = true
-            unsubscribe()
-            try {
-                session.clearQueue()
-            } catch {
-                // Continue with abort/dispose.
-            }
-            state.pendingFollowUpRunIds = []
-            await waitBounded(session.abort(), CHILD_SHUTDOWN_TIMEOUT_MS)
-            await shutdownAndDisposeChildSession(session)
-            Queue.endUnsafe(events)
+        let closePromise: Promise<BackendCloseResult> | undefined
+        const closeSession = Effect.promise(() => {
+            if (closePromise) return closePromise
+            closePromise = (async () => {
+                const errors: string[] = []
+                state.closed = true
+                unsubscribe()
+                try {
+                    session.clearQueue()
+                } catch (error) {
+                    errors.push(`clear queue failed: ${boundedError(error)}`)
+                }
+                state.pendingFollowUpRunIds = []
+                const aborted = await waitBounded(
+                    Promise.resolve().then(() => session.abort()),
+                    cleanupTimeoutMs
+                )
+                if (!aborted) errors.push('session abort failed or timed out')
+                const disposed = await shutdownAndDisposeChildSession(
+                    session,
+                    cleanupTimeoutMs
+                )
+                if (!disposed.resourcesReleased && disposed.error)
+                    errors.push(disposed.error)
+                Queue.endUnsafe(events)
+                return {
+                    terminal: true,
+                    resourcesReleased: errors.length === 0,
+                    ...(errors.length > 0 ? { error: errors.join('; ') } : {}),
+                }
+            })()
+            return closePromise
         })
         yield* Effect.addFinalizer(() => closeSession)
 
@@ -945,7 +973,12 @@ export function createPiBackend(
         // In-process SDK: always available.
         available: Effect.succeed(true),
         spawn: (task) =>
-            makePiSession(task, options.onChildReport, options.sessionFactory),
+            makePiSession(
+                task,
+                options.onChildReport,
+                options.sessionFactory,
+                options.cleanupTimeoutMs
+            ),
     }
 }
 

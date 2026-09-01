@@ -8,7 +8,7 @@ import {
 } from './delegation-evals.ts'
 
 test('delegation evals cover solo, assistant, and orchestrator behavior', () => {
-    assert.equal(DELEGATION_EVALS.length, 20)
+    assert.equal(DELEGATION_EVALS.length, 26)
     assert.ok(DELEGATION_EVALS.some((item) => item.expectedMode === 'solo'))
     assert.ok(
         DELEGATION_EVALS.some((item) => item.expectedMode === 'assistant')
@@ -63,6 +63,10 @@ test('delegation evals execute through a controlled model adapter', async () => 
     assert.equal(suite.passed, true)
     assert.equal(suite.runs.length, DELEGATION_EVALS.length)
     assert.ok(suite.runs.every((run) => run.observation !== undefined))
+    assert.equal(suite.summary.passRate, 1)
+    assert.equal(suite.summary.soloOverDelegationRate, 0)
+    assert.equal(suite.summary.immediateWaitRate, 0)
+    assert.equal(suite.summary.roleSelectionAccuracy, 1)
 })
 
 test('delegation observation parsing tolerates a JSON code fence', () => {

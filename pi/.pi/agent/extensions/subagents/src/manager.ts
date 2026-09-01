@@ -23,6 +23,7 @@ import {
     Stream,
 } from 'effect'
 import type {
+    BackendCloseResult,
     SendDelivery,
     SubagentBackend,
     SubagentSession,
@@ -280,9 +281,15 @@ interface Entry {
     nextRunNumber: number
     pendingRunIds: Set<string>
     runStartedAt: number
+    /** Monotonic manager action used to avoid time-based wait metrics. */
+    spawnActionSequence: number
+    lastActionSequence: number
     lastSettlementSequence?: number
     /** A bounded teardown failed; keep close reports conservative thereafter. */
     closeIncomplete?: boolean
+    closeStatus?: BackendCloseResult
+    /** Close has been requested; reject sends before cleanup finishes. */
+    closing?: boolean
     closed: boolean
     immediateWaitRecorded?: boolean
     transcriptBytes: number
@@ -336,7 +343,13 @@ export interface CloseResult {
     readonly id: string
     readonly title: string
     readonly status: SubagentStatus
+    /** The session is terminal and cannot be reused. */
+    readonly terminal: boolean
+    /** Whether backend and scope cleanup were confirmed successful. */
+    readonly resourcesReleased: boolean
+    /** Legacy alias for resourcesReleased. */
     readonly closed: boolean
+    readonly error?: string
 }
 
 export interface DelegationMetrics {
@@ -392,6 +405,10 @@ export interface SubagentManagerShape {
     ): Effect.Effect<MailboxWaitResult>
     /** Inspect mailbox events without consuming them. */
     peekMailbox(options?: MailboxDrainOptions): ReadonlyArray<AgentEnvelope>
+    /** Claim mailbox events for one asynchronous parent delivery attempt. */
+    claimMailbox(options?: MailboxDrainOptions): ReadonlyArray<AgentEnvelope>
+    /** Release failed parent-delivery claims for retry. */
+    releaseMailbox(sequences: Iterable<number>): void
     /** Acknowledge successful parent delivery. */
     ackMailbox(sequences: Iterable<number>): void
     /** Consume mailbox events, optionally only for selected subagents. */
@@ -434,6 +451,7 @@ const makeManager = (config: SubagentConfig) =>
         const cleanups = new Set<Fiber.Fiber<unknown>>()
         let counter = 0
         let reserved = 0
+        let actionSequence = 0
         let disposed = false
         const metrics = {
             agentsSpawned: 0,
@@ -496,10 +514,13 @@ const makeManager = (config: SubagentConfig) =>
             })
         })
 
+        const pendingWork = (entry: Entry) =>
+            entry.snapshot.status === 'running' ||
+            entry.restarting === true ||
+            entry.pendingRunIds.size > 0
+
         const runningCount = () =>
-            [...entries.values()].filter(
-                (e) => e.snapshot.status === 'running' || e.restarting === true
-            ).length
+            [...entries.values()].filter(pendingWork).length
 
         const addInterest = (ids: ReadonlyArray<string>) => {
             for (const id of ids)
@@ -545,9 +566,7 @@ const makeManager = (config: SubagentConfig) =>
             if (entries.size <= config.maxTracked) return
             const candidates = [...entries.values()]
                 .filter(
-                    (e) =>
-                        e.snapshot.status !== 'running' &&
-                        !waitInterest.has(e.snapshot.id)
+                    (e) => !pendingWork(e) && !waitInterest.has(e.snapshot.id)
                 )
                 .sort(
                     (a, b) =>
@@ -695,6 +714,26 @@ const makeManager = (config: SubagentConfig) =>
             pruneSettled()
         }
 
+        const failPendingRuns = (entry: Entry, errorText: string) => {
+            while (entry.pendingRunIds.size > 0) {
+                const runId = entry.pendingRunIds.values().next().value
+                if (!runId) break
+                entry.pendingRunIds.delete(runId)
+                const snapshot = entry.snapshot
+                snapshot.currentRunId = runId
+                entry.runStartedAt = Date.now()
+                snapshot.status = 'running'
+                snapshot.settledAt = undefined
+                snapshot.lastRun = {
+                    id: runId,
+                    agentId: snapshot.id,
+                    status: 'running',
+                    startedAt: entry.runStartedAt,
+                }
+                settle(entry, { _tag: 'Failed', errorText }, runId)
+            }
+        }
+
         const foldEvent = (entry: Entry, event: SubagentEvent) => {
             if (entry.closed) return
             const s = entry.snapshot
@@ -834,6 +873,7 @@ const makeManager = (config: SubagentConfig) =>
 
         const spawn = (backendName: BackendName, task: SpawnTask) =>
             Effect.gen(function* () {
+                const spawnActionSequence = ++actionSequence
                 const taskName = normalizedTaskName(task.taskName ?? task.title)
                 const ownedPaths = [
                     ...new Set(
@@ -845,8 +885,7 @@ const makeManager = (config: SubagentConfig) =>
                 ]
                 const overlappingEntries = [...entries.values()].filter(
                     (entry) =>
-                        (entry.snapshot.status === 'running' ||
-                            entry.restarting === true) &&
+                        (pendingWork(entry) || entry.closing === true) &&
                         findOwnershipOverlap(
                             ownedPaths,
                             entry.snapshot.ownedPaths
@@ -887,8 +926,7 @@ const makeManager = (config: SubagentConfig) =>
                         const duplicateTask = [...entries.values()].some(
                             (entry) =>
                                 entry.snapshot.taskName === taskName &&
-                                (entry.snapshot.status === 'running' ||
-                                    entry.restarting)
+                                (pendingWork(entry) || entry.closing === true)
                         )
                         if (duplicateTask || reservedTaskNames.has(taskName)) {
                             return new SpawnError({
@@ -953,6 +991,12 @@ const makeManager = (config: SubagentConfig) =>
                         role: roleDefinition.name,
                         model: execution.model,
                         reasoningEffort: execution.reasoningEffort,
+                        allowedExtensionTools:
+                            config.allowedExtensionTools?.[
+                                roleDefinition.name as keyof NonNullable<
+                                    SubagentConfig['allowedExtensionTools']
+                                >
+                            ],
                         ownedPaths,
                         reportToParent: (message) => {
                             publishMailbox({
@@ -1016,6 +1060,8 @@ const makeManager = (config: SubagentConfig) =>
                         nextRunNumber: 2,
                         pendingRunIds: new Set(),
                         runStartedAt: Date.now(),
+                        spawnActionSequence,
+                        lastActionSequence: spawnActionSequence,
                         closed: false,
                         closeIncomplete: false,
                         transcriptBytes: 0,
@@ -1033,13 +1079,17 @@ const makeManager = (config: SubagentConfig) =>
                     ).pipe(
                         Effect.ensuring(
                             Effect.sync(() => {
-                                if (entry.snapshot.status === 'running') {
+                                if (entry.snapshot.status === 'running')
                                     settle(entry, {
                                         _tag: 'Failed',
                                         errorText:
                                             'Backend event stream ended unexpectedly',
                                     })
-                                }
+                                if (entry.pendingRunIds.size > 0)
+                                    failPendingRuns(
+                                        entry,
+                                        'Backend event stream ended before the queued run started'
+                                    )
                             })
                         )
                     )
@@ -1075,7 +1125,8 @@ const makeManager = (config: SubagentConfig) =>
                     if (
                         entry &&
                         !entry.immediateWaitRecorded &&
-                        Date.now() - entry.snapshot.createdAt < 1_000
+                        pendingWork(entry) &&
+                        entry.lastActionSequence === entry.spawnActionSequence
                     ) {
                         entry.immediateWaitRecorded = true
                         metrics.immediateWaits++
@@ -1084,10 +1135,7 @@ const makeManager = (config: SubagentConfig) =>
                 const pendingIds = () =>
                     unique.filter((id) => {
                         const entry = entries.get(id)
-                        return (
-                            entry?.snapshot.status === 'running' ||
-                            entry?.restarting === true
-                        )
+                        return entry !== undefined && pendingWork(entry)
                     })
                 const currentResult = (timedOut: boolean) => {
                     const pending = pendingIds()
@@ -1112,8 +1160,8 @@ const makeManager = (config: SubagentConfig) =>
                 addInterest(unique)
                 const loop = Effect.gen(function* () {
                     while (true) {
-                        // An idle subagent being restarted counts as pending until its
-                        // RunStarted event reaches the manager.
+                        // Queued follow-ups count as pending even after the previous
+                        // run has settled and before the next RunStarted event arrives.
                         const pending = pendingIds()
                         if (pending.length === 0)
                             return collectResult(currentResult(false))
@@ -1150,54 +1198,75 @@ const makeManager = (config: SubagentConfig) =>
                 )
             })
 
-        /** Interrupt one running entry, force-closing its scope after 5s. */
+        /** Interrupt active work and discard follow-ups, force-closing after 5s. */
         const abortEntry = (entry: Entry) =>
             Effect.gen(function* () {
-                if (entry.snapshot.status !== 'running') return
+                if (!pendingWork(entry)) return
+                const wasRunning = entry.snapshot.status === 'running'
                 const restarting = entry.restarting === true
+                const queuedRunId = entry.pendingRunIds.values().next().value
                 entry.pendingRunIds.clear()
                 const graceful = yield* entry.session.interrupt.pipe(
                     Effect.timeout(STOP_TIMEOUT_MS),
                     Effect.result
                 )
-                if (
-                    Result.isSuccess(graceful) &&
-                    restarting &&
-                    entry.restarting
-                ) {
-                    // A queued idle restart has no RunStarted event to identify its run.
-                    // Settle it here after the backend clears the queued prompt.
+                if (Result.isSuccess(graceful)) {
                     yield* Effect.sync(() => {
-                        settle(entry, { _tag: 'Interrupted' })
+                        if (restarting && entry.restarting) {
+                            // A queued idle restart has no RunStarted event to identify
+                            // its run, so settle the visible restart explicitly.
+                            settle(entry, { _tag: 'Interrupted' })
+                            return
+                        }
+                        if (!wasRunning && queuedRunId) {
+                            // The previous run is already terminal, but the backend
+                            // has not emitted RunStarted for this queued run yet.
+                            // Give the cancelled request a terminal run record without
+                            // allowing a late start to resurrect the session.
+                            if (
+                                entry.snapshot.currentRunId !== queuedRunId ||
+                                entry.snapshot.status !== 'running'
+                            ) {
+                                entry.snapshot.currentRunId = queuedRunId
+                                entry.runStartedAt = Date.now()
+                                entry.snapshot.status = 'running'
+                                entry.snapshot.settledAt = undefined
+                                entry.snapshot.lastRun = {
+                                    id: queuedRunId,
+                                    agentId: entry.snapshot.id,
+                                    status: 'running',
+                                    startedAt: entry.runStartedAt,
+                                }
+                            }
+                            settle(entry, { _tag: 'Interrupted' }, queuedRunId)
+                        }
                     })
                     return
                 }
-                if (Result.isFailure(graceful)) {
-                    // Settle before closing the scope so the pump's stream-ended
-                    // fallback ("Backend event stream ended unexpectedly") cannot win
-                    // the race and report the wrong terminal reason.
-                    yield* Effect.sync(() => {
+
+                // Settle before closing the scope so the pump's stream-ended
+                // fallback cannot replace the requested abort reason.
+                yield* Effect.sync(() => {
+                    if (entry.snapshot.status === 'running')
                         settle(entry, { _tag: 'Interrupted' })
-                        entry.snapshot.errorText =
-                            'Abort deadline exceeded; session was force-disposed'
-                        bump(entry.snapshot)
-                        notify(entry.snapshot.id)
-                    })
-                    // Bound the close like disposeAll does: a stuck backend finalizer
-                    // must not hang cancel after the run is already settled.
-                    const forcedClose = yield* closeEntryScope(entry).pipe(
-                        Effect.timeout(STOP_TIMEOUT_MS),
-                        Effect.result
-                    )
-                    if (Result.isFailure(forcedClose))
-                        entry.closeIncomplete = true
-                    entry.closed = true
-                    entry.snapshot.status = 'closed'
-                    entry.snapshot.settledAt ??= Date.now()
-                    entry.snapshot.queued = []
+                    entry.snapshot.errorText =
+                        'Abort deadline exceeded; session was force-disposed'
                     bump(entry.snapshot)
                     notify(entry.snapshot.id)
-                }
+                })
+                // Bound the close like disposeAll does: a stuck backend finalizer
+                // must not hang cancel after the run is already settled.
+                const forcedClose = yield* closeEntryScope(entry).pipe(
+                    Effect.timeout(STOP_TIMEOUT_MS),
+                    Effect.result
+                )
+                if (Result.isFailure(forcedClose)) entry.closeIncomplete = true
+                entry.closed = true
+                entry.snapshot.status = 'closed'
+                entry.snapshot.settledAt ??= Date.now()
+                entry.snapshot.queued = []
+                bump(entry.snapshot)
+                notify(entry.snapshot.id)
             })
 
         const interrupt = (ids: ReadonlyArray<string>) =>
@@ -1207,9 +1276,12 @@ const makeManager = (config: SubagentConfig) =>
                     .map((id) => entries.get(id))
                     .filter(
                         (entry): entry is Entry =>
-                            entry?.snapshot.status === 'running'
+                            entry !== undefined && pendingWork(entry)
                     )
                 const runningIds = running.map((entry) => entry.snapshot.id)
+                const interruptActionSequence = ++actionSequence
+                for (const entry of running)
+                    entry.lastActionSequence = interruptActionSequence
                 const previousSequences = new Map(
                     running.map((entry) => [
                         entry.snapshot.id,
@@ -1223,11 +1295,7 @@ const makeManager = (config: SubagentConfig) =>
                     yield* Effect.forEach(running, abortEntry, {
                         concurrency: 'unbounded',
                     })
-                    while (
-                        running.some(
-                            (entry) => entry.snapshot.status === 'running'
-                        )
-                    ) {
+                    while (running.some(pendingWork)) {
                         yield* nextChange
                     }
                     for (const entry of running) {
@@ -1273,18 +1341,39 @@ const makeManager = (config: SubagentConfig) =>
                     .map((id) => entries.get(id))
                     .filter((entry): entry is Entry => entry !== undefined)
                 const runningIds = entriesToClose
-                    .filter((entry) => entry.snapshot.status === 'running')
+                    .filter(pendingWork)
                     .map((entry) => entry.snapshot.id)
                 addInterest(runningIds)
-                const closeResults = new Map<string, boolean>()
+                const closeResults = new Map<
+                    string,
+                    Pick<
+                        CloseResult,
+                        'terminal' | 'resourcesReleased' | 'error'
+                    >
+                >()
+                const closeActionSequence = ++actionSequence
+                for (const entry of entriesToClose) {
+                    entry.lastActionSequence = closeActionSequence
+                    if (!entry.closed) entry.closing = true
+                }
                 const work = Effect.forEach(
                     entriesToClose,
                     (entry) =>
                         Effect.gen(function* () {
+                            if (entry.closed && entry.closeStatus) {
+                                closeResults.set(entry.snapshot.id, {
+                                    terminal: true,
+                                    resourcesReleased:
+                                        entry.closeStatus.resourcesReleased,
+                                    ...(entry.closeStatus.error
+                                        ? { error: entry.closeStatus.error }
+                                        : {}),
+                                })
+                                return
+                            }
                             const previousSequence =
                                 entry.lastSettlementSequence
-                            if (entry.snapshot.status === 'running')
-                                yield* abortEntry(entry)
+                            if (pendingWork(entry)) yield* abortEntry(entry)
                             const sessionClosed =
                                 yield* entry.session.close.pipe(
                                     Effect.timeout(STOP_TIMEOUT_MS),
@@ -1297,12 +1386,35 @@ const makeManager = (config: SubagentConfig) =>
                                 Effect.timeout(STOP_TIMEOUT_MS),
                                 Effect.result
                             )
-                            const released =
-                                Result.isSuccess(sessionClosed) &&
-                                Result.isSuccess(scopeClosed)
-                            if (!released) entry.closeIncomplete = true
-                            const fullyReleased =
-                                released && entry.closeIncomplete !== true
+                            const backendStatus: BackendCloseResult =
+                                Result.isSuccess(sessionClosed)
+                                    ? sessionClosed.success
+                                    : {
+                                          terminal: true,
+                                          resourcesReleased: false,
+                                          error: 'Backend close failed or timed out.',
+                                      }
+                            const errors = [
+                                backendStatus.error,
+                                ...(Result.isFailure(scopeClosed)
+                                    ? [
+                                          'Backend scope close failed or timed out.',
+                                      ]
+                                    : []),
+                            ].filter((error): error is string => !!error)
+                            const resourcesReleased =
+                                backendStatus.resourcesReleased &&
+                                Result.isSuccess(scopeClosed) &&
+                                entry.closeIncomplete !== true
+                            if (!resourcesReleased) entry.closeIncomplete = true
+                            const closeStatus: BackendCloseResult = {
+                                terminal: true,
+                                resourcesReleased,
+                                ...(errors.length > 0
+                                    ? { error: errors.join('; ') }
+                                    : {}),
+                            }
+                            entry.closeStatus = closeStatus
                             const sequence = entry.lastSettlementSequence
                             if (
                                 sequence !== undefined &&
@@ -1311,16 +1423,16 @@ const makeManager = (config: SubagentConfig) =>
                                 mailbox.consume([sequence])
                                 suppressedDeliveries.delete(sequence)
                             }
-                            // Even an incomplete close must be terminal: do not allow
-                            // callers to restart a session whose resources may linger.
+                            // Terminality is guaranteed even when cleanup is only
+                            // best-effort; callers must not restart this session.
                             entry.closed = true
+                            entry.closing = false
                             entry.snapshot.status = 'closed'
                             entry.snapshot.settledAt ??= Date.now()
                             entry.snapshot.queued = []
-                            closeResults.set(entry.snapshot.id, fullyReleased)
+                            closeResults.set(entry.snapshot.id, closeStatus)
                             bump(entry.snapshot)
                             notify(entry.snapshot.id)
-                            return fullyReleased
                         }),
                     { concurrency: 'unbounded' }
                 )
@@ -1334,11 +1446,18 @@ const makeManager = (config: SubagentConfig) =>
                     Effect.map((): ReadonlyArray<CloseResult> =>
                         unique.map((id) => {
                             const snapshot = entries.get(id)?.snapshot
+                            const result = closeResults.get(id)
                             return {
                                 id,
                                 title: snapshot?.title ?? '?',
                                 status: snapshot?.status ?? 'error',
-                                closed: closeResults.get(id) ?? false,
+                                terminal: result?.terminal ?? false,
+                                resourcesReleased:
+                                    result?.resourcesReleased ?? false,
+                                closed: result?.resourcesReleased ?? false,
+                                ...(result?.error
+                                    ? { error: result.error }
+                                    : {}),
                             }
                         })
                     )
@@ -1357,7 +1476,7 @@ const makeManager = (config: SubagentConfig) =>
                         message: `Subagent "${id}" is no longer tracked.`,
                     })
                 }
-                if (entry.closed) {
+                if (entry.closed || entry.closing) {
                     return new SendError({
                         message: `Subagent "${id}" is permanently closed.`,
                     })
@@ -1367,9 +1486,10 @@ const makeManager = (config: SubagentConfig) =>
                         message: `Subagent message exceeds the ${MAX_SEND_MESSAGE_BYTES}-byte limit.`,
                     })
                 }
+                entry.lastActionSequence = ++actionSequence
                 // A restart becomes visibly running before dispatch. This lets cancel()
                 // interrupt the narrow window before RunStarted reaches the event pump.
-                if (entry.snapshot.status !== 'running') {
+                if (!pendingWork(entry)) {
                     if (runningCount() + reserved >= config.maxRunning) {
                         return new SendError({
                             message: `Max ${config.maxRunning} subagents can run concurrently; restarting "${id}" would exceed that.`,
@@ -1418,6 +1538,7 @@ const makeManager = (config: SubagentConfig) =>
                     Effect.onError(() =>
                         Effect.sync(() => {
                             if (runId) entry.pendingRunIds.delete(runId)
+                            notify(entry.snapshot.id)
                         })
                     )
                 )
@@ -1515,6 +1636,8 @@ const makeManager = (config: SubagentConfig) =>
             send,
             waitForMailbox,
             peekMailbox,
+            claimMailbox: (options) => mailbox.claim(options),
+            releaseMailbox: (sequences) => mailbox.release(sequences),
             ackMailbox,
             drainMailbox,
             setOnMailbox: (hook) => {

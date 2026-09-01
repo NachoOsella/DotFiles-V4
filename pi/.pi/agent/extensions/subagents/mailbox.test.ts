@@ -106,6 +106,29 @@ test('peek and ack keep failed delivery events pending', () => {
     assert.deepEqual(mailbox.drain(), [])
 })
 
+test('a claimed event cannot be consumed until its claim is released', () => {
+    const mailbox = createAgentMailbox()
+    const envelope = mailbox.publish(message('owned'))
+    const claimed = mailbox.claim()
+
+    assert.deepEqual(claimed, [envelope])
+    assert.deepEqual(mailbox.peek(), [])
+    assert.deepEqual(mailbox.drain(), [])
+
+    mailbox.release([envelope?.sequence ?? 0])
+    assert.deepEqual(mailbox.drain(), [envelope])
+})
+
+test('a second claim cannot own an event already in flight', () => {
+    const mailbox = createAgentMailbox()
+    const envelope = mailbox.publish(message('once'))
+
+    assert.deepEqual(mailbox.claim(), [envelope])
+    assert.deepEqual(mailbox.claim(), [])
+    mailbox.ack([envelope?.sequence ?? 0])
+    assert.deepEqual(mailbox.claim(), [])
+})
+
 test('drain can consume selected agents without stealing other results', () => {
     const mailbox = createAgentMailbox()
     mailbox.publish(message('first', { agentId: 'sa-1' }))
