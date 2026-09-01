@@ -374,10 +374,12 @@ export interface SubagentManagerShape {
         SpawnError | ConcurrencyLimitError | BackendUnavailableError
     >
     /**
-     * Wait until all listed subagents are settled. Unknown ids are treated as
-     * settled (the tool layer validates ids first). While waiting, settles for
-     * these ids are marked "consumed". Interruption (tool abort) releases the
-     * interest and leaves the subagents running.
+     * Wait until all listed subagents are settled or one of them asks a
+     * question. Unknown ids are treated as settled (the tool layer validates
+     * ids first). While waiting, settlements for these ids are marked
+     * "consumed". A question returns its event and leaves all other work
+     * running. Interruption (tool abort) releases the interest and leaves the
+     * subagents running.
      */
     waitFor(
         ids: ReadonlyArray<string>,
@@ -596,7 +598,13 @@ const makeManager = (config: SubagentConfig) =>
             }
             if (notifyDelivery) {
                 try {
-                    onMailbox?.(envelope)
+                    if ((waitInterest.get(envelope.agentId) ?? 0) > 0) {
+                        // An ID wait owns the event so it can return the question
+                        // directly instead of racing automatic parent delivery.
+                        suppressedDeliveries.set(envelope.sequence, envelope)
+                    } else {
+                        onMailbox?.(envelope)
+                    }
                 } catch {
                     // Parent delivery failures must not affect child lifecycle state.
                 }
@@ -1145,14 +1153,26 @@ const makeManager = (config: SubagentConfig) =>
                         timedOut,
                     }
                 }
-                const collectResult = (result: Omit<WaitResult, 'events'>) => {
+                const questionEvents = () =>
+                    mailbox
+                        .peek({ agentIds: unique })
+                        .filter((event) => event.kind === 'question')
+                const collectResult = (
+                    result: Omit<WaitResult, 'events'>,
+                    questions: ReadonlyArray<AgentEnvelope> = []
+                ) => {
                     const runIds = result.completed
                         .map((id) => entries.get(id)?.snapshot.lastRun?.id)
                         .filter((runId): runId is string => runId !== undefined)
-                    const events = mailbox.drain({
+                    const completionEvents = mailbox.peek({
                         agentIds: unique,
                         runIds,
                     })
+                    const sequences = [
+                        ...completionEvents,
+                        ...questions,
+                    ].map((event) => event.sequence)
+                    const events = mailbox.drain({ sequences })
                     for (const event of events)
                         suppressedDeliveries.delete(event.sequence)
                     return { ...result, events }
@@ -1162,6 +1182,12 @@ const makeManager = (config: SubagentConfig) =>
                     while (true) {
                         // Queued follow-ups count as pending even after the previous
                         // run has settled and before the next RunStarted event arrives.
+                        const questions = questionEvents()
+                        if (questions.length > 0)
+                            return collectResult(
+                                currentResult(false),
+                                questions
+                            )
                         const pending = pendingIds()
                         if (pending.length === 0)
                             return collectResult(currentResult(false))

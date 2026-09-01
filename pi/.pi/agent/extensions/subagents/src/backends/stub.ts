@@ -250,6 +250,9 @@ const makeStubSession = (
                 state.pending.shift()
                 const turn = state.turnCount++
                 const runId = message.runId ?? nextRunId()
+                // Publish the active run identity before external sends can race
+                // the child fiber's first event.
+                state.activeRunId = runId
                 yield* emit({
                     _tag: 'QueueChanged',
                     queued: queuedView(),

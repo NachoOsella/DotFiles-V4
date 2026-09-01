@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { Effect } from 'effect'
 import { deliverMailbox } from './src/delivery.ts'
+import type { ParentDeliveryMessage } from './src/delivery.ts'
 import {
     createAgentMailbox,
     type AgentEnvelope,
@@ -106,6 +107,36 @@ test('failed asynchronous parent delivery leaves events pending for retry', asyn
     const delivered = await deliverMailbox(state.manager, sender, attempts)
     assert.deepEqual(delivered, { delivered: true, retry: false })
     assert.equal(state.pending.length, 0)
+})
+
+test('delivery stops at the first failed batch and retries in sequence order', async () => {
+    const state = mailbox([
+        envelope(1, 'result', 'run-1'),
+        envelope(2, 'question'),
+        envelope(3, 'result', 'run-3'),
+    ])
+    const attempts = new Map<number, number>()
+    const sent: number[] = []
+    let failQuestion = true
+    const sender = async (message: ParentDeliveryMessage) => {
+        const sequence = message.details.events[0]?.sequence
+        if (sequence !== undefined) sent.push(sequence)
+        if (sequence === 2 && failQuestion) {
+            failQuestion = false
+            throw new Error('parent unavailable')
+        }
+    }
+
+    const failed = await deliverMailbox(state.manager, sender, attempts)
+    assert.deepEqual(sent, [1, 2])
+    assert.equal(failed.retry, true)
+    assert.deepEqual(state.pending.map((event) => event.sequence), [2, 3])
+    assert.deepEqual(state.claimed, new Set())
+
+    const delivered = await deliverMailbox(state.manager, sender, attempts)
+    assert.deepEqual(sent, [1, 2, 2, 3])
+    assert.deepEqual(delivered, { delivered: true, retry: false })
+    assert.deepEqual(state.pending, [])
 })
 
 test('automatic delivery owns an event while the host sender is awaiting', async () => {

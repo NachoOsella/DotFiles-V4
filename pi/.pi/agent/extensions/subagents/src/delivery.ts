@@ -117,6 +117,9 @@ export async function deliverMailbox(
                 retry = true
                 retryAfterMs = Math.max(retryAfterMs, failure.retryAfterMs)
                 stalledSequences.push(...failure.stalledSequences)
+                // Keep mailbox order strict: later batches remain claimed until
+                // finally releases them and are retried after this failed batch.
+                break
             }
         }
     } finally {

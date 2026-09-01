@@ -9,10 +9,10 @@ Done:
 - Adaptive collaboration policy via short tool guideline (only active while `subagent_spawn` exists; 287 chars, no mode toggle).
 - Flat hierarchy: leaf workers only (`report_to_parent` question-only, no orchestration tools in children).
 - Task metadata: `task_name` and `agent_type` (`default|explorer|worker|reviewer|tester`) with unique active task names, validated and normalized.
-- Roles with one-sentence instructions, injected via virtual context file, read-only enforcement for explorer/reviewer/tester, and explicit-model > role-default > parent inheritance.
-- Bounded mailbox with sequenced envelopes (`question|result|error|cancelled`), deduplication, selective drain (`agentIds|sequences|afterSequence`), and interruptible `wait`.
+- Roles with one-sentence instructions, injected via virtual context file, read-only enforcement for explorer/reviewer/tester, explicit model configuration precedence, and independent reasoning-effort defaults.
+- Bounded mailbox with sequenced envelopes (`question|result|error|cancelled`), deduplication, selective drain (`agentIds|sequences|afterSequence`), and interruptible `wait` that also wakes for requested-child questions.
 - `subagent_send` (`steer|follow-up`) and `subagent_wait` extended (`ids?`, `timeout_ms?`, `after_sequence?`) without breaking old calls.
-- Batched parent delivery: 100 ms window for settlements, immediate `steer` for child questions, duplicate suppression between explicit waits and automatic follow-ups.
+- Batched parent delivery: 100 ms window for settlements, immediate `steer` for child questions, strict sequence order across failures, and duplicate suppression between explicit waits and automatic follow-ups.
 - Memory budgets (prompt 24 KB, send 8 KB, question 4 KB, result 8 KB, wait 32 KB, check 1 KB, transcript 256 KB, mailbox 128 KB; tails kept, full history stays on disk).
 - Backend fix: `ModelRuntime` instead of obsolete `modelRegistry` option, provider registrations copied, `send` steering correctly mapped, and child-only tool wiring.
 - `result-delivery.ts` removed; mailbox is the single source for parent-visible results.
@@ -138,7 +138,7 @@ Extend the existing tool without breaking current calls:
 }
 ```
 
-- With `ids`, wait until all listed agents settle.
+- With `ids`, wait until all listed agents settle or one listed agent asks a question; return still-pending IDs without cancelling them.
 - Without `ids`, wait for mailbox activity after `after_sequence`.
 - Return compact mailbox events, `next_sequence`, and `timed_out`.
 - Do not repeat outputs already consumed by an earlier wait.
@@ -266,6 +266,7 @@ The manager should retain a bounded transcript tail for the TUI. The persisted P
 - If the parent is busy, queue the batch as a follow-up.
 - If an explicit `subagent_wait` consumes a result first, remove it from automatic delivery.
 - A child question may trigger a parent turn immediately because it requires coordination.
+- Automatic delivery stops at the first failed batch, releases failed and later claims, and retries in sequence order.
 - Routine started and progress events must not trigger parent turns.
 
 Example completion batch:

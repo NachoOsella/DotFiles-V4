@@ -23,7 +23,7 @@ export const SUBAGENT_SPAWN_PARAMETER_DESCRIPTIONS = {
     workingDir: 'Working directory. Defaults to the current directory.',
     model: 'Optional provider/model-id override. Otherwise role configuration or the parent model is used.',
     reasoningEffort:
-        'Optional reasoning effort override. Otherwise the parent level is used.',
+        'Optional reasoning effort override. Otherwise the configured role effort, role default, or parent effort is used.',
     ownedPaths:
         'Optional paths the child may modify. Overlaps with other workers produce a warning, not a lock.',
 }
@@ -58,7 +58,7 @@ export const SUBAGENT_SEND_PARAMETER_DESCRIPTIONS = {
 }
 
 export const SUBAGENT_WAIT_TOOL_DESCRIPTION =
-    'Wait until all listed children finish or fail, or until a new child mailbox message arrives.'
+    'Wait until all listed children finish, fail, are interrupted, or are closed. With ids, return early when one asks a question and include the still-pending children without cancelling them. Without ids, wait for a new child mailbox message.'
 export const SUBAGENT_WAIT_PARAMETER_DESCRIPTIONS = {
     ids: 'Optional subagent ids',
     afterSequence: 'Only return mailbox messages after this sequence',

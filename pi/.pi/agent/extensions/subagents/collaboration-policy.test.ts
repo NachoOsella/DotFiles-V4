@@ -9,7 +9,9 @@ import {
 } from './src/collaboration-policy.ts'
 import {
     buildSubagentSpawnResult,
+    SUBAGENT_SPAWN_PARAMETER_DESCRIPTIONS,
     SUBAGENT_SPAWN_PROMPT_GUIDELINES,
+    SUBAGENT_WAIT_TOOL_DESCRIPTION,
 } from './src/prompt.ts'
 
 test('the collaboration policy appears only when spawning is available', () => {
@@ -24,6 +26,11 @@ test('the collaboration policy appears only when spawning is available', () => {
     assert.match(COLLABORATION_POLICY, /Default to doing the work yourself/)
     assert.match(COLLABORATION_POLICY, /one bounded assistant/)
     assert.doesNotMatch(COLLABORATION_POLICY, /cheapest capable model/)
+    assert.match(SUBAGENT_WAIT_TOOL_DESCRIPTION, /asks a question/)
+    assert.match(
+        SUBAGENT_SPAWN_PARAMETER_DESCRIPTIONS.reasoningEffort,
+        /configured role effort, role default, or parent effort/
+    )
 })
 
 test('the orchestration tool set is identifiable for child filtering', () => {

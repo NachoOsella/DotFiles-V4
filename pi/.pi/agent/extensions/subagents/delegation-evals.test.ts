@@ -47,6 +47,23 @@ test('delegation evals score observed traces and reject over-delegation', () => 
         'expected 0-0 agents, got 1',
         'delegation was followed by an immediate wait',
     ])
+    const assistant = DELEGATION_EVALS.find(
+        (item) => item.expectedMode === 'assistant'
+    )
+    assert.ok(assistant)
+    const malformedPlan = evaluateDelegation(assistant, {
+        agentCount: 2,
+        roles: ['explorer', 'worker', 'unknown'],
+        immediatelyWaited: false,
+    })
+    assert.equal(malformedPlan.passed, false)
+    assert.deepEqual(malformedPlan.failures, [
+        'expected 1-1 agents, got 2',
+        'expected one role per agent, got 3 roles for 2 agents',
+        'unknown role unknown',
+        'unexpected role worker',
+        'unexpected role unknown',
+    ])
 })
 
 test('delegation evals execute through a controlled model adapter', async () => {
@@ -66,6 +83,7 @@ test('delegation evals execute through a controlled model adapter', async () => 
     assert.equal(suite.summary.passRate, 1)
     assert.equal(suite.summary.soloOverDelegationRate, 0)
     assert.equal(suite.summary.immediateWaitRate, 0)
+    assert.equal(suite.summary.averageChildrenSpawned, 17 / 26)
     assert.equal(suite.summary.roleSelectionAccuracy, 1)
 })
 

@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
+import { AGENT_ROLE_NAMES } from './src/roles.ts'
 
 export type DelegationMode = 'solo' | 'assistant' | 'orchestrator'
 
@@ -44,6 +45,7 @@ export interface DelegationEvalSummary {
     readonly assistantAccuracy: number
     readonly orchestratorAccuracy: number
     readonly averageAgentsRequested: number
+    readonly averageChildrenSpawned: number
     readonly immediateWaitRate: number
     readonly roleSelectionAccuracy: number
 }
@@ -83,9 +85,24 @@ export function evaluateDelegation(
             `expected ${minimum}-${maximum} agents, got ${observation.agentCount}`
         )
     }
-    for (const role of scenario.expectedRoles ?? []) {
+    if (observation.roles.length !== observation.agentCount) {
+        failures.push(
+            `expected one role per agent, got ${observation.roles.length} roles for ${observation.agentCount} agents`
+        )
+    }
+    for (const role of observation.roles) {
+        if (!(AGENT_ROLE_NAMES as readonly string[]).includes(role))
+            failures.push(`unknown role ${role}`)
+    }
+    const expectedRoles = scenario.expectedRoles ?? []
+    for (const role of expectedRoles) {
         if (!observation.roles.includes(role))
             failures.push(`expected role ${role}`)
+    }
+    const expectedRoleSet = new Set(expectedRoles)
+    for (const role of observation.roles) {
+        if (expectedRoleSet.size > 0 && !expectedRoleSet.has(role))
+            failures.push(`unexpected role ${role}`)
     }
     if (observation.agentCount > 0 && observation.immediatelyWaited)
         failures.push('delegation was followed by an immediate wait')
@@ -118,7 +135,11 @@ export function parseDelegationObservation(
                 Number.isInteger(agentCount) &&
                 agentCount >= 0 &&
                 Array.isArray(roles) &&
-                roles.every((role) => typeof role === 'string') &&
+                roles.every(
+                    (role) =>
+                        typeof role === 'string' &&
+                        (AGENT_ROLE_NAMES as readonly string[]).includes(role)
+                ) &&
                 typeof immediatelyWaited === 'boolean'
             ) {
                 return {
@@ -176,10 +197,21 @@ export async function runDelegationEvals(
     const roleCases = observed.filter(
         (run) => (run.scenario.expectedRoles?.length ?? 0) > 0
     )
-    const roleMatches = roleCases.filter((run) =>
-        run.scenario.expectedRoles?.every((role) =>
-            run.observation.roles.includes(role)
+    const roleMatches = roleCases.filter((run) => {
+        const expected = run.scenario.expectedRoles ?? []
+        const roles = run.observation.roles
+        return (
+            roles.length === run.observation.agentCount &&
+            expected.every((role) => roles.includes(role)) &&
+            roles.every((role) => expected.includes(role))
         )
+    })
+    const averageChildrenSpawned = ratio(
+        observed.reduce(
+            (total, run) => total + run.observation.agentCount,
+            0
+        ),
+        observed.length
     )
     return {
         passed: runs.every((run) => run.result.passed),
@@ -204,13 +236,8 @@ export async function runDelegationEvals(
                     .length,
                 byMode('orchestrator').length
             ),
-            averageAgentsRequested: ratio(
-                observed.reduce(
-                    (total, run) => total + run.observation.agentCount,
-                    0
-                ),
-                observed.length
-            ),
+            averageAgentsRequested: averageChildrenSpawned,
+            averageChildrenSpawned,
             immediateWaitRate: ratio(
                 delegated.filter((run) => run.observation.immediatelyWaited)
                     .length,

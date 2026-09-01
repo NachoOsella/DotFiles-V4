@@ -185,6 +185,51 @@ test('host delivery failures are retried before mailbox acknowledgement', async 
     }
 })
 
+test('new mailbox events preempt a long delivery retry timer', async () => {
+    const runtime = createRuntime(1)
+    const host = createHost()
+    host.deliveryFailures = 1
+    createSubagentsExtension(host.pi, { createRuntime: () => runtime })
+
+    try {
+        const spawn = host.tools.get('subagent_spawn')
+        assert.ok(spawn)
+        await spawn.execute(
+            'spawn-retry-1',
+            {
+                name: 'retry timer first',
+                prompt: 'Finish first retry timer task',
+            },
+            undefined,
+            undefined,
+            context
+        )
+        const manager = await runtime.runPromise(SubagentManager)
+        await waitUntil(
+            () => host.sendAttempts >= 1 && manager.peekMailbox().length === 1
+        )
+
+        const secondStartedAt = Date.now()
+        await spawn.execute(
+            'spawn-retry-2',
+            {
+                name: 'retry timer second',
+                prompt: 'Finish second retry timer task',
+            },
+            undefined,
+            undefined,
+            context
+        )
+        await waitUntil(
+            () => host.sendAttempts >= 2 && host.messages.length === 1,
+            180
+        )
+        assert.ok(Date.now() - secondStartedAt < 180)
+    } finally {
+        await closeHost(host)
+    }
+})
+
 test('wait wakes on interruption and close makes the child permanently unusable', async () => {
     const runtime = createRuntime(50)
     const host = createHost()

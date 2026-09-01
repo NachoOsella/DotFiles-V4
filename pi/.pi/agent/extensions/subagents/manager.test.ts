@@ -90,9 +90,11 @@ function makeGatedBackend() {
         | {
               emit(event: SubagentEvent): Promise<void>
               end(): Promise<void>
+              ask(message: string): void
               sent: Array<{ text: string; runId?: string }>
           }
         | undefined
+    const sessions = new Map<string, NonNullable<typeof current>>()
     const backend: SubagentBackend = {
         name: 'pi',
         capabilities: {
@@ -107,6 +109,7 @@ function makeGatedBackend() {
                 const sent: Array<{ text: string; runId?: string }> = []
                 current = {
                     sent,
+                    ask: (message) => spawnTask.reportToParent?.(message),
                     emit: (event) =>
                         Effect.runPromise(Queue.offer(events, event)).then(
                             () => undefined
@@ -116,6 +119,7 @@ function makeGatedBackend() {
                             () => undefined
                         ),
                 }
+                if (spawnTask.agentId) sessions.set(spawnTask.agentId, current)
                 return {
                     meta: Effect.succeed({
                         backend: 'pi',
@@ -140,6 +144,11 @@ function makeGatedBackend() {
         session: () => {
             if (!current) throw new Error('gated session was not spawned')
             return current
+        },
+        sessionFor: (id: string) => {
+            const session = sessions.get(id)
+            if (!session) throw new Error(`gated session was not spawned: ${id}`)
+            return session
         },
     }
 }
@@ -639,6 +648,54 @@ test('ID waits finish when a child fails', async () => {
         assert.deepEqual(result.completed, [snap.id])
         assert.equal(manager.view.get(snap.id)?.status, 'error')
     })
+})
+
+test('ID waits wake on a requested child question without settling other work', async () => {
+    const gated = makeGatedBackend()
+    await withManager(
+        async (manager, runtime) => {
+            const first = await runTool(
+                runtime,
+                manager.spawn('pi', task('A', { taskName: 'question-a' }))
+            )
+            const second = await runTool(
+                runtime,
+                manager.spawn('pi', task('B', { taskName: 'question-b' }))
+            )
+            const third = await runTool(
+                runtime,
+                manager.spawn('pi', task('C', { taskName: 'question-c' }))
+            )
+            const waiting = runTool(
+                runtime,
+                manager.waitFor([first.id, second.id, third.id])
+            )
+            await new Promise((resolve) => setImmediate(resolve))
+            gated.sessionFor(first.id).ask('Need a parent decision')
+
+            let questionTimeout: ReturnType<typeof setTimeout> | undefined
+            const timeout = new Promise<never>((_, reject) => {
+                questionTimeout = setTimeout(
+                    () => reject(new Error('question did not wake wait')),
+                    100
+                )
+            })
+            const result = await Promise.race([waiting, timeout])
+            if (questionTimeout) clearTimeout(questionTimeout)
+            assert.deepEqual(result.pending, [first.id, second.id, third.id])
+            assert.deepEqual(result.completed, [])
+            assert.equal(result.timedOut, false)
+            assert.deepEqual(
+                result.events.map((event) => [event.kind, event.text]),
+                [['question', 'Need a parent decision']]
+            )
+            assert.equal(manager.view.get(first.id)?.status, 'running')
+            assert.equal(manager.view.get(second.id)?.status, 'running')
+            assert.equal(manager.view.get(third.id)?.status, 'running')
+        },
+        undefined,
+        createTestRegistry(gated.backend)
+    )
 })
 
 test('ID waits respect timeout and leave pending agents running', async () => {

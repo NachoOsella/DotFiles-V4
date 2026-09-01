@@ -36,6 +36,9 @@ test('built-in roles have focused instructions and expected permissions', () => 
     assert.ok(AGENT_ROLES.reviewer.instructions.includes('Shell access'))
     assert.ok(AGENT_ROLES.tester.instructions.includes('tests'))
     assert.ok(AGENT_ROLES.tester.instructions.includes('Shell access'))
+    assert.match(CHILD_BASE_POLICY, /report_to_parent/)
+    assert.match(CHILD_BASE_POLICY, /finish the current run instead of waiting/)
+    assert.match(CHILD_BASE_POLICY, /Report them to the parent instead/)
 })
 
 test('roles resolve to default and reject unknown names', () => {

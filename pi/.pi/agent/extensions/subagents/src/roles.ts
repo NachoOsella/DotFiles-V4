@@ -50,6 +50,10 @@ Run focused validation when your tools allow it.
 
 Never claim a test, build, or validation passed unless you actually ran it.
 
+If you need a parent decision, use report_to_parent. If you cannot continue meaningfully without the answer, report the question and finish the current run instead of waiting.
+
+Do not expand the assigned scope to fix unrelated issues. Report them to the parent instead.
+
 When finished, report what you changed or found, relevant files, validation performed, and blockers or unresolved decisions. Keep the final report concise.`
 
 /** Short, role-specific guidance injected into each child session. */

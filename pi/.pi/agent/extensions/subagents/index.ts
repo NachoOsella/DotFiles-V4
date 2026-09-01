@@ -146,6 +146,7 @@ export function createSubagentsExtension(
     let ui: ExtensionUIContext | undefined
     let unsubStatus: (() => void) | undefined
     let deliveryTimer: ReturnType<typeof setTimeout> | undefined
+    let deliveryDueAt: number | undefined
     let deliveryInFlight: Promise<void> = Promise.resolve()
     let deliveryStopped = false
     const deliveryAttempts = new Map<number, number>()
@@ -210,6 +211,7 @@ export function createSubagentsExtension(
 
     const flushMailbox = () => {
         deliveryTimer = undefined
+        deliveryDueAt = undefined
         if (deliveryStopped) return
         void getManager().then(async (manager) => {
             if (deliveryStopped) return
@@ -220,8 +222,14 @@ export function createSubagentsExtension(
     }
 
     const scheduleMailboxDelivery = (delayMs = DELIVERY_BATCH_MS) => {
-        if (deliveryStopped || deliveryTimer) return
-        deliveryTimer = setTimeout(flushMailbox, delayMs)
+        if (deliveryStopped) return
+        const dueAt = Date.now() + Math.max(0, delayMs)
+        if (deliveryTimer && deliveryDueAt !== undefined) {
+            if (deliveryDueAt <= dueAt) return
+            clearTimeout(deliveryTimer)
+        }
+        deliveryDueAt = dueAt
+        deliveryTimer = setTimeout(flushMailbox, Math.max(0, delayMs))
     }
 
     const onMailbox = (envelope: AgentEnvelope) => {
@@ -229,9 +237,10 @@ export function createSubagentsExtension(
         void getManager().then(async (manager) => {
             if (deliveryStopped) return
             if (envelope.kind === 'question') {
-                const result = await deliverMailbox(manager, [
-                    envelope.sequence,
-                ])
+                if (deliveryTimer) clearTimeout(deliveryTimer)
+                deliveryTimer = undefined
+                deliveryDueAt = undefined
+                const result = await deliverMailbox(manager)
                 if (deliveryStopped) return
                 if (!result.delivered && result.retry)
                     scheduleMailboxDelivery(result.retryAfterMs)
@@ -251,6 +260,7 @@ export function createSubagentsExtension(
         deliveryStopped = true
         if (deliveryTimer) clearTimeout(deliveryTimer)
         deliveryTimer = undefined
+        deliveryDueAt = undefined
         deliveryAttempts.clear()
         unsubStatus?.()
         unsubStatus = undefined
@@ -480,10 +490,16 @@ export function createSubagentsExtension(
                 sections.push(section)
                 remainingBytes -= Buffer.byteLength(section, 'utf8')
             }
+            const questions = events.filter(
+                (event) => event.kind === 'question'
+            )
             const gapWarnings = events
                 .filter((event) => event.kind === 'gap')
                 .map((event) => event.text)
             const body = [
+                questions.length > 0
+                    ? buildMailboxMessage(questions)
+                    : undefined,
                 gapWarnings.length > 0
                     ? `Mailbox warning:\n${gapWarnings.join('\n')}`
                     : undefined,
