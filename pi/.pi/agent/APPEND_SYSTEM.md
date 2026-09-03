@@ -22,7 +22,7 @@
 
 * When delegating with `subagent_spawn`:
 
-  * `zen-free/muse-spark-1.2-contributor-free` with `xhigh` (free model)
+  * `opencode/muse-spark-1.2-contributor-free` with `xhigh` (free model)
   * `openai-codex/gpt-5.6-luna` with `high`, `xhigh`, or `max` (super cheap model, capable with good instructions)
   * `openai-codex/gpt-5.6-terra` with `medium`, `high`, or `xhigh` (capable but for the price is not worth it for most tasks)
   * `openai-codex/gpt-5.6-sol` with `minimal` through `high` (state of the art, not cheap but if the task is important, it is worth it)
