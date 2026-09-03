@@ -58,7 +58,7 @@ test("renderer displays partial state instead of a completed list", () => {
         in_progress: 0,
         completed: 0,
         current: null,
-        items: [{ content: "Pending task", status: "pending" }],
+        items: [{ id: "1", content: "Pending task", status: "pending" }],
       },
     },
     { expanded: false, isPartial: true }
@@ -77,8 +77,8 @@ test("renderer keeps successful collapsed and expanded views", () => {
       completed: 1,
       current: null,
       items: [
-        { content: "Pending task", status: "pending" as const },
-        { content: "Done task", status: "completed" as const },
+        { id: "1", content: "Pending task", status: "pending" as const },
+        { id: "2", content: "Done task", status: "completed" as const },
       ],
     },
   };

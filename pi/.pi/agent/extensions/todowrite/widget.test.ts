@@ -44,10 +44,11 @@ test("widget lines fit every width from 1 through 80", () => {
   removeSessionState(sessionId);
   setTodos(sessionId, [
     {
+      id: "1",
       content: "A very long todo item that must stay inside the terminal panel",
       status: "pending",
     },
-    { content: "Finished item", status: "completed" },
+    { id: "2", content: "Finished item", status: "completed" },
   ]);
   toggleWidgetVisible(sessionId);
   const { ctx, getWidget } = createWidgetContext(sessionId, "tui", true);
@@ -74,7 +75,9 @@ test("widget lines fit every width from 1 through 80", () => {
 test("widget uses a single truncated line at very narrow widths", () => {
   const sessionId = "widget-narrow";
   removeSessionState(sessionId);
-  setTodos(sessionId, [{ content: "A long item", status: "in_progress" }]);
+  setTodos(sessionId, [
+    { id: "1", content: "A long item", status: "in_progress" },
+  ]);
   toggleWidgetVisible(sessionId);
   const { ctx, getWidget } = createWidgetContext(sessionId, "tui", true);
 
@@ -96,7 +99,9 @@ test("widget uses a single truncated line at very narrow widths", () => {
 test("widget does not install a component outside TUI mode", () => {
   const sessionId = "widget-mode";
   removeSessionState(sessionId);
-  setTodos(sessionId, [{ content: "Active item", status: "pending" }]);
+  setTodos(sessionId, [
+    { id: "1", content: "Active item", status: "pending" },
+  ]);
   toggleWidgetVisible(sessionId);
 
   const rpc = createWidgetContext(sessionId, "rpc", true);

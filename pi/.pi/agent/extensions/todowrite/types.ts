@@ -3,6 +3,7 @@ export type TodoStatus = "pending" | "in_progress" | "completed";
 
 /** A single session-local todo item. */
 export interface Todo {
+  readonly id: string;
   readonly content: string;
   readonly status: TodoStatus;
 }

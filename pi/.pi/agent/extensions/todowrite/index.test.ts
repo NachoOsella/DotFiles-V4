@@ -71,7 +71,7 @@ function snapshot(items: unknown): unknown {
 }
 
 function todo(content: string, status: Todo["status"] = "pending"): Todo {
-  return { content, status };
+  return { id: content, content, status };
 }
 
 test("restores the current branch on session start", () => {
@@ -174,9 +174,11 @@ test("marks todowrite execution as sequential", () => {
 test("setTodos stores a defensive copy", () => {
   const sessionId = "defensive-copy";
   removeSessionState(sessionId);
-  const input: Array<{ content: string; status: Todo["status"] }> = [
-    todo("Original"),
-  ];
+  const input: Array<{
+    id: string;
+    content: string;
+    status: Todo["status"];
+  }> = [todo("Original")];
 
   setTodos(sessionId, input);
   input[0]!.content = "Mutated after storage";

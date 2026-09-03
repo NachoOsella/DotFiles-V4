@@ -50,11 +50,12 @@ export default function todowriteExtension(pi: ExtensionAPI) {
     promptSnippet: "Track progress through a multi-step task",
     promptGuidelines: [
       "Use todowrite for tasks with at least three meaningful steps or multiple requested changes.",
-      "Keep the todo list synchronized with actual progress; do not postpone updates until the end.",
+      "Give each todo a stable unique ID. IDs identify work, not its description; keep the same ID when rewriting content, and never reuse an ID for unrelated work.",
+      "Keep the todo list synchronized with actual progress. Do not batch lifecycle updates at the end of the task.",
       "Follow pending -> in_progress -> completed. Mark a todo in_progress before starting it, then mark it completed immediately after finishing it and before starting the next one.",
       "While unfinished work remains, normally keep exactly one todo in_progress.",
-      "If discoveries change the plan, add, remove, reorder, or rewrite future pending todos.",
-      "Always submit the complete replacement todo list.",
+      "If discoveries change the plan, add, remove, reorder, or rewrite future pending todos. Todo content may also be clarified while work is in_progress.",
+      "Always submit the complete replacement todo list, including completed todos while the list remains active.",
     ],
     parameters: TodoWriteParams,
     executionMode: "sequential",
@@ -124,9 +125,10 @@ function buildSummary(todos: readonly Todo[]): string {
 }
 
 function formatTodo(todo: Todo): string {
-  if (todo.status === "in_progress") return `> ${todo.content}`;
-  if (todo.status === "completed") return `[x] ${todo.content}`;
-  return `[ ] ${todo.content}`;
+  const label = `[${todo.id}] ${todo.content}`;
+  if (todo.status === "in_progress") return `> ${label}`;
+  if (todo.status === "completed") return `[x] ${label}`;
+  return `[ ] ${label}`;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -27,7 +27,16 @@ export function validateTodos(
 
 /** Safely decode todo items previously stored in tool result details. */
 export function decodeStoredTodos(value: unknown): readonly Todo[] | undefined {
-  const decoded = decodeTodoList(value);
+  if (!Array.isArray(value)) return undefined;
+
+  // Older snapshots predate stable IDs. Assign their list positions once so
+  // restored active work still participates in lifecycle validation.
+  const withIds = value.map((item, index) =>
+    isRecord(item) && item.id === undefined
+      ? { ...item, id: String(index + 1) }
+      : item
+  );
+  const decoded = decodeTodoList(withIds);
   return decoded.ok ? decoded.todos : undefined;
 }
 
@@ -47,7 +56,7 @@ function decodeTodoList(rawTodos: unknown): TodoDecodeResult {
   }
 
   const todos: Todo[] = [];
-  const seenContents = new Set<string>();
+  const seenIds = new Set<string>();
   let inProgressCount = 0;
 
   for (const [index, rawTodo] of rawTodos.entries()) {
@@ -57,6 +66,21 @@ function decodeTodoList(rawTodos: unknown): TodoDecodeResult {
         message: `Todo at index ${index} must be an object.`,
       };
     }
+
+    const id = typeof rawTodo.id === "string" ? rawTodo.id.trim() : "";
+    if (!id) {
+      return {
+        ok: false,
+        message: `Todo at index ${index} has an empty ID.`,
+      };
+    }
+    if (seenIds.has(id)) {
+      return {
+        ok: false,
+        message: `Todo at index ${index} duplicates ID ${JSON.stringify(id)}.`,
+      };
+    }
+    seenIds.add(id);
 
     const rawContent =
       typeof rawTodo.content === "string" ? rawTodo.content : "";
@@ -73,14 +97,6 @@ function decodeTodoList(rawTodos: unknown): TodoDecodeResult {
         ok: false,
         message: `Todo at index ${index} has empty content.`,
       };
-    if (seenContents.has(content)) {
-      return {
-        ok: false,
-        message: `Todo at index ${index} duplicates another todo.`,
-      };
-    }
-    seenContents.add(content);
-
     const status = rawTodo.status;
     if (!isTodoStatus(status)) {
       return {
@@ -95,7 +111,7 @@ function decodeTodoList(rawTodos: unknown): TodoDecodeResult {
       };
     }
 
-    todos.push({ content, status });
+    todos.push({ id, content, status });
   }
 
   return { ok: true, todos };
@@ -106,42 +122,47 @@ function validateTransitions(
   previousTodos: readonly Todo[],
   nextTodos: readonly Todo[]
 ): string | undefined {
-  // An empty list is an explicit clear, including after a completed task.
-  if (previousTodos.length === 0 || nextTodos.length === 0) return undefined;
+  if (previousTodos.length === 0) return undefined;
+  if (nextTodos.length === 0) {
+    const active = previousTodos.find((todo) => todo.status === "in_progress");
+    return active
+      ? `In-progress todo ${JSON.stringify(active.id)} must be completed before clearing the list.`
+      : undefined;
+  }
 
-  const previousByContent = new Map(
-    previousTodos.map((todo) => [todo.content, todo] as const)
+  const previousById = new Map(
+    previousTodos.map((todo) => [todo.id, todo] as const)
   );
-  const nextContents = new Set(nextTodos.map((todo) => todo.content));
+  const nextIds = new Set(nextTodos.map((todo) => todo.id));
 
   for (const todo of nextTodos) {
-    const previous = previousByContent.get(todo.content);
+    const previous = previousById.get(todo.id);
     if (!previous) {
-      // New or replanned work may start pending or in_progress, never completed.
+      // New or replacement work may start pending or in_progress, never completed.
       if (todo.status === "completed") {
-        return `Todo "${todo.content}" must be in_progress before it can be completed.`;
+        return `Todo ${JSON.stringify(todo.id)} must be in_progress before it can be completed.`;
       }
       continue;
     }
 
     if (previous.status === "pending" && todo.status === "completed") {
-      return `Todo "${todo.content}" cannot move from pending to completed; mark it in_progress first.`;
+      return `Todo ${JSON.stringify(todo.id)} cannot move from pending to completed; mark it in_progress first.`;
     }
     if (previous.status === "in_progress" && todo.status === "pending") {
-      return `Todo "${todo.content}" is in_progress and must be completed before it is returned to pending.`;
+      return `Todo ${JSON.stringify(todo.id)} is in_progress and must be completed before it is returned to pending.`;
     }
     if (previous.status === "completed" && todo.status !== "completed") {
-      return `Completed todo "${todo.content}" must remain completed.`;
+      return `Completed todo ${JSON.stringify(todo.id)} must remain completed.`;
     }
   }
 
   for (const todo of previousTodos) {
-    if (nextContents.has(todo.content)) continue;
+    if (nextIds.has(todo.id)) continue;
     if (todo.status === "in_progress") {
-      return `In-progress todo "${todo.content}" must remain in the list until it is completed.`;
+      return `In-progress todo ${JSON.stringify(todo.id)} must remain in the list until it is completed.`;
     }
     if (todo.status === "completed") {
-      return `Completed todo "${todo.content}" must remain in the list and completed.`;
+      return `Completed todo ${JSON.stringify(todo.id)} must remain in the list and completed.`;
     }
   }
 

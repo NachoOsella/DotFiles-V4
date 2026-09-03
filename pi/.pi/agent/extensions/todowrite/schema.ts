@@ -17,8 +17,13 @@ export const VALID_STATUSES: ReadonlySet<TodoStatus> = new Set([
 
 /** JSON schema for one todo item. */
 const TodoSchema = Type.Object({
+  id: Type.String({
+    description: "Stable unique identity for this todo, such as \"1\"",
+    minLength: 1,
+    pattern: "\\S",
+  }),
   content: Type.String({
-    description: "Brief unique description of the task",
+    description: "Brief description of the task",
     minLength: 1,
     maxLength: MAX_CONTENT_LENGTH,
     pattern: "\\S",

@@ -2,145 +2,213 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { Effect, Exit } from "effect";
 import { TodoWriteParams } from "./schema.ts";
+import type { Todo, TodoStatus } from "./types.ts";
 import { decodeStoredTodos, validateTodos } from "./validation.ts";
 
-test("validateTodos trims content and preserves valid state", async () => {
+function todo(id: string, content: string, status: TodoStatus): Todo {
+  return { id, content, status };
+}
+
+async function rejectsTransition(
+  nextTodos: readonly Todo[],
+  previousTodos: readonly Todo[]
+): Promise<void> {
+  const exit = await Effect.runPromiseExit(
+    validateTodos(nextTodos, previousTodos)
+  );
+  assert.equal(Exit.isFailure(exit), true);
+}
+
+test("validateTodos trims IDs and content and preserves valid state", async () => {
   const todos = await Effect.runPromise(
     validateTodos([
-      { content: "  Inspect implementation  ", status: "in_progress" },
-      { content: "Run tests", status: "pending" },
+      { id: " 1 ", content: "  Inspect implementation  ", status: "in_progress" },
+      { id: " 2 ", content: "Run tests", status: "pending" },
     ])
   );
 
   assert.deepEqual(todos, [
-    { content: "Inspect implementation", status: "in_progress" },
-    { content: "Run tests", status: "pending" },
+    todo("1", "Inspect implementation", "in_progress"),
+    todo("2", "Run tests", "pending"),
   ]);
 });
 
 test("validateTodos accepts the normal pending to completed lifecycle", async () => {
   const initial = await Effect.runPromise(
-    validateTodos([{ content: "Implement feature", status: "pending" }])
+    validateTodos([todo("1", "Implement feature", "pending")])
   );
   const started = await Effect.runPromise(
-    validateTodos(
-      [{ content: "Implement feature", status: "in_progress" }],
-      initial
-    )
+    validateTodos([todo("1", "Implement feature", "in_progress")], initial)
   );
   const completed = await Effect.runPromise(
-    validateTodos(
-      [{ content: "Implement feature", status: "completed" }],
-      started
-    )
+    validateTodos([todo("1", "Implement feature", "completed")], started)
   );
 
-  assert.deepEqual(completed, [
-    { content: "Implement feature", status: "completed" },
-  ]);
+  assert.deepEqual(completed, [todo("1", "Implement feature", "completed")]);
 });
 
 test("validateTodos rejects pending items completed without starting", async () => {
+  await rejectsTransition(
+    [todo("1", "Implement feature", "completed")],
+    [todo("1", "Implement feature", "pending")]
+  );
+});
+
+test("validateTodos rejects returning in-progress items to pending", async () => {
+  await rejectsTransition(
+    [todo("1", "Implement feature", "pending")],
+    [todo("1", "Implement feature", "in_progress")]
+  );
+});
+
+test("validateTodos rejects completed items that regress", async () => {
+  for (const status of ["pending", "in_progress"] as const) {
+    await rejectsTransition(
+      [todo("1", "Finished work", status)],
+      [todo("1", "Finished work", "completed")]
+    );
+  }
+});
+
+test("validateTodos rejects duplicate IDs", async () => {
   const exit = await Effect.runPromiseExit(
-    validateTodos(
-      [{ content: "Implement feature", status: "completed" }],
-      [{ content: "Implement feature", status: "pending" }]
-    )
+    validateTodos([
+      todo("1", "First task", "pending"),
+      { id: " 1 ", content: "Second task", status: "pending" },
+    ])
   );
 
   assert.equal(Exit.isFailure(exit), true);
 });
 
-test("validateTodos rejects completing a renamed pending item", async () => {
-  const exit = await Effect.runPromiseExit(
-    validateTodos(
-      [{ content: "Implement the revised feature", status: "completed" }],
-      [{ content: "Implement the original feature", status: "pending" }]
-    )
-  );
-
-  assert.equal(Exit.isFailure(exit), true);
-});
-
-test("validateTodos allows completing one item and starting the next", async () => {
+test("validateTodos does not use content as identity", async () => {
   const todos = await Effect.runPromise(
+    validateTodos([
+      todo("1", "Shared description", "in_progress"),
+      todo("2", "Shared description", "pending"),
+    ])
+  );
+
+  assert.equal(todos.length, 2);
+});
+
+test("validateTodos allows content changes without changing identity", async () => {
+  const pending = await Effect.runPromise(
     validateTodos(
-      [
-        { content: "First", status: "completed" },
-        { content: "Second", status: "in_progress" },
-      ],
-      [
-        { content: "First", status: "in_progress" },
-        { content: "Second", status: "pending" },
-      ]
+      [todo("1", "Inspect todowrite validation", "pending")],
+      [todo("1", "Inspect implementation", "pending")]
+    )
+  );
+  const active = await Effect.runPromise(
+    validateTodos(
+      [todo("1", "Inspect ID-based validation", "in_progress")],
+      [todo("1", "Inspect implementation", "in_progress")]
     )
   );
 
-  assert.deepEqual(todos, [
-    { content: "First", status: "completed" },
-    { content: "Second", status: "in_progress" },
-  ]);
-});
-
-test("validateTodos rejects multiple in-progress items", async () => {
-  const exit = await Effect.runPromiseExit(
-    validateTodos([
-      { content: "First", status: "in_progress" },
-      { content: "Second", status: "in_progress" },
-    ])
-  );
-
-  assert.equal(Exit.isFailure(exit), true);
-});
-
-test("validateTodos rejects duplicate content used for identity", async () => {
-  const exit = await Effect.runPromiseExit(
-    validateTodos([
-      { content: "Same task", status: "pending" },
-      { content: "  Same task  ", status: "in_progress" },
-    ])
-  );
-
-  assert.equal(Exit.isFailure(exit), true);
+  assert.equal(pending[0]?.content, "Inspect todowrite validation");
+  assert.equal(active[0]?.content, "Inspect ID-based validation");
 });
 
 test("validateTodos allows replanning future pending items", async () => {
   const todos = await Effect.runPromise(
     validateTodos(
       [
-        { content: "Investigate the new approach", status: "pending" },
-        { content: "Add coverage for the new approach", status: "pending" },
+        todo("1", "Inspect ID-based validation", "in_progress"),
+        todo("4", "Add focused regression coverage", "pending"),
+        todo("2", "Implement lifecycle validation", "pending"),
       ],
       [
-        { content: "Investigate the old approach", status: "pending" },
-        { content: "Implement the old approach", status: "pending" },
+        todo("1", "Inspect implementation", "in_progress"),
+        todo("2", "Implement old approach", "pending"),
+        todo("3", "Test old approach", "pending"),
       ]
     )
   );
 
   assert.deepEqual(todos, [
-    { content: "Investigate the new approach", status: "pending" },
-    { content: "Add coverage for the new approach", status: "pending" },
+    todo("1", "Inspect ID-based validation", "in_progress"),
+    todo("4", "Add focused regression coverage", "pending"),
+    todo("2", "Implement lifecycle validation", "pending"),
   ]);
 });
 
-test("validateTodos rejects completed items that regress", async () => {
-  const exit = await Effect.runPromiseExit(
+test("validateTodos allows removing pending items", async () => {
+  const todos = await Effect.runPromise(
     validateTodos(
-      [{ content: "Finished work", status: "pending" }],
-      [{ content: "Finished work", status: "completed" }]
+      [todo("1", "Active work", "in_progress")],
+      [
+        todo("1", "Active work", "in_progress"),
+        todo("2", "Future work", "pending"),
+      ]
     )
   );
 
-  assert.equal(Exit.isFailure(exit), true);
+  assert.deepEqual(todos, [todo("1", "Active work", "in_progress")]);
 });
 
-test("validateTodos allows intentionally clearing the list", async () => {
-  const todos = await Effect.runPromise(
-    validateTodos([], [{ content: "Active work", status: "in_progress" }])
+test("validateTodos rejects removing an in-progress item", async () => {
+  await rejectsTransition(
+    [todo("2", "Future work", "pending")],
+    [
+      todo("1", "Active work", "in_progress"),
+      todo("2", "Future work", "pending"),
+    ]
+  );
+});
+
+test("validateTodos rejects clearing while an item is in progress", async () => {
+  await rejectsTransition([], [todo("1", "Active work", "in_progress")]);
+});
+
+test("validateTodos allows clearing when no item is in progress", async () => {
+  const pending = await Effect.runPromise(
+    validateTodos([], [todo("1", "Future work", "pending")])
+  );
+  const completed = await Effect.runPromise(
+    validateTodos([], [todo("1", "Finished work", "completed")])
   );
 
-  assert.deepEqual(todos, []);
+  assert.deepEqual(pending, []);
+  assert.deepEqual(completed, []);
+});
+
+test("validateTodos keeps completed items while the list remains active", async () => {
+  await rejectsTransition(
+    [todo("2", "Active work", "in_progress")],
+    [
+      todo("1", "Finished work", "completed"),
+      todo("2", "Active work", "in_progress"),
+    ]
+  );
+});
+
+test("validateTodos allows completing one item and starting the next", async () => {
+  const todos = await Effect.runPromise(
+    validateTodos(
+      [
+        todo("1", "First", "completed"),
+        todo("2", "Second", "in_progress"),
+      ],
+      [todo("1", "First", "in_progress"), todo("2", "Second", "pending")]
+    )
+  );
+
+  assert.deepEqual(todos, [
+    todo("1", "First", "completed"),
+    todo("2", "Second", "in_progress"),
+  ]);
+});
+
+test("validateTodos rejects multiple in-progress items", async () => {
+  const exit = await Effect.runPromiseExit(
+    validateTodos([
+      todo("1", "First", "in_progress"),
+      todo("2", "Second", "in_progress"),
+    ])
+  );
+
+  assert.equal(Exit.isFailure(exit), true);
 });
 
 test("validateTodos rejects malformed runtime input", async () => {
@@ -148,10 +216,11 @@ test("validateTodos rejects malformed runtime input", async () => {
   assert.equal(Exit.isFailure(exit), true);
 });
 
-test("stored snapshots enforce the same size and status limits", () => {
+test("stored snapshots enforce the same identity, size, and status limits", () => {
   assert.equal(
     decodeStoredTodos(
-      Array.from({ length: 21 }, () => ({
+      Array.from({ length: 21 }, (_, index) => ({
+        id: String(index + 1),
         content: "task",
         status: "pending",
       }))
@@ -159,45 +228,67 @@ test("stored snapshots enforce the same size and status limits", () => {
     undefined
   );
   assert.equal(
-    decodeStoredTodos([{ content: "x".repeat(201), status: "pending" }]),
-    undefined
-  );
-  assert.equal(
     decodeStoredTodos([
-      { content: "first", status: "in_progress" },
-      { content: "second", status: "in_progress" },
+      todo("1", "first", "pending"),
+      todo("1", "second", "pending"),
     ]),
     undefined
   );
   assert.equal(
-    decodeStoredTodos([{ content: "   ", status: "pending" }]),
+    decodeStoredTodos([{ id: "1", content: "x".repeat(201), status: "pending" }]),
+    undefined
+  );
+  assert.equal(
+    decodeStoredTodos([
+      todo("1", "first", "in_progress"),
+      todo("2", "second", "in_progress"),
+    ]),
+    undefined
+  );
+  assert.equal(
+    decodeStoredTodos([{ id: "1", content: "   ", status: "pending" }]),
     undefined
   );
 });
 
-test("stored snapshots normalize content before restoring", () => {
+test("stored snapshots normalize values before restoring", () => {
   assert.deepEqual(
-    decodeStoredTodos([{ content: "  Restore me  ", status: "pending" }]),
-    [{ content: "Restore me", status: "pending" }]
+    decodeStoredTodos([
+      { id: " 1 ", content: "  Restore me  ", status: "pending" },
+    ]),
+    [todo("1", "Restore me", "pending")]
+  );
+});
+
+test("legacy stored snapshots receive stable restoration IDs", () => {
+  assert.deepEqual(
+    decodeStoredTodos([{ content: "Restore me", status: "in_progress" }]),
+    [todo("1", "Restore me", "in_progress")]
   );
 });
 
 test("runtime length matches JSON Schema Unicode semantics", async () => {
   const accepted = await Effect.runPromise(
-    validateTodos([{ content: "x".repeat(199) + "😀", status: "pending" }])
+    validateTodos([
+      { id: "1", content: "x".repeat(199) + "😀", status: "pending" },
+    ])
   );
   assert.equal([...accepted[0]!.content].length, 200);
 
   const rejected = await Effect.runPromiseExit(
-    validateTodos([{ content: "x".repeat(200) + "😀", status: "pending" }])
+    validateTodos([
+      { id: "1", content: "x".repeat(200) + "😀", status: "pending" },
+    ])
   );
   assert.equal(Exit.isFailure(rejected), true);
 });
 
-test("schema rejects whitespace-only content and matches runtime limits", () => {
+test("schema requires IDs and matches runtime content limits", () => {
   const todosSchema = TodoWriteParams.properties.todos as unknown as {
     items: {
+      required: string[];
       properties: {
+        id: { minLength: number; pattern: string };
         content: {
           minLength: number;
           maxLength: number;
@@ -206,7 +297,12 @@ test("schema rejects whitespace-only content and matches runtime limits", () => 
       };
     };
   };
-  const contentSchema = todosSchema.items.properties.content;
+  const itemSchema = todosSchema.items;
+  assert.ok(itemSchema.required.includes("id"));
+  assert.equal(itemSchema.properties.id.minLength, 1);
+  assert.equal(new RegExp(itemSchema.properties.id.pattern).test("   "), false);
+
+  const contentSchema = itemSchema.properties.content;
   assert.equal(contentSchema.minLength, 1);
   assert.equal(contentSchema.maxLength, 200);
   assert.equal(new RegExp(contentSchema.pattern).test("   "), false);
