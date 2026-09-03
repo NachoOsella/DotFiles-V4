@@ -9,13 +9,18 @@ export class TodoValidationError extends Data.TaggedError(
   readonly message: string;
 }> {}
 
-/** Normalize and validate a complete replacement todo list. */
+/** Normalize and validate a replacement list against the current session state. */
 export function validateTodos(
-  rawTodos: unknown
+  rawTodos: unknown,
+  previousTodos: readonly Todo[] = []
 ): Effect.Effect<readonly Todo[], TodoValidationError> {
   return Effect.gen(function* () {
     const decoded = decodeTodoList(rawTodos);
     if (!decoded.ok) return yield* invalid(decoded.message);
+
+    const transitionError = validateTransitions(previousTodos, decoded.todos);
+    if (transitionError) return yield* invalid(transitionError);
+
     return decoded.todos;
   });
 }
@@ -42,6 +47,7 @@ function decodeTodoList(rawTodos: unknown): TodoDecodeResult {
   }
 
   const todos: Todo[] = [];
+  const seenContents = new Set<string>();
   let inProgressCount = 0;
 
   for (const [index, rawTodo] of rawTodos.entries()) {
@@ -67,6 +73,13 @@ function decodeTodoList(rawTodos: unknown): TodoDecodeResult {
         ok: false,
         message: `Todo at index ${index} has empty content.`,
       };
+    if (seenContents.has(content)) {
+      return {
+        ok: false,
+        message: `Todo at index ${index} duplicates another todo.`,
+      };
+    }
+    seenContents.add(content);
 
     const status = rawTodo.status;
     if (!isTodoStatus(status)) {
@@ -86,6 +99,53 @@ function decodeTodoList(rawTodos: unknown): TodoDecodeResult {
   }
 
   return { ok: true, todos };
+}
+
+/** Validate lifecycle changes while leaving future pending work flexible. */
+function validateTransitions(
+  previousTodos: readonly Todo[],
+  nextTodos: readonly Todo[]
+): string | undefined {
+  // An empty list is an explicit clear, including after a completed task.
+  if (previousTodos.length === 0 || nextTodos.length === 0) return undefined;
+
+  const previousByContent = new Map(
+    previousTodos.map((todo) => [todo.content, todo] as const)
+  );
+  const nextContents = new Set(nextTodos.map((todo) => todo.content));
+
+  for (const todo of nextTodos) {
+    const previous = previousByContent.get(todo.content);
+    if (!previous) {
+      // New or replanned work may start pending or in_progress, never completed.
+      if (todo.status === "completed") {
+        return `Todo "${todo.content}" must be in_progress before it can be completed.`;
+      }
+      continue;
+    }
+
+    if (previous.status === "pending" && todo.status === "completed") {
+      return `Todo "${todo.content}" cannot move from pending to completed; mark it in_progress first.`;
+    }
+    if (previous.status === "in_progress" && todo.status === "pending") {
+      return `Todo "${todo.content}" is in_progress and must be completed before it is returned to pending.`;
+    }
+    if (previous.status === "completed" && todo.status !== "completed") {
+      return `Completed todo "${todo.content}" must remain completed.`;
+    }
+  }
+
+  for (const todo of previousTodos) {
+    if (nextContents.has(todo.content)) continue;
+    if (todo.status === "in_progress") {
+      return `In-progress todo "${todo.content}" must remain in the list until it is completed.`;
+    }
+    if (todo.status === "completed") {
+      return `Completed todo "${todo.content}" must remain in the list and completed.`;
+    }
+  }
+
+  return undefined;
 }
 
 function invalid(message: string): Effect.Effect<never, TodoValidationError> {

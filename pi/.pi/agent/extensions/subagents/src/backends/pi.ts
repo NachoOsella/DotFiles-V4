@@ -535,7 +535,18 @@ const makePiSession = (
                 )
                 const canReportToParent =
                     !!task.reportToParent || !!onChildReport
-                const childTools = [...childToolNames(role, canReportToParent)]
+                // Initial allowedToolNames must include both role base tools and
+                // explicitly allowed extension tools, otherwise the AgentSession's
+                // allowedToolNames filter (isAllowedTool) would prevent extension
+                // tools from ever being registered, even though we later try to
+                // activate them via setActiveToolsByName.
+                const roleBaseTools = [...childToolNames(role, canReportToParent)]
+                const childTools = [
+                    ...new Set([
+                        ...roleBaseTools,
+                        ...(task.allowedExtensionTools ?? []),
+                    ]),
+                ]
                 const { session } = await sessionFactory({
                     cwd: task.cwd,
                     sessionManager: SessionManager.create(task.cwd, undefined, {
@@ -572,6 +583,7 @@ const makePiSession = (
                         task.allowedExtensionTools,
                         registeredToolNames
                     )
+
                     // Hooks still run in-process; this allowlist limits callable
                     // tools, not arbitrary side effects from trusted extensions.
                     session.setActiveToolsByName([...activeTools])

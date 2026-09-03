@@ -4,7 +4,12 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Effect } from "effect";
 import { renderTodoCall, renderTodoResult } from "./renderers.ts";
 import { TodoWriteParams } from "./schema.ts";
-import { buildDetails, removeSessionState, setTodos } from "./state.ts";
+import {
+  buildDetails,
+  getTodos,
+  removeSessionState,
+  setTodos,
+} from "./state.ts";
 import type { Todo } from "./types.ts";
 import { decodeStoredTodos, validateTodos } from "./validation.ts";
 import { clearWidget, refreshWidget, toggleWidget } from "./widget.ts";
@@ -41,23 +46,24 @@ export default function todowriteExtension(pi: ExtensionAPI) {
   pi.registerTool({
     name: TOOL_NAME,
     label: "Todo Write",
-    description: [
-      "Maintain a short todo list for the current coding session.",
-      "Use it for tasks with at least three meaningful steps or multiple requested changes.",
-      "Always submit the complete replacement list and keep at most one item in_progress.",
-    ].join(" "),
-    promptSnippet: "Track session progress with a todo list",
+    description: "Maintain a live todo list for the current coding session.",
+    promptSnippet: "Track progress through a multi-step task",
     promptGuidelines: [
       "Use todowrite for tasks with at least three meaningful steps or multiple requested changes.",
-      "Always submit the complete replacement list with todowrite.",
-      "Keep at most one todowrite item in_progress.",
+      "Keep the todo list synchronized with actual progress; do not postpone updates until the end.",
+      "Follow pending -> in_progress -> completed. Mark a todo in_progress before starting it, then mark it completed immediately after finishing it and before starting the next one.",
+      "While unfinished work remains, normally keep exactly one todo in_progress.",
+      "If discoveries change the plan, add, remove, reorder, or rewrite future pending todos.",
+      "Always submit the complete replacement todo list.",
     ],
     parameters: TodoWriteParams,
     executionMode: "sequential",
 
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const sessionId = ctx.sessionManager.getSessionId();
-      const todos = await Effect.runPromise(validateTodos(params.todos));
+      const todos = await Effect.runPromise(
+        validateTodos(params.todos, getTodos(sessionId))
+      );
       setTodos(sessionId, todos);
       return {
         content: [

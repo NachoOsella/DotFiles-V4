@@ -102,6 +102,42 @@ test("restores the current branch after session_tree", () => {
   removeSessionState(sessionId);
 });
 
+test("restored state participates in subsequent transition validation", async () => {
+  const sessionId = "restored-validation";
+  removeSessionState(sessionId);
+  const { handlers, tools } = createExtensionHarness();
+  const branch: unknown[] = [
+    snapshot([todo("Restore me", "completed")]),
+  ];
+  const ctx = createContext({ sessionId, branch });
+  const execute = tools[0]?.execute;
+  assert.ok(execute);
+
+  handlers.get("session_start")?.({}, ctx);
+  branch.splice(0, branch.length, snapshot([todo("Restore me")]));
+  handlers.get("session_tree")?.({}, ctx);
+  await assert.rejects(() =>
+    execute(
+      "call",
+      { todos: [todo("Restore me", "completed")] },
+      undefined,
+      undefined,
+      ctx
+    )
+  );
+  assert.deepEqual(getTodos(sessionId), [todo("Restore me")]);
+
+  await execute(
+    "call",
+    { todos: [todo("Restore me", "in_progress")] },
+    undefined,
+    undefined,
+    ctx
+  );
+  assert.deepEqual(getTodos(sessionId), [todo("Restore me", "in_progress")]);
+  removeSessionState(sessionId);
+});
+
 test("clears state when the active branch has no todo snapshot", () => {
   const sessionId = "empty-branch";
   removeSessionState(sessionId);
