@@ -196,7 +196,7 @@ test("tool results keep the complete replacement snapshot in details", async () 
 
   const result = await execute(
     "call",
-    { todos: [todo("First"), todo("Second", "completed")] },
+    { todos: [todo("First"), todo("Second", "pending")] },
     undefined,
     undefined,
     createContext({ sessionId, branch: [] })
@@ -204,7 +204,7 @@ test("tool results keep the complete replacement snapshot in details", async () 
 
   assert.deepEqual((result.details as { items: readonly Todo[] }).items, [
     todo("First"),
-    todo("Second", "completed"),
+    todo("Second", "pending"),
   ]);
   removeSessionState(sessionId);
 });

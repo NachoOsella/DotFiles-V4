@@ -135,7 +135,6 @@ function validateTransitions(
   previousTodos: readonly Todo[],
   nextTodos: readonly Todo[]
 ): string | undefined {
-  if (previousTodos.length === 0) return undefined;
   if (nextTodos.length === 0) {
     const active = previousTodos.find((todo) => todo.status === "in_progress");
     return active

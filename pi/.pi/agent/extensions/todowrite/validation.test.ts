@@ -54,6 +54,13 @@ test("validateTodos rejects pending items completed without starting", async () 
   );
 });
 
+test("validateTodos rejects starting completed from an empty list", async () => {
+  await rejectsTransition(
+    [todo("1", "Implement feature", "completed")],
+    []
+  );
+});
+
 test("validateTodos rejects returning in-progress items to pending", async () => {
   await rejectsTransition(
     [todo("1", "Implement feature", "pending")],
