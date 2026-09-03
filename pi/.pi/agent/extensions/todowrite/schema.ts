@@ -5,6 +5,9 @@ import type { TodoStatus } from "./types.ts";
 /** Maximum number of todos accepted in a single replacement list. */
 export const MAX_TODOS = 20;
 
+/** Maximum ID length for one todo. */
+export const MAX_ID_LENGTH = 50;
+
 /** Maximum text length for one todo. */
 export const MAX_CONTENT_LENGTH = 200;
 
@@ -20,6 +23,7 @@ const TodoSchema = Type.Object({
   id: Type.String({
     description: "Stable unique identity for this todo, such as \"1\"",
     minLength: 1,
+    maxLength: MAX_ID_LENGTH,
     pattern: "\\S",
   }),
   content: Type.String({

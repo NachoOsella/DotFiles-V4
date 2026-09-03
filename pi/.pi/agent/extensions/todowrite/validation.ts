@@ -1,5 +1,10 @@
 import { Data, Effect } from "effect";
-import { MAX_CONTENT_LENGTH, MAX_TODOS, VALID_STATUSES } from "./schema.ts";
+import {
+  MAX_CONTENT_LENGTH,
+  MAX_ID_LENGTH,
+  MAX_TODOS,
+  VALID_STATUSES,
+} from "./schema.ts";
 import type { Todo, TodoStatus } from "./types.ts";
 
 /** Describes invalid todo input without exposing Effect internals to callers. */
@@ -67,7 +72,15 @@ function decodeTodoList(rawTodos: unknown): TodoDecodeResult {
       };
     }
 
-    const id = typeof rawTodo.id === "string" ? rawTodo.id.trim() : "";
+    const rawId = typeof rawTodo.id === "string" ? rawTodo.id : "";
+    if ([...rawId].length > MAX_ID_LENGTH) {
+      return {
+        ok: false,
+        message: `Todo at index ${index} has an ID longer than ${MAX_ID_LENGTH} characters.`,
+      };
+    }
+
+    const id = rawId.trim();
     if (!id) {
       return {
         ok: false,

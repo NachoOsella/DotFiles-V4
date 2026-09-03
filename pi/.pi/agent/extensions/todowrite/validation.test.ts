@@ -267,6 +267,22 @@ test("legacy stored snapshots receive stable restoration IDs", () => {
   );
 });
 
+test("IDs are limited to 50 Unicode characters", async () => {
+  const accepted = await Effect.runPromise(
+    validateTodos([
+      { id: "x".repeat(49) + "😀", content: "task", status: "pending" },
+    ])
+  );
+  assert.equal([...accepted[0]!.id].length, 50);
+
+  const rejected = await Effect.runPromiseExit(
+    validateTodos([
+      { id: "x".repeat(50) + "😀", content: "task", status: "pending" },
+    ])
+  );
+  assert.equal(Exit.isFailure(rejected), true);
+});
+
 test("runtime length matches JSON Schema Unicode semantics", async () => {
   const accepted = await Effect.runPromise(
     validateTodos([
@@ -288,7 +304,7 @@ test("schema requires IDs and matches runtime content limits", () => {
     items: {
       required: string[];
       properties: {
-        id: { minLength: number; pattern: string };
+        id: { minLength: number; maxLength: number; pattern: string };
         content: {
           minLength: number;
           maxLength: number;
@@ -300,6 +316,7 @@ test("schema requires IDs and matches runtime content limits", () => {
   const itemSchema = todosSchema.items;
   assert.ok(itemSchema.required.includes("id"));
   assert.equal(itemSchema.properties.id.minLength, 1);
+  assert.equal(itemSchema.properties.id.maxLength, 50);
   assert.equal(new RegExp(itemSchema.properties.id.pattern).test("   "), false);
 
   const contentSchema = itemSchema.properties.content;
