@@ -28,7 +28,7 @@ Preserve:
 
 | Extension | Entry | Notes |
 |-----------|-------|-------|
-| `dump-prompt` | `dump-prompt.ts` | Top-level entry with helper modules in `dump-prompt/`. |
+| `prompt-inspector` | `prompt-inspector/index.ts` | Inspect system prompt + tools + skills with token breakdown. Modules in `prompt-inspector/src/`. |
 | `pi-zen-free` | `pi-zen-free/index.ts` | Provider registration split into API, config, model mapping, and types. |
 | `todowrite` | `todowrite/index.ts` | Tool entry split into schema, state, widget, renderers, and types. |
 | `token-rate` | `token-rate/token-rate.ts` | Package entry preserved; logic split into state, status, tokens, and types. |
@@ -56,7 +56,7 @@ Syntax-check modified extension entries with esbuild:
 
 ```bash
 npx --yes -p esbuild esbuild \
-  ~/.pi/agent/extensions/dump-prompt.ts \
+  ~/.pi/agent/extensions/prompt-inspector/index.ts \
   ~/.pi/agent/extensions/pi-zen-free/index.ts \
   ~/.pi/agent/extensions/todowrite/index.ts \
   ~/.pi/agent/extensions/token-rate/token-rate.ts \
