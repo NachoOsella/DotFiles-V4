@@ -14,6 +14,15 @@ import {
     type DelegationMode,
     type DelegationObservation,
 } from '../delegation-evals.ts'
+import {
+    evaluatePolling,
+    evaluateQuestionHandling,
+    evaluateRecordedHandoffs,
+    evaluateSynchronizationBoundary,
+    HANDOFF_EVALS,
+    type HandoffEvalCase,
+    type HandoffQualityResult,
+} from './handoff-eval.ts'
 
 interface BehaviorToolCall {
     readonly name: string
@@ -95,6 +104,46 @@ function spawnRoles(calls: ReadonlyArray<BehaviorToolCall>) {
                 : 'default'
         })
 }
+
+export function spawnPrompts(calls: ReadonlyArray<BehaviorToolCall>): string[] {
+    return calls
+        .filter((call) => call.name === 'subagent_spawn')
+        .map((call) => {
+            const args = isRecord(call.args) ? call.args : undefined
+            return typeof args?.prompt === 'string' ? args.prompt : ''
+        })
+}
+
+export function evaluateBehaviorHandoff(
+    calls: ReadonlyArray<BehaviorToolCall>,
+    scenario: HandoffEvalCase
+): HandoffQualityResult {
+    return evaluateRecordedHandoffs(calls, scenario)
+}
+
+export function evaluateBehaviorSynchronization(
+    calls: ReadonlyArray<BehaviorToolCall>,
+    options?: Parameters<typeof evaluateSynchronizationBoundary>[1]
+) {
+    return evaluateSynchronizationBoundary(calls, options)
+}
+
+export function evaluateBehaviorPolling(
+    calls: ReadonlyArray<BehaviorToolCall>,
+    maxAllowedChecks?: number
+) {
+    return evaluatePolling(calls, maxAllowedChecks)
+}
+
+export function evaluateBehaviorQuestionHandling(
+    calls: ReadonlyArray<BehaviorToolCall>,
+    options?: Parameters<typeof evaluateQuestionHandling>[1]
+) {
+    return evaluateQuestionHandling(calls, options)
+}
+
+export { HANDOFF_EVALS }
+export type { HandoffEvalCase, HandoffQualityResult }
 
 function observedDelegation(
     calls: ReadonlyArray<BehaviorToolCall>
@@ -244,9 +293,8 @@ export async function runBehavioralDelegationEvals(
                         run.scenario.expectedMode === 'solo' &&
                         run.observation.agentCount > 0
                 ).length,
-                observed.filter(
-                    (run) => run.scenario.expectedMode === 'solo'
-                ).length
+                observed.filter((run) => run.scenario.expectedMode === 'solo')
+                    .length
             ),
             assistantModeAccuracy: modeAccuracy(runs, 'assistant'),
             orchestratorModeAccuracy: modeAccuracy(runs, 'orchestrator'),
@@ -267,6 +315,106 @@ export async function runBehavioralDelegationEvals(
     }
 }
 
+export interface HandoffBehaviorRun {
+    readonly scenario: HandoffEvalCase
+    readonly prompts: ReadonlyArray<string>
+    readonly result: HandoffQualityResult
+    readonly response?: string
+}
+
+export function buildHandoffBehaviorPrompt(scenario: HandoffEvalCase) {
+    return `Act as the parent agent for the task below.
+Use the available collaboration tools normally when delegation is useful.
+Tool calls are intercepted and do not launch real child work.
+Transfer the context you already know into any child handoff instead of making the child rediscover it.
+
+Context you already know: ${scenario.parentContext}
+
+Task: ${scenario.parentTask}
+
+Delegate as a ${scenario.role} child when useful.`
+}
+
+async function runHandoffScenario(
+    options: BehavioralDelegationOptions,
+    scenario: HandoffEvalCase,
+    logPath: string
+): Promise<HandoffBehaviorRun> {
+    const args = buildBehaviorEvalArgs(
+        options,
+        buildHandoffBehaviorPrompt(scenario)
+    )
+    let response: string | undefined
+    let failure: string | undefined
+    try {
+        const result = await exec(options.command ?? 'pi', args, {
+            cwd: options.cwd,
+            env: { ...process.env, PI_SUBAGENTS_BEHAVIOR_LOG: logPath },
+            timeout: options.timeoutMs ?? 120_000,
+            maxBuffer: 128 * 1024,
+        })
+        response = result.stdout
+    } catch (error) {
+        failure = error instanceof Error ? error.message : String(error)
+    }
+    const calls = readCalls(logPath)
+    const prompts = spawnPrompts(calls)
+    const result = failure
+        ? {
+              passed: false,
+              failures: [failure],
+              matchedSignals: [],
+              coverage: 0,
+          }
+        : evaluateRecordedHandoffs(calls, scenario)
+    return {
+        scenario,
+        prompts,
+        result,
+        ...(response !== undefined ? { response } : {}),
+    }
+}
+
+/**
+ * Run handoff-quality scenarios through the real parent setup. Each run
+ * scores the actual recorded spawn prompt for semantic completeness, not
+ * just whether delegation happened.
+ */
+export async function runHandoffBehaviorEvals(
+    options: BehavioralDelegationOptions,
+    scenarios: ReadonlyArray<HandoffEvalCase> = HANDOFF_EVALS
+): Promise<{
+    readonly passed: boolean
+    readonly runs: ReadonlyArray<HandoffBehaviorRun>
+    readonly summary: {
+        readonly passRate: number
+        readonly averageCoverage: number
+    }
+}> {
+    const directory = fs.mkdtempSync(
+        path.join(os.tmpdir(), 'subagents-handoff-eval-')
+    )
+    const runs: HandoffBehaviorRun[] = []
+    try {
+        for (const scenario of scenarios) {
+            const logPath = path.join(directory, `${scenario.name}.jsonl`)
+            runs.push(await runHandoffScenario(options, scenario, logPath))
+        }
+    } finally {
+        fs.rmSync(directory, { recursive: true, force: true })
+    }
+    const passed = runs.every((run) => run.result.passed)
+    const passRate =
+        runs.length === 0
+            ? 0
+            : runs.filter((r) => r.result.passed).length / runs.length
+    const averageCoverage =
+        runs.length === 0
+            ? 0
+            : runs.reduce((t, r) => t + r.result.coverage, 0) / runs.length
+    return { passed, runs, summary: { passRate, averageCoverage } }
+}
+
 async function main() {
     const model = process.env.PI_SUBAGENTS_EVAL_MODEL?.trim()
     if (!model) {
@@ -280,22 +428,33 @@ async function main() {
     const requestedNames = process.env.PI_SUBAGENTS_EVAL_CASES?.split(',')
         .map((name) => name.trim())
         .filter(Boolean)
+    const allNames = [
+        ...DELEGATION_EVALS.map((s) => s.name),
+        ...HANDOFF_EVALS.map((s) => s.name),
+    ]
     const scenarios = requestedNames
         ? DELEGATION_EVALS.filter((scenario) =>
               requestedNames.includes(scenario.name)
           )
         : DELEGATION_EVALS
+    const handoffScenarios = requestedNames
+        ? HANDOFF_EVALS.filter((scenario) =>
+              requestedNames.includes(scenario.name)
+          )
+        : HANDOFF_EVALS
     const unknownNames =
-        requestedNames?.filter(
-            (name) =>
-                !DELEGATION_EVALS.some((scenario) => scenario.name === name)
-        ) ?? []
+        requestedNames?.filter((name) => !allNames.includes(name)) ?? []
 
-    if (scenarios.length === 0 || unknownNames.length > 0) {
+    if (
+        scenarios.length + handoffScenarios.length === 0 ||
+        unknownNames.length > 0
+    ) {
         console.error(
             `Unknown or empty evaluation cases: ${[
                 ...unknownNames,
-                ...(scenarios.length === 0 ? (requestedNames ?? []) : []),
+                ...(scenarios.length + handoffScenarios.length === 0
+                    ? (requestedNames ?? [])
+                    : []),
             ].join(', ')}`
         )
         process.exitCode = 2
@@ -306,20 +465,20 @@ async function main() {
         process.env.PI_SUBAGENTS_EVAL_TIMEOUT_MS ?? '120000',
         10
     )
-    const suite = await runBehavioralDelegationEvals(
-        {
-            model,
-            command: process.env.PI_SUBAGENTS_EVAL_COMMAND,
-            cwd: process.cwd(),
-            timeoutMs:
-                Number.isFinite(timeoutMs) && timeoutMs > 0
-                    ? timeoutMs
-                    : 120_000,
-        },
-        scenarios
+    const options = {
+        model,
+        command: process.env.PI_SUBAGENTS_EVAL_COMMAND,
+        cwd: process.cwd(),
+        timeoutMs:
+            Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : 120_000,
+    }
+    const suite = await runBehavioralDelegationEvals(options, scenarios)
+    const handoffSuite = await runHandoffBehaviorEvals(
+        options,
+        handoffScenarios
     )
-    console.log(JSON.stringify(suite, null, 2))
-    if (!suite.passed) process.exitCode = 1
+    console.log(JSON.stringify({ ...suite, handoff: handoffSuite }, null, 2))
+    if (!suite.passed || !handoffSuite.passed) process.exitCode = 1
 }
 
 if (

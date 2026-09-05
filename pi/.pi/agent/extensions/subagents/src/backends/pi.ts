@@ -424,6 +424,12 @@ export type PiSessionFactory = (
     options: Parameters<typeof createAgentSession>[0]
 ) => ReturnType<typeof createAgentSession>
 
+export const REPORT_TO_PARENT_TOOL_DESCRIPTION =
+    'Ask the parent for one specific decision or missing piece of information that is required to continue the assigned task correctly. Use this only for a genuine blocking question that cannot be resolved from the task prompt, repository, tests, or established project conventions. Do not use this tool for progress updates, status reports, discoveries, warnings, suggestions, optional improvements, or non-blocking findings. Keep those for your final response.'
+
+export const REPORT_TO_PARENT_MESSAGE_DESCRIPTION =
+    'One concise blocking question for the parent. Include the relevant context, why the decision is needed, and the meaningful alternatives when applicable.'
+
 export interface PiBackendOptions {
     /** Receives bounded questions from the child-only report_to_parent tool. */
     readonly onChildReport?: (report: ChildReport) => void | Promise<void>
@@ -440,10 +446,13 @@ function createChildReportTool(
     return defineTool({
         name: 'report_to_parent',
         label: 'Report to parent',
-        description: 'Ask the parent agent a concise question about this task.',
+        description: REPORT_TO_PARENT_TOOL_DESCRIPTION,
         parameters: Type.Object({
             kind: Type.Literal('question'),
-            message: Type.String({ minLength: 1 }),
+            message: Type.String({
+                minLength: 1,
+                description: REPORT_TO_PARENT_MESSAGE_DESCRIPTION,
+            }),
         }),
         execute: async (_toolCallId, params) => {
             const message = params.message.trim()
@@ -540,7 +549,9 @@ const makePiSession = (
                 // allowedToolNames filter (isAllowedTool) would prevent extension
                 // tools from ever being registered, even though we later try to
                 // activate them via setActiveToolsByName.
-                const roleBaseTools = [...childToolNames(role, canReportToParent)]
+                const roleBaseTools = [
+                    ...childToolNames(role, canReportToParent),
+                ]
                 const childTools = [
                     ...new Set([
                         ...roleBaseTools,

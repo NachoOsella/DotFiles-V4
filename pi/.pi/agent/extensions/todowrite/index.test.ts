@@ -102,7 +102,7 @@ test("restores the current branch after session_tree", () => {
   removeSessionState(sessionId);
 });
 
-test("restored state participates in subsequent transition validation", async () => {
+test("restored pending state may complete directly", async () => {
   const sessionId = "restored-validation";
   removeSessionState(sessionId);
   const { handlers, tools } = createExtensionHarness();
@@ -116,25 +116,14 @@ test("restored state participates in subsequent transition validation", async ()
   handlers.get("session_start")?.({}, ctx);
   branch.splice(0, branch.length, snapshot([todo("Restore me")]));
   handlers.get("session_tree")?.({}, ctx);
-  await assert.rejects(() =>
-    execute(
-      "call",
-      { todos: [todo("Restore me", "completed")] },
-      undefined,
-      undefined,
-      ctx
-    )
-  );
-  assert.deepEqual(getTodos(sessionId), [todo("Restore me")]);
-
   await execute(
     "call",
-    { todos: [todo("Restore me", "in_progress")] },
+    { todos: [todo("Restore me", "completed")] },
     undefined,
     undefined,
     ctx
   );
-  assert.deepEqual(getTodos(sessionId), [todo("Restore me", "in_progress")]);
+  assert.deepEqual(getTodos(sessionId), [todo("Restore me", "completed")]);
   removeSessionState(sessionId);
 });
 

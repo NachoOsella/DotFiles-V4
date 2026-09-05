@@ -326,12 +326,15 @@ test('question-woken waits return concise output and complete details', async ()
 
         const result = await waiting
         const text = result.content[0]?.text as string
+        assert.match(text, new RegExp(`^Subagent question:`))
+        assert.match(text, /Answer the question through subagent_send/)
         assert.match(
             text,
             new RegExp(
-                `^Subagent messages:\\n- ${id} question-child \\(default\\) asked: Which API should I use\\?\\n\\nStill running: ${id}$`
+                `- ${id} question-child \\(default\\) asked: Which API should I use\\?`
             )
         )
+        assert.match(text, new RegExp(`Still running: ${id}$`, 'm'))
         assert.doesNotMatch(text, /^## /m)
         assert.deepEqual(Object.keys(result.details).sort(), [
             'completed',

@@ -5,6 +5,8 @@ import {
     CHILD_EXCLUDED_TOOL_NAMES,
     childToolNames,
     createPiBackend,
+    REPORT_TO_PARENT_MESSAGE_DESCRIPTION,
+    REPORT_TO_PARENT_TOOL_DESCRIPTION,
     resolvePiModel,
     type PiSessionFactory,
 } from './src/backends/pi.ts'
@@ -177,7 +179,13 @@ test('Pi backend applies child filtering and aborts through the SDK session', as
                         'edit',
                     ],
                 })
-                assert.deepEqual(capturedOptions?.tools, [...REVIEW_TOOL_NAMES])
+                assert.deepEqual(capturedOptions?.tools, [
+                    ...REVIEW_TOOL_NAMES,
+                    'safe-extension',
+                    'subagent_wait',
+                    'ask_user',
+                    'edit',
+                ])
                 assert.ok(
                     capturedOptions?.excludeTools?.includes('subagent_spawn')
                 )
@@ -281,10 +289,7 @@ test('model routing treats aliases as ordinary explicit model identifiers', () =
                 : undefined,
         getModels: () => [explicit],
     } as any
-    assert.equal(
-        resolvePiModel(runtime, '@cheapest', undefined),
-        explicit
-    )
+    assert.equal(resolvePiModel(runtime, '@cheapest', undefined), explicit)
     assert.throws(
         () => resolvePiModel(runtime, '@capable', undefined),
         /Unknown model/
@@ -350,6 +355,26 @@ test('child allowlists exclude custom and orchestration tools', () => {
     assert.equal(tools.includes('custom-dangerous-tool'), false)
     for (const excluded of CHILD_EXCLUDED_TOOL_NAMES)
         assert.equal(tools.includes(excluded), false)
+})
+
+test('report_to_parent is a blocking-question tool, not a progress channel', () => {
+    assert.match(REPORT_TO_PARENT_TOOL_DESCRIPTION, /genuine blocking question/)
+    assert.match(
+        REPORT_TO_PARENT_TOOL_DESCRIPTION,
+        /Do not use this tool for progress updates/
+    )
+    assert.match(
+        REPORT_TO_PARENT_TOOL_DESCRIPTION,
+        /Keep those for your final response/
+    )
+    assert.match(
+        REPORT_TO_PARENT_MESSAGE_DESCRIPTION,
+        /concise blocking question/
+    )
+    assert.match(
+        REPORT_TO_PARENT_MESSAGE_DESCRIPTION,
+        /why the decision is needed/
+    )
 })
 
 test('Pi children exclude orchestration tools', () => {

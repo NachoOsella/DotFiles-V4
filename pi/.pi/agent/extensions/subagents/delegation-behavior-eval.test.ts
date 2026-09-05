@@ -3,6 +3,13 @@ import test from 'node:test'
 import {
     buildBehaviorEvalArgs,
     buildBehaviorEvalPrompt,
+    buildHandoffBehaviorPrompt,
+    evaluateBehaviorHandoff,
+    evaluateBehaviorPolling,
+    evaluateBehaviorQuestionHandling,
+    evaluateBehaviorSynchronization,
+    HANDOFF_EVALS,
+    spawnPrompts,
 } from './src/delegation-behavior-eval.ts'
 import { DELEGATION_EVALS, hasImmediateWait } from './delegation-evals.ts'
 
@@ -30,6 +37,60 @@ test('behavioral eval keeps the scenario prompt neutral', () => {
     assert.match(prompt, /Use the available collaboration tools normally/)
     assert.match(prompt, /Tool calls are intercepted/)
     assert.doesNotMatch(prompt, /Default to doing the work yourself/)
+})
+
+test('behavioral layer scores real spawn prompts, not just counts', () => {
+    const scenario = HANDOFF_EVALS.find(
+        (item) => item.name === 'handoff-refresh-token-fix'
+    )
+    assert.ok(scenario)
+    const prompt = buildHandoffBehaviorPrompt(scenario)
+    assert.match(prompt, /Transfer the context you already know/)
+    assert.match(prompt, /Context you already know/)
+    const poorCalls = [
+        { name: 'subagent_spawn', args: { prompt: 'Fix this.', name: 'x' } },
+    ]
+    assert.deepEqual(spawnPrompts(poorCalls), ['Fix this.'])
+    assert.equal(evaluateBehaviorHandoff(poorCalls, scenario).passed, false)
+})
+
+test('behavioral layer exposes synchronization, polling, and question checks', () => {
+    assert.equal(
+        evaluateBehaviorSynchronization([
+            { name: 'subagent_spawn', args: {} },
+            { name: 'subagent_wait', args: {} },
+        ]).passed,
+        false
+    )
+    assert.equal(
+        evaluateBehaviorSynchronization([
+            { name: 'subagent_spawn', args: {} },
+            { name: 'subagent_list', args: {} },
+            { name: 'subagent_wait', args: {} },
+            { name: 'subagent_send', args: {} },
+        ]).passed,
+        true
+    )
+    assert.equal(
+        evaluateBehaviorPolling([
+            { name: 'subagent_spawn', args: {} },
+            { name: 'subagent_check', args: {} },
+            { name: 'subagent_check', args: {} },
+            { name: 'subagent_check', args: {} },
+        ]).passed,
+        false
+    )
+    assert.equal(
+        evaluateBehaviorQuestionHandling(
+            [
+                { name: 'subagent_spawn', args: {} },
+                { name: 'subagent_wait', args: {} },
+                { name: 'subagent_send', args: {} },
+            ],
+            { questionAsked: true }
+        ).passed,
+        true
+    )
 })
 
 test('immediate waits are detected after every spawn', () => {

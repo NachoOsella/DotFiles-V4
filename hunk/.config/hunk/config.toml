@@ -1,8 +1,13 @@
 # Hunk configuration - Gruvbox Material Dark Hard
 theme = "custom"
-mode = "auto"
+mode = "stack"
 line_numbers = true
 menu_bar = true
+wrap_lines = false
+hunk_headers = true
+agent_notes = false
+copy_decorations = false
+cursor_line = "row"
 
 [custom_theme]
 base = "gruvbox-dark-hard"

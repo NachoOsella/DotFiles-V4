@@ -47,11 +47,15 @@ test("validateTodos accepts the normal pending to completed lifecycle", async ()
   assert.deepEqual(completed, [todo("1", "Implement feature", "completed")]);
 });
 
-test("validateTodos rejects pending items completed without starting", async () => {
-  await rejectsTransition(
-    [todo("1", "Implement feature", "completed")],
-    [todo("1", "Implement feature", "pending")]
+test("validateTodos allows pending items to complete directly", async () => {
+  const todos = await Effect.runPromise(
+    validateTodos(
+      [todo("1", "Implement feature", "completed")],
+      [todo("1", "Implement feature", "pending")]
+    )
   );
+
+  assert.deepEqual(todos, [todo("1", "Implement feature", "completed")]);
 });
 
 test("validateTodos rejects starting completed from an empty list", async () => {
@@ -68,13 +72,46 @@ test("validateTodos rejects returning in-progress items to pending", async () =>
   );
 });
 
-test("validateTodos rejects completed items that regress", async () => {
+test("validateTodos rejects completed items that regress in an active plan", async () => {
   for (const status of ["pending", "in_progress"] as const) {
     await rejectsTransition(
-      [todo("1", "Finished work", status)],
-      [todo("1", "Finished work", "completed")]
+      [
+        todo("1", "Finished work", status),
+        todo("2", "Remaining work", "pending"),
+      ],
+      [
+        todo("1", "Finished work", "completed"),
+        todo("2", "Remaining work", "pending"),
+      ]
     );
   }
+});
+
+test("validateTodos starts a fresh plan after all previous todos complete", async () => {
+  const todos = await Effect.runPromise(
+    validateTodos(
+      [
+        todo("1", "Inspect the next task", "in_progress"),
+        todo("2", "Implement the next task", "pending"),
+      ],
+      [
+        todo("1", "Finished earlier work", "completed"),
+        todo("r1", "Verified earlier work", "completed"),
+      ]
+    )
+  );
+
+  assert.deepEqual(todos, [
+    todo("1", "Inspect the next task", "in_progress"),
+    todo("2", "Implement the next task", "pending"),
+  ]);
+});
+
+test("a fresh plan still cannot begin with completed todos", async () => {
+  await rejectsTransition(
+    [todo("1", "Unstarted work", "completed")],
+    [todo("old", "Finished earlier work", "completed")]
+  );
 });
 
 test("validateTodos rejects duplicate IDs", async () => {

@@ -142,8 +142,15 @@ function validateTransitions(
       : undefined;
   }
 
+  // Once every item is completed, the plan is closed. The next non-empty
+  // replacement starts a fresh plan, so short IDs may be reused safely.
+  const activePlanTodos = previousTodos.every(
+    (todo) => todo.status === "completed"
+  )
+    ? []
+    : previousTodos;
   const previousById = new Map(
-    previousTodos.map((todo) => [todo.id, todo] as const)
+    activePlanTodos.map((todo) => [todo.id, todo] as const)
   );
   const nextIds = new Set(nextTodos.map((todo) => todo.id));
 
@@ -157,9 +164,6 @@ function validateTransitions(
       continue;
     }
 
-    if (previous.status === "pending" && todo.status === "completed") {
-      return `Todo ${JSON.stringify(todo.id)} cannot move from pending to completed; mark it in_progress first.`;
-    }
     if (previous.status === "in_progress" && todo.status === "pending") {
       return `Todo ${JSON.stringify(todo.id)} is in_progress and must be completed before it is returned to pending.`;
     }
@@ -168,7 +172,7 @@ function validateTransitions(
     }
   }
 
-  for (const todo of previousTodos) {
+  for (const todo of activePlanTodos) {
     if (nextIds.has(todo.id)) continue;
     if (todo.status === "in_progress") {
       return `In-progress todo ${JSON.stringify(todo.id)} must remain in the list until it is completed.`;

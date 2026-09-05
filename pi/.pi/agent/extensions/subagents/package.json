@@ -7,7 +7,7 @@
         "test:delegation": "node --experimental-strip-types src/delegation-evals-runner.ts",
         "test:delegation:behavior": "node --experimental-strip-types src/delegation-behavior-eval.ts",
         "prepare": "effect-tsgo patch",
-        "test": "node --test --experimental-strip-types backend.test.ts collaboration-policy.test.ts config.test.ts delegation-evals.test.ts delegation-behavior-eval.test.ts delivery.test.ts integration.test.ts mailbox.test.ts manager.test.ts roles.test.ts takeover.test.ts transcript.test.ts"
+        "test": "node --test --experimental-strip-types backend.test.ts collaboration-policy.test.ts config.test.ts delegation-evals.test.ts delegation-behavior-eval.test.ts delivery.test.ts handoff-eval.test.ts integration.test.ts mailbox.test.ts manager.test.ts roles.test.ts takeover.test.ts transcript.test.ts"
     },
     "devDependencies": {
         "@effect/tsgo": "^0.19.0",
