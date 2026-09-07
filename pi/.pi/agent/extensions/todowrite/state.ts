@@ -8,12 +8,16 @@ import type { Todo, TodoDetails } from "./types.ts";
 const todosBySession = new Map<string, readonly Todo[]>();
 const widgetVisibleBySession = new Map<string, boolean>();
 
-/** Return an immutable snapshot of the current session todo list. */
+/**
+ * Return a defensive copy of the current session todo list.
+ * Caller mutations to the returned array or items do not affect stored state.
+ */
 export function getTodos(sessionId: string): readonly Todo[] {
-  return todosBySession.get(sessionId) ?? [];
+  const stored = todosBySession.get(sessionId) ?? [];
+  return stored.map((todo) => ({ ...todo }));
 }
 
-/** Replace the current session's todo list with an immutable defensive copy. */
+/** Replace the current session's todo list with a defensive copy. */
 export function setTodos(sessionId: string, list: readonly Todo[]): void {
   todosBySession.set(sessionId, list.map((todo) => ({ ...todo })));
 }
@@ -48,6 +52,7 @@ export function buildDetails(list: readonly Todo[]): TodoDetails {
   let inProgress = 0;
   let completed = 0;
   let current: string | null = null;
+  let currentId: string | null = null;
 
   for (const todo of list) {
     if (todo.status === "pending") pending += 1;
@@ -55,6 +60,7 @@ export function buildDetails(list: readonly Todo[]): TodoDetails {
     if (todo.status === "in_progress") {
       inProgress += 1;
       current = todo.content;
+      currentId = todo.id;
     }
   }
 
@@ -64,6 +70,7 @@ export function buildDetails(list: readonly Todo[]): TodoDetails {
     in_progress: inProgress,
     completed,
     current,
+    currentId,
     items: list.map((todo) => ({ ...todo })),
   };
 }

@@ -15,5 +15,7 @@ export interface TodoDetails {
   readonly in_progress: number;
   readonly completed: number;
   readonly current: string | null;
+  /** Stable ID of the current item, when one is in progress. */
+  readonly currentId?: string | null;
   readonly items: readonly Todo[];
 }

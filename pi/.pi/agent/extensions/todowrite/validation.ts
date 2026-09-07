@@ -30,6 +30,88 @@ export function validateTodos(
   });
 }
 
+/** Maximum bytes for the current-state echo appended to transition errors. */
+export const MAX_STATE_ECHO_BYTES = 2048;
+
+/**
+ * Render the current list compactly so a rejected update shows what to
+ * resubmit. IDs come first because they are the identities validation uses.
+ */
+export function echoCurrentState(previousTodos: readonly Todo[]): string {
+  if (previousTodos.length === 0) return " Current list is empty.";
+  const parts = previousTodos.map((todo) => {
+    const content =
+      [...todo.content].length > 80
+        ? `${[...todo.content].slice(0, 80).join("")}...`
+        : todo.content;
+    return `[${todo.id}] ${todo.status} ${JSON.stringify(content)}`;
+  });
+  const full = ` Current list: ${parts.join(", ")}. Resubmit the full list with your change applied.`;
+  if (new TextEncoder().encode(full).length <= MAX_STATE_ECHO_BYTES)
+    return full;
+  let truncated = full;
+  while (
+    new TextEncoder().encode(`${truncated}...`).length >
+      MAX_STATE_ECHO_BYTES &&
+    truncated.length > 0
+  ) {
+    truncated = truncated.slice(0, -64);
+  }
+  return `${truncated}...`;
+}
+
+/**
+ * Scan branch entries newest-first for the latest valid successful todo
+ * snapshot. Shared by session restoration and context injection so both
+ * agree on the canonical state. Error results never become authoritative.
+ */
+export function findLatestSuccessfulSnapshot(
+  branch: readonly unknown[]
+): readonly Todo[] | undefined {
+  for (let index = branch.length - 1; index >= 0; index -= 1) {
+    const entry = branch[index];
+    if (
+      !isRecord(entry) ||
+      entry.type !== "message" ||
+      !isRecord(entry.message)
+    )
+      continue;
+    const message = entry.message;
+    if (
+      message.role !== "toolResult" ||
+      message.toolName !== "todowrite" ||
+      message.isError ||
+      !isRecord(message.details)
+    ) {
+      continue;
+    }
+    const snapshot = decodeStoredTodos(message.details.items);
+    if (snapshot) return snapshot;
+  }
+  return undefined;
+}
+
+/** Normalize one todo for structural snapshot comparison. */
+function snapshotKey(todo: Todo): string {
+  return `${todo.id.trim()}\0${todo.status}\0${todo.content.trim()}`;
+}
+
+/**
+ * Compare snapshots by normalized ID, status, content, and order.
+ * Shared by replay detection and context deduplication so both agree on
+ * what counts as the same snapshot.
+ */
+export function snapshotsEqualTodos(
+  left: readonly Todo[],
+  right: readonly Todo[]
+): boolean {
+  if (left.length !== right.length) return false;
+  return left.every((todo, index) => {
+    const other = right[index];
+    return other !== undefined && snapshotKey(todo) === snapshotKey(other);
+  });
+}
+
 /** Safely decode todo items previously stored in tool result details. */
 export function decodeStoredTodos(value: unknown): readonly Todo[] | undefined {
   if (!Array.isArray(value)) return undefined;
@@ -138,8 +220,18 @@ function validateTransitions(
   if (nextTodos.length === 0) {
     const active = previousTodos.find((todo) => todo.status === "in_progress");
     return active
-      ? `In-progress todo ${JSON.stringify(active.id)} must be completed before clearing the list.`
+      ? `In-progress todo ${JSON.stringify(active.id)} must be completed or paused back to pending before clearing the list.${echoCurrentState(previousTodos)}`
       : undefined;
+  }
+
+  // Replaying the exact normalized completed snapshot is not a new plan.
+  // Accept it so retries after a closed plan do not fail validation.
+  if (
+    previousTodos.length > 0 &&
+    previousTodos.every((todo) => todo.status === "completed") &&
+    isIdenticalSnapshot(previousTodos, nextTodos)
+  ) {
+    return undefined;
   }
 
   // Once every item is completed, the plan is closed. The next non-empty
@@ -158,31 +250,39 @@ function validateTransitions(
     const previous = previousById.get(todo.id);
     if (!previous) {
       // New or replacement work may start pending or in_progress, never completed.
+      // Pending work may complete directly, so new work starts pending/in_progress first.
       if (todo.status === "completed") {
-        return `Todo ${JSON.stringify(todo.id)} must be in_progress before it can be completed.`;
+        return `Todo ${JSON.stringify(todo.id)} cannot start as completed. Start new work as pending or in_progress, then complete it in a later update.${echoCurrentState(previousTodos)}`;
       }
       continue;
     }
 
-    if (previous.status === "in_progress" && todo.status === "pending") {
-      return `Todo ${JSON.stringify(todo.id)} is in_progress and must be completed before it is returned to pending.`;
-    }
+    // Paused work may return from in_progress to pending. Only completion
+    // is terminal within an active plan.
     if (previous.status === "completed" && todo.status !== "completed") {
-      return `Completed todo ${JSON.stringify(todo.id)} must remain completed.`;
+      return `Completed todo ${JSON.stringify(todo.id)} must remain completed. Resubmit it unchanged with the rest of the full list.${echoCurrentState(previousTodos)}`;
     }
   }
 
   for (const todo of activePlanTodos) {
     if (nextIds.has(todo.id)) continue;
     if (todo.status === "in_progress") {
-      return `In-progress todo ${JSON.stringify(todo.id)} must remain in the list until it is completed.`;
+      return `In-progress todo ${JSON.stringify(todo.id)} must remain in the list until it is completed or paused back to pending.${echoCurrentState(previousTodos)}`;
     }
     if (todo.status === "completed") {
-      return `Completed todo ${JSON.stringify(todo.id)} must remain in the list and completed.`;
+      return `Completed todo ${JSON.stringify(todo.id)} must remain in the list and completed.${echoCurrentState(previousTodos)}`;
     }
   }
 
   return undefined;
+}
+
+/** Compare normalized ID, content, status, and order for replay detection. */
+function isIdenticalSnapshot(
+  previousTodos: readonly Todo[],
+  nextTodos: readonly Todo[]
+): boolean {
+  return snapshotsEqualTodos(previousTodos, nextTodos);
 }
 
 function invalid(message: string): Effect.Effect<never, TodoValidationError> {

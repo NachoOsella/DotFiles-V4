@@ -7,20 +7,19 @@ import {
   MODEL_INFO_CHANNEL,
   REFRESH_CHANNEL,
 } from "../shared/dashboard-state.ts";
+import { computeActiveBranchCost } from "./src/session-cost.ts";
 
 const CHARS_PER_ESTIMATED_TOKEN = 4;
 const LIVE_UPDATE_INTERVAL_MS = 200;
 
+// Active-branch cost accounting (labeled semantics, P11 step 7): the sum of
+// every usage-bearing entry on the active branch counted exactly once -
+// assistant messages, tool-result usage, compaction summary usage, and
+// branch-summary usage. This is NOT lifetime billing (other branches and
+// abandoned leaves are excluded) and does NOT traverse
+// compaction.retainedTail as separately billed messages.
 function getSessionCost(ctx: ExtensionContext) {
-  let cost = 0;
-
-  for (const entry of ctx.sessionManager.getBranch()) {
-    if (entry.type === "message" && entry.message.role === "assistant") {
-      cost += entry.message.usage.cost.total;
-    }
-  }
-
-  return cost;
+  return computeActiveBranchCost(ctx.sessionManager.getBranch());
 }
 
 function estimateContentTokens(characters: number) {
@@ -47,16 +46,39 @@ export default function modelInfo(pi: ExtensionAPI) {
     const model = ctx.model;
     const usage = ctx.getContextUsage();
 
+    // Finite-number guards: never publish NaN/Infinity into shared state.
+    const contextTokens =
+      typeof usage?.tokens === "number" && Number.isFinite(usage.tokens)
+        ? usage.tokens
+        : null;
+    const modelWindow =
+      typeof model?.contextWindow === "number" &&
+      Number.isFinite(model.contextWindow)
+        ? model.contextWindow
+        : 0;
+    const usageWindow =
+      typeof usage?.contextWindow === "number" &&
+      Number.isFinite(usage.contextWindow)
+        ? usage.contextWindow
+        : 0;
+    const contextPercent =
+      typeof usage?.percent === "number" && Number.isFinite(usage.percent)
+        ? usage.percent
+        : null;
+
     state = {
       ...state,
       provider: model?.provider ?? "",
       modelId: model?.id ?? "no-model",
       modelName: model?.name ?? model?.id ?? "No model",
       thinking: model?.reasoning ? pi.getThinkingLevel() : "off",
-      contextTokens: usage?.tokens ?? null,
-      contextWindow: usage?.contextWindow ?? model?.contextWindow ?? 0,
-      contextPercent: usage?.percent ?? null,
+      contextTokens,
+      contextWindow: usageWindow || modelWindow,
+      contextPercent,
       cost: getSessionCost(ctx),
+      // A refresh recomputes from stored usage: any previously published
+      // live estimate is superseded by a measured value.
+      throughputIsEstimate: false,
     };
     publish();
   }
@@ -79,7 +101,12 @@ export default function modelInfo(pi: ExtensionAPI) {
     resetMessageTracking();
     runContentTokens = 0;
     runContentStreamMs = 0;
-    state = { ...state, tokensPerSecond: null, generating: false };
+    state = {
+      ...state,
+      tokensPerSecond: null,
+      throughputIsEstimate: false,
+      generating: false,
+    };
     refresh(ctx);
   });
 
@@ -104,7 +131,12 @@ export default function modelInfo(pi: ExtensionAPI) {
     runContentTokens = 0;
     runContentStreamMs = 0;
     resetMessageTracking();
-    state = { ...state, tokensPerSecond: null, generating: true };
+    state = {
+      ...state,
+      tokensPerSecond: null,
+      throughputIsEstimate: false,
+      generating: true,
+    };
     refresh(ctx);
   });
 
@@ -152,6 +184,8 @@ export default function modelInfo(pi: ExtensionAPI) {
       ...state,
       tokensPerSecond:
         estimateContentTokens(streamedCharacters) / (elapsedMs / 1000),
+      // Live streaming value: an estimate, rendered with a `~` prefix.
+      throughputIsEstimate: true,
     };
     publish();
   });
@@ -188,6 +222,8 @@ export default function modelInfo(pi: ExtensionAPI) {
         state = {
           ...state,
           tokensPerSecond: runContentTokens / (runContentStreamMs / 1000),
+          // Measured final cadence over the observed stream interval.
+          throughputIsEstimate: false,
         };
       }
     }
@@ -197,6 +233,15 @@ export default function modelInfo(pi: ExtensionAPI) {
   });
 
   pi.on("turn_end", (_event, ctx) => refresh(ctx));
+
+  // Branch navigation, compaction, and tool completion can all change billed
+  // usage without an assistant message_end on the new branch. Keep the
+  // native agent_settled hook below for the end-of-work state.
+  pi.on("session_tree", (_event, ctx) => refresh(ctx));
+
+  pi.on("session_compact", (_event, ctx) => refresh(ctx));
+
+  pi.on("tool_result", (_event, ctx) => refresh(ctx));
 
   pi.on("agent_settled", (_event, ctx) => {
     state = { ...state, generating: false };

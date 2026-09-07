@@ -84,6 +84,12 @@ export interface AgentMailbox {
     wait(options?: MailboxWaitOptions): Effect.Effect<MailboxWaitResult>
     /** Resolve pending waits. Existing queued messages remain available to drain. */
     close(): void
+    /**
+     * Earliest sequence still retained as pending or in-flight, if any.
+     * Used by filtered waits to return a conservative cursor that never
+     * skips an undelivered event when a global cursor advances past it.
+     */
+    earliestUndeliveredSequence(): number | undefined
     readonly size: number
     readonly retainedTextBytes: number
 }
@@ -359,13 +365,17 @@ export function createAgentMailbox(limits: MailboxLimits = {}): AgentMailbox {
         )
     }
 
-    const selected = (options: MailboxDrainOptions = {}) => {
-        const afterSequence = options.afterSequence ?? 0
+    const checkAfterSequence = (afterSequence: number) => {
         if (!Number.isSafeInteger(afterSequence) || afterSequence < 0) {
             throw new RangeError(
                 'afterSequence must be a non-negative safe integer.'
             )
         }
+    }
+
+    const selected = (options: MailboxDrainOptions = {}) => {
+        const afterSequence = options.afterSequence ?? 0
+        checkAfterSequence(afterSequence)
         return allStored().filter(
             (stored) =>
                 (deliveryStates.get(stored.envelope.sequence) ?? 'pending') ===
@@ -374,8 +384,50 @@ export function createAgentMailbox(limits: MailboxLimits = {}): AgentMailbox {
         )
     }
 
+    /**
+     * Delivery frontier for consuming operations. A wait, claim, or filtered
+     * drain must not advance past an earlier in-flight sequence that matches
+     * the same filter; otherwise advancing the cursor would conceal the lower
+     * sequence when its delivery later fails and releases it. Exact-sequence
+     * drains explicitly target retained events and bypass the frontier; their
+     * callers retain responsibility for cursor conservatism (see manager
+     * waitFor and the tool-layer next_sequence calculation). This keeps
+     * unrelated filtered waits from blocking indefinitely on other agents'
+     * in-flight deliveries while preserving per-filter order.
+     */
+    const frontierSequence = (
+        options: MailboxDrainOptions,
+        afterSequence: number
+    ): number | undefined => {
+        if (options.sequences !== undefined) return undefined
+        let frontier: number | undefined
+        for (const stored of allStored()) {
+            const sequence = stored.envelope.sequence
+            if (sequence <= afterSequence) continue
+            if ((deliveryStates.get(sequence) ?? 'pending') !== 'in-flight')
+                continue
+            if (!matches(stored.envelope, options, afterSequence)) continue
+            if (frontier === undefined || sequence < frontier)
+                frontier = sequence
+        }
+        return frontier
+    }
+
+    const eligible = (options: MailboxDrainOptions = {}) => {
+        const afterSequence = options.afterSequence ?? 0
+        checkAfterSequence(afterSequence)
+        const frontier = frontierSequence(options, afterSequence)
+        return allStored().filter(
+            (stored) =>
+                (deliveryStates.get(stored.envelope.sequence) ?? 'pending') ===
+                    'pending' &&
+                matches(stored.envelope, options, afterSequence) &&
+                (frontier === undefined || stored.envelope.sequence < frontier)
+        )
+    }
+
     const takeAfter = (afterSequence: number) => {
-        const delivered = selected({ afterSequence })
+        const delivered = eligible({ afterSequence })
         for (const stored of delivered) {
             removeSequence(stored.envelope.sequence, 'consumed')
         }
@@ -383,11 +435,7 @@ export function createAgentMailbox(limits: MailboxLimits = {}): AgentMailbox {
     }
 
     const hasAfter = (afterSequence: number) =>
-        allStored().some(
-            (stored) =>
-                (deliveryStates.get(stored.envelope.sequence) ?? 'pending') ===
-                    'pending' && stored.envelope.sequence > afterSequence
-        )
+        eligible({ afterSequence }).length > 0
 
     const waitForMatching = (afterSequence: number) =>
         Effect.callback<void>((resume) => {
@@ -480,7 +528,7 @@ export function createAgentMailbox(limits: MailboxLimits = {}): AgentMailbox {
             return selected(options).map((stored) => stored.envelope)
         },
         claim(options: MailboxDrainOptions = {}) {
-            const events = selected(options)
+            const events = eligible(options)
             for (const stored of events)
                 rememberDelivery(stored.envelope.sequence, 'in-flight')
             return events.map((stored) => stored.envelope)
@@ -496,12 +544,28 @@ export function createAgentMailbox(limits: MailboxLimits = {}): AgentMailbox {
             if (released) notify()
         },
         ack(sequences) {
+            let acknowledged = false
             for (const sequence of new Set(sequences)) {
+                const stored =
+                    gap?.envelope.sequence === sequence
+                        ? gap
+                        : pending.find(
+                              (candidate) =>
+                                  candidate.envelope.sequence === sequence
+                          )
+                if (!stored) continue
+                const current = deliveryStates.get(sequence) ?? 'pending'
+                if (current !== 'pending' && current !== 'in-flight') continue
                 removeSequence(sequence, 'delivered')
+                acknowledged = true
             }
+            // Releasing the frontier can unblock a waiter that is blocked
+            // behind this in-flight sequence; wake it with the same
+            // eligibility predicate used for selection to avoid busy loops.
+            if (acknowledged) notify()
         },
         drain(options: MailboxDrainOptions = {}) {
-            const events = selected(options)
+            const events = eligible(options)
             for (const stored of events) {
                 removeSequence(stored.envelope.sequence, 'consumed')
             }
@@ -513,6 +577,17 @@ export function createAgentMailbox(limits: MailboxLimits = {}): AgentMailbox {
             }
         },
         wait,
+        earliestUndeliveredSequence() {
+            let earliest: number | undefined
+            for (const stored of allStored()) {
+                const sequence = stored.envelope.sequence
+                const state = deliveryStates.get(sequence) ?? 'pending'
+                if (state !== 'pending' && state !== 'in-flight') continue
+                if (earliest === undefined || sequence < earliest)
+                    earliest = sequence
+            }
+            return earliest
+        },
         close() {
             closed = true
             notify()

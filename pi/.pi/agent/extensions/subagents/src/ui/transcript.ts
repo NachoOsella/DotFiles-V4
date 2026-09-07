@@ -72,8 +72,9 @@ function toolActivity(
         ? ["✗", "error"]
         : ["◌", "warning"];
   const cleanDetail = summarizeToolDetail(detail);
+  const cleanName = sanitizeText(name).replace(/\s+/g, " ").trim();
   const prefix =
-    `${theme.fg(color as any, glyph)} ${theme.fg("toolTitle", name)}`;
+    `${theme.fg(color as any, glyph)} ${theme.fg("toolTitle", cleanName)}`;
   const available = Math.max(0, width - visibleWidth(prefix) - 2);
   const suffix = cleanDetail
     ? theme.fg("muted", `  ${truncateToWidth(cleanDetail, available)}`)
@@ -199,7 +200,12 @@ function renderAssistantText(
     }
 
     if (/^\s*(?:---+|___+|\*\*\*+)\s*$/.test(line)) {
-      out.push(t.fg("borderMuted", `  ${"─".repeat(Math.max(1, width - 2))}`));
+      out.push(
+        truncateToWidth(
+          t.fg("borderMuted", `  ${"─".repeat(Math.max(1, width - 2))}`),
+          width,
+        ),
+      );
       continue;
     }
 

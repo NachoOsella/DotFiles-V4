@@ -1,6 +1,5 @@
 export const MODEL_INFO_CHANNEL = "dashboard:model-info";
 export const GIT_INFO_CHANNEL = "dashboard:git-info";
-export const LSP_INFO_CHANNEL = "dashboard:lsp-info";
 export const DISCORD_ACTIVITY_CHANNEL = "dashboard:discord-activity";
 export const REFRESH_CHANNEL = "dashboard:refresh";
 
@@ -15,12 +14,10 @@ export interface ModelInfoState {
   cost: number;
   tokensPerSecond: number | null;
   generating: boolean;
-}
-
-export interface LspInfoState {
-  enabled: boolean;
-  message: string;
-  servers: string[];
+  // Optional: true when tokensPerSecond is a live streaming estimate,
+  // false/undefined when it is a measured final cadence. Footer renders
+  // estimates with a `~` prefix. Absent means "derive from generating".
+  throughputIsEstimate?: boolean;
 }
 
 export interface PullRequestInfo {
@@ -34,6 +31,13 @@ export interface GitInfoState {
   branch: string | null;
   changedFiles: number;
   pullRequest: PullRequestInfo | null;
+  // Optional freshness channel (P11 follow-up, producer side not yet wired:
+  // git-info preserves last-known data on transient failure but does not
+  // emit these fields yet). Absent/undefined means fresh. Footer renders
+  // stale snapshots with a "(stale)" suffix instead of presenting them
+  // as fresh.
+  stale?: boolean;
+  refreshError?: string | null;
 }
 
 export interface DiscordActivityState {
@@ -64,14 +68,6 @@ export function emptyGitInfoState(): GitInfoState {
   };
 }
 
-export function emptyLspInfoState(): LspInfoState {
-  return {
-    enabled: false,
-    message: "LSP disabled",
-    servers: [],
-  };
-}
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
@@ -84,16 +80,6 @@ export function isDiscordActivityState(
   value: unknown,
 ): value is DiscordActivityState {
   return isRecord(value) && typeof value.active === "boolean";
-}
-
-export function isLspInfoState(value: unknown): value is LspInfoState {
-  if (!isRecord(value)) return false;
-  return (
-    typeof value.enabled === "boolean" &&
-    typeof value.message === "string" &&
-    Array.isArray(value.servers) &&
-    value.servers.every((server) => typeof server === "string")
-  );
 }
 
 export function isModelInfoState(value: unknown): value is ModelInfoState {
@@ -109,7 +95,9 @@ export function isModelInfoState(value: unknown): value is ModelInfoState {
     isNullableNumber(value.contextPercent) &&
     typeof value.cost === "number" &&
     isNullableNumber(value.tokensPerSecond) &&
-    typeof value.generating === "boolean"
+    typeof value.generating === "boolean" &&
+    (value.throughputIsEstimate === undefined ||
+      typeof value.throughputIsEstimate === "boolean")
   );
 }
 
@@ -130,6 +118,46 @@ export function isGitInfoState(value: unknown): value is GitInfoState {
     typeof value.isRepository === "boolean" &&
     (value.branch === null || typeof value.branch === "string") &&
     typeof value.changedFiles === "number" &&
-    (value.pullRequest === null || isPullRequestInfo(value.pullRequest))
+    (value.pullRequest === null || isPullRequestInfo(value.pullRequest)) &&
+    (value.stale === undefined || typeof value.stale === "boolean") &&
+    (value.refreshError === undefined ||
+      value.refreshError === null ||
+      typeof value.refreshError === "string")
   );
+}
+
+// Finite-number sanitizers for dashboard consumers (P11 step 9).
+// The is*State validators above intentionally keep accepting any typeof
+// "number" (including NaN/Infinity) so existing external event contracts
+// remain accepted as-is. Consumers must pass received state through these
+// sanitizers before storing/rendering so NaN/Infinity never reach the UI.
+export function isFiniteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+function finiteOrNull(value: unknown): number | null {
+  if (value === null) return null;
+  return isFiniteNumber(value) ? value : null;
+}
+
+function finiteOr(value: unknown, fallback: number): number {
+  return isFiniteNumber(value) ? value : fallback;
+}
+
+export function sanitizeModelInfoState(value: ModelInfoState): ModelInfoState {
+  return {
+    ...value,
+    contextTokens: finiteOrNull(value.contextTokens),
+    contextWindow: finiteOr(value.contextWindow, 0),
+    contextPercent: finiteOrNull(value.contextPercent),
+    cost: finiteOr(value.cost, 0),
+    tokensPerSecond: finiteOrNull(value.tokensPerSecond),
+  };
+}
+
+export function sanitizeGitInfoState(value: GitInfoState): GitInfoState {
+  const changedFiles = isFiniteNumber(value.changedFiles)
+    ? Math.max(0, Math.floor(value.changedFiles))
+    : 0;
+  return { ...value, changedFiles };
 }

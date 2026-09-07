@@ -15,13 +15,21 @@ import {
     type DelegationObservation,
 } from '../delegation-evals.ts'
 import {
+    evaluateIntegrationTrace,
     evaluatePolling,
     evaluateQuestionHandling,
     evaluateRecordedHandoffs,
     evaluateSynchronizationBoundary,
+    evaluateValidationTrace,
     HANDOFF_EVALS,
+    SCRIPTED_BEHAVIOR_TRACES,
+    evaluateScriptedBehaviorTrace,
     type HandoffEvalCase,
     type HandoffQualityResult,
+    type IntegrationTrace,
+    type ScriptedBehaviorResult,
+    type ScriptedBehaviorTrace,
+    type ValidationTrace,
 } from './handoff-eval.ts'
 
 interface BehaviorToolCall {
@@ -142,8 +150,31 @@ export function evaluateBehaviorQuestionHandling(
     return evaluateQuestionHandling(calls, options)
 }
 
-export { HANDOFF_EVALS }
-export type { HandoffEvalCase, HandoffQualityResult }
+export function evaluateBehaviorValidation(
+    trace: Parameters<typeof evaluateValidationTrace>[0]
+) {
+    return evaluateValidationTrace(trace)
+}
+
+export function evaluateBehaviorIntegration(
+    trace: Parameters<typeof evaluateIntegrationTrace>[0]
+) {
+    return evaluateIntegrationTrace(trace)
+}
+
+export {
+    HANDOFF_EVALS,
+    SCRIPTED_BEHAVIOR_TRACES,
+    evaluateScriptedBehaviorTrace,
+}
+export type {
+    HandoffEvalCase,
+    HandoffQualityResult,
+    IntegrationTrace,
+    ScriptedBehaviorResult,
+    ScriptedBehaviorTrace,
+    ValidationTrace,
+}
 
 function observedDelegation(
     calls: ReadonlyArray<BehaviorToolCall>

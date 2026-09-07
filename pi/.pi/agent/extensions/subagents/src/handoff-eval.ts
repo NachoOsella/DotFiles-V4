@@ -510,9 +510,13 @@ export interface QuestionHandlingResult {
  */
 export function evaluateQuestionHandling(
     calls: ReadonlyArray<CoordinationCall>,
-    options: { readonly questionAsked: boolean } = { questionAsked: true }
+    options: {
+        readonly questionAsked: boolean
+        readonly requireFollowUp?: boolean
+    } = { questionAsked: true }
 ): QuestionHandlingResult {
-    if (!options.questionAsked) return { passed: true, failures: [] }
+    if (!options.questionAsked && !options.requireFollowUp)
+        return { passed: true, failures: [] }
     const failures: string[] = []
     const waitIndex = calls.map((call) => call.name).indexOf('subagent_wait')
     if (waitIndex === -1) {
@@ -538,6 +542,207 @@ export function evaluateQuestionHandling(
                 'parent spawned new work before answering the blocking question; answer the child with subagent_send instead of taking over'
             )
         }
+        if (options.requireFollowUp) {
+            const answer = afterWait[sendIndex]
+            const args =
+                answer?.args && typeof answer.args === 'object'
+                    ? (answer.args as Record<string, unknown>)
+                    : undefined
+            if (args?.delivery === 'steer') {
+                failures.push(
+                    'blocking question used steer; answer it with subagent_send follow-up'
+                )
+            }
+        }
+    }
+    return { passed: failures.length === 0, failures }
+}
+
+export interface ValidationTrace {
+    readonly command: string
+    readonly observed: 'passed' | 'failed'
+    readonly finalReport: string
+}
+
+export interface IntegrationTrace {
+    readonly newerParentWork: boolean
+    readonly reconciled: boolean
+}
+
+export interface ScriptedBehaviorTrace {
+    readonly name: string
+    readonly calls?: ReadonlyArray<CoordinationCall>
+    readonly prompts?: ReadonlyArray<string>
+    readonly handoffScenario?: HandoffEvalCase
+    readonly validation?: ValidationTrace
+    readonly integration?: IntegrationTrace
+}
+
+export interface ScriptedBehaviorResult {
+    readonly passed: boolean
+    readonly failures: ReadonlyArray<string>
+}
+
+export function evaluateValidationTrace(
+    trace: ValidationTrace
+): ScriptedBehaviorResult {
+    const failures: string[] = []
+    if (!trace.command.trim()) failures.push('validation command is missing')
+    const report = trace.finalReport.toLowerCase()
+    if (trace.observed === 'failed') {
+        if (!/(fail|error|unsuccess|did not pass)/i.test(report)) {
+            failures.push('failed validation was not reported as failed')
+        }
+        if (/(passed|succeeded|success)/i.test(report)) {
+            failures.push('final report claims success after failed validation')
+        }
+    }
+    return { passed: failures.length === 0, failures }
+}
+
+export function evaluateIntegrationTrace(
+    trace: IntegrationTrace
+): ScriptedBehaviorResult {
+    if (trace.newerParentWork && !trace.reconciled) {
+        return {
+            passed: false,
+            failures: [
+                'stale child output was not reconciled with newer parent work',
+            ],
+        }
+    }
+    return { passed: true, failures: [] }
+}
+
+const SCRIPTED_REFRESH_HANDOFF = `Implement the refresh-token fix where the old jti remains valid after refresh. The auth flow and rotation are already inspected in src/auth/RefreshTokenService.java. Own only that file; preserve architecture and repository boundaries, and leave logout unchanged. Done means the old jti is rejected after refresh. Run the focused refresh-token test and report changed files, observed validation, and blockers.`
+const SCRIPTED_FRONTEND_HANDOFF = `Own only the frontend auth area. Refactor the frontend login flow in parallel with the backend worker, keep the API contract unchanged, run focused tests, and report changed files and observed validation.`
+const SCRIPTED_BACKEND_HANDOFF = `Own only the backend auth area. Refactor token validation in parallel with the frontend worker, keep the API boundary unchanged, run focused tests, and report changed files and observed validation.`
+
+/** Model-free traces for delegation, handoff, questions, validation, and reconciliation. */
+export const SCRIPTED_BEHAVIOR_TRACES: ReadonlyArray<ScriptedBehaviorTrace> = [
+    {
+        name: 'trivial-direct-work',
+        calls: [{ name: 'read' }, { name: 'edit' }, { name: 'bash' }],
+    },
+    {
+        name: 'disjoint-parallel-work',
+        calls: [
+            { name: 'subagent_spawn' },
+            { name: 'subagent_spawn' },
+            { name: 'read' },
+            { name: 'subagent_wait' },
+        ],
+        prompts: [SCRIPTED_FRONTEND_HANDOFF, SCRIPTED_BACKEND_HANDOFF],
+        handoffScenario: HANDOFF_EVALS.find(
+            (scenario) =>
+                scenario.name === 'handoff-frontend-backend-auth-parallel'
+        ),
+    },
+    {
+        name: 'no-independent-work',
+        calls: [{ name: 'read' }, { name: 'edit' }],
+    },
+    {
+        name: 'complete-context-handoff',
+        calls: [{ name: 'subagent_spawn' }],
+        prompts: [SCRIPTED_REFRESH_HANDOFF],
+        handoffScenario: HANDOFF_EVALS.find(
+            (scenario) => scenario.name === 'handoff-refresh-token-fix'
+        ),
+    },
+    {
+        name: 'early-child-question',
+        calls: [
+            { name: 'subagent_spawn' },
+            { name: 'subagent_wait', args: { kind: 'question' } },
+            { name: 'subagent_send', args: { delivery: 'follow-up' } },
+        ],
+    },
+    {
+        name: 'queued-follow-up',
+        calls: [
+            { name: 'subagent_spawn' },
+            { name: 'subagent_wait', args: { kind: 'result' } },
+            { name: 'subagent_send', args: { delivery: 'follow-up' } },
+        ],
+    },
+    {
+        name: 'failed-validation',
+        validation: {
+            command: 'npm test -- parser',
+            observed: 'failed',
+            finalReport: 'Validation failed: the parser regression remains.',
+        },
+    },
+    {
+        name: 'stale-child-output',
+        integration: { newerParentWork: true, reconciled: true },
+    },
+]
+
+export function evaluateScriptedBehaviorTrace(
+    trace: ScriptedBehaviorTrace
+): ScriptedBehaviorResult {
+    const failures: string[] = []
+    const calls = trace.calls ?? []
+    const hasSpawn = calls.some((call) => call.name === 'subagent_spawn')
+
+    if (
+        trace.name === 'trivial-direct-work' ||
+        trace.name === 'no-independent-work'
+    ) {
+        if (hasSpawn) failures.push(`${trace.name} delegated work`)
+    }
+    if (trace.name === 'disjoint-parallel-work') {
+        if (calls.filter((call) => call.name === 'subagent_spawn').length !== 2)
+            failures.push('parallel trace did not spawn two children')
+        failures.push(...evaluateSynchronizationBoundary(calls).failures)
+        if (!trace.handoffScenario || !trace.prompts) {
+            failures.push('parallel trace is missing handoff prompts')
+        } else {
+            failures.push(
+                ...evaluateMultiHandoffQuality(
+                    trace.prompts,
+                    trace.handoffScenario
+                ).failures
+            )
+        }
+    }
+    if (trace.name === 'complete-context-handoff') {
+        const prompt = trace.prompts?.[0]
+        if (!prompt || !trace.handoffScenario) {
+            failures.push('complete handoff trace is missing its prompt')
+        } else {
+            failures.push(
+                ...evaluateHandoffQuality(prompt, trace.handoffScenario)
+                    .failures
+            )
+        }
+    }
+    if (
+        trace.name === 'early-child-question' ||
+        trace.name === 'queued-follow-up'
+    ) {
+        failures.push(
+            ...evaluateQuestionHandling(calls, {
+                questionAsked: trace.name === 'early-child-question',
+                requireFollowUp: true,
+            }).failures
+        )
+    }
+    if (trace.name === 'failed-validation') {
+        if (!trace.validation)
+            failures.push('failed validation trace is missing validation data')
+        else
+            failures.push(...evaluateValidationTrace(trace.validation).failures)
+    }
+    if (trace.name === 'stale-child-output') {
+        if (!trace.integration)
+            failures.push('stale output trace is missing integration data')
+        else
+            failures.push(
+                ...evaluateIntegrationTrace(trace.integration).failures
+            )
     }
     return { passed: failures.length === 0, failures }
 }

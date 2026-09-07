@@ -3,7 +3,11 @@ import test from "node:test";
 import { Effect, Exit } from "effect";
 import { TodoWriteParams } from "./schema.ts";
 import type { Todo, TodoStatus } from "./types.ts";
-import { decodeStoredTodos, validateTodos } from "./validation.ts";
+import {
+  decodeStoredTodos,
+  TodoValidationError,
+  validateTodos,
+} from "./validation.ts";
 
 function todo(id: string, content: string, status: TodoStatus): Todo {
   return { id, content, status };
@@ -65,10 +69,63 @@ test("validateTodos rejects starting completed from an empty list", async () => 
   );
 });
 
-test("validateTodos rejects returning in-progress items to pending", async () => {
-  await rejectsTransition(
-    [todo("1", "Implement feature", "pending")],
-    [todo("1", "Implement feature", "in_progress")]
+test("validateTodos allows pausing in-progress items back to pending", async () => {
+  const todos = await Effect.runPromise(
+    validateTodos(
+      [todo("1", "Implement feature", "pending")],
+      [todo("1", "Implement feature", "in_progress")]
+    )
+  );
+
+  assert.deepEqual(todos, [todo("1", "Implement feature", "pending")]);
+});
+
+test("validateTodos allows pausing one item and starting the next", async () => {
+  const todos = await Effect.runPromise(
+    validateTodos(
+      [
+        todo("1", "Blocked work", "pending"),
+        todo("2", "Unblocked work", "in_progress"),
+      ],
+      [
+        todo("1", "Blocked work", "in_progress"),
+        todo("2", "Unblocked work", "pending"),
+      ]
+    )
+  );
+
+  assert.deepEqual(todos, [
+    todo("1", "Blocked work", "pending"),
+    todo("2", "Unblocked work", "in_progress"),
+  ]);
+});
+
+test("transition errors echo the current list with a remedy", async () => {
+  const exit = await Effect.runPromiseExit(
+    validateTodos(
+      [
+        todo("1", "Old work", "pending"),
+        todo("2", "Invented work", "completed"),
+      ],
+      [todo("1", "Old work", "pending")]
+    )
+  );
+  assert.equal(Exit.isFailure(exit), true);
+  const failure = await Effect.runPromise(Effect.flip(validateTodos(
+    [
+      todo("1", "Old work", "pending"),
+      todo("2", "Invented work", "completed"),
+    ],
+    [todo("1", "Old work", "pending")]
+  )));
+  const message =
+    failure instanceof TodoValidationError ? failure.message : "";
+  assert.match(message, /Current list/);
+  assert.match(message, /\[1\]/);
+  assert.match(message, /Resubmit the full list|Start new work/);
+  assert.ok(
+    new TextEncoder().encode(message).length <= 2048 + 256,
+    "error echo stays bounded"
   );
 });
 
@@ -112,6 +169,28 @@ test("a fresh plan still cannot begin with completed todos", async () => {
     [todo("1", "Unstarted work", "completed")],
     [todo("old", "Finished earlier work", "completed")]
   );
+});
+
+test("replaying an identical completed snapshot is accepted", async () => {
+  const previous = [
+    todo("1", "Finished earlier work", "completed"),
+    todo("2", "Verified earlier work", "completed"),
+  ];
+  const todos = await Effect.runPromise(validateTodos([...previous], previous));
+
+  assert.deepEqual(todos, previous);
+});
+
+test("replaying a completed snapshot ignores surrounding whitespace", async () => {
+  const previous = [todo("1", "Finished earlier work", "completed")];
+  const todos = await Effect.runPromise(
+    validateTodos(
+      [{ id: "  1 ", content: "  Finished earlier work  ", status: "completed" }],
+      previous
+    )
+  );
+
+  assert.deepEqual(todos, previous);
 });
 
 test("validateTodos rejects duplicate IDs", async () => {

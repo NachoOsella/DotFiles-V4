@@ -11,6 +11,12 @@ import { runCommand } from "./process.ts";
 
 const DIFF_SCROLL_STEP = 5;
 const MAX_DIFF_LINES = 20_000;
+/** Bounded preview budget for diff output; status output uses the default. */
+export const DIFF_CAPTURE_CHARS = 512_000;
+
+export const DIFF_TIMED_OUT_MESSAGE = "Timed out while loading the diff.";
+export const DIFF_TRUNCATED_MESSAGE = "… output truncated …";
+export const NO_DIFF_MESSAGE = "No textual diff available.";
 
 interface ChangedPath {
   path: string;
@@ -23,6 +29,30 @@ export interface ChangedFile {
   diff: string[];
   name: string;
   path: string;
+  diffTimedOut?: boolean;
+  diffTruncated?: boolean;
+}
+
+export interface ChangedFilesLoadIssue {
+  readonly kind: "timed-out" | "truncated" | "failed";
+  readonly message: string;
+}
+
+export function isChangedFilesLoadIssue(
+  value: unknown,
+): value is ChangedFilesLoadIssue {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "kind" in value &&
+    ((value as { kind: unknown }).kind === "timed-out" ||
+      (value as { kind: unknown }).kind === "truncated" ||
+      (value as { kind: unknown }).kind === "failed")
+  );
+}
+
+export function isNotARepositoryError(stderr: string) {
+  return /not a git repository/i.test(stderr);
 }
 
 function parseChangedPaths(output: string) {
@@ -44,23 +74,45 @@ function parseChangedPaths(output: string) {
   return [...new Map(paths.map((entry) => [entry.path, entry])).values()];
 }
 
+function parseCount(value: string | undefined) {
+  if (value === undefined || value === "-") return null;
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
 function parseNumstat(output: string) {
   const line = output.split("\n").find(Boolean);
   if (!line) return { additions: 0, deletions: 0 };
 
   const [added, deleted] = line.split("\t");
   return {
-    additions: added === "-" ? null : Number.parseInt(added ?? "0", 10),
-    deletions: deleted === "-" ? null : Number.parseInt(deleted ?? "0", 10),
+    additions: parseCount(added),
+    deletions: parseCount(deleted),
   };
 }
 
 function cleanDisplayPath(path: string) {
-  return path.replace(/[\r\n\t]/g, " ");
+  return path
+    .replace(/\x1B\[[0-9;]*[A-Za-z]/g, "")
+    .replace(/[\x00-\x1F\x7F]/g, " ");
+}
+
+/** Strip terminal escapes and control characters while keeping line structure. */
+function sanitizeDiffLine(line: string) {
+  return line
+    .replace(/\x1B\[[0-9;]*[A-Za-z]/g, "")
+    .replaceAll("\t", "    ")
+    .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, "�")
+    .replace(/\r/g, "");
 }
 
 const run = (cwd: string, args: string[]) =>
   runCommand("git", args, cwd, 10_000);
+
+const runDiff = (cwd: string, args: string[]) =>
+  runCommand("git", args, cwd, 10_000, {
+    maxStdoutChars: DIFF_CAPTURE_CHARS,
+  });
 
 const loadFile = Effect.fn("git-info.loadFile")(function* (
   repoRoot: string,
@@ -92,25 +144,43 @@ const loadFile = Effect.fn("git-info.loadFile")(function* (
     ? ["diff", "--no-index", "--numstat", "--", "/dev/null", changedPath.path]
     : ["diff", "--numstat", "HEAD", "--", changedPath.path];
   const [diffResult, statResult] = yield* Effect.all(
-    [run(repoRoot, diffArguments), run(repoRoot, statArguments)],
+    [runDiff(repoRoot, diffArguments), run(repoRoot, statArguments)],
     { concurrency: "unbounded" },
   );
   const stats = parseNumstat(statResult.stdout);
-  const allDiffLines = diffResult.stdout.trimEnd().split("\n");
-  const diff =
-    allDiffLines.length > MAX_DIFF_LINES
-      ? [
-          ...allDiffLines.slice(0, MAX_DIFF_LINES),
-          `… diff truncated after ${MAX_DIFF_LINES.toLocaleString()} lines …`,
-        ]
-      : allDiffLines;
+  const diffTimedOut = diffResult.timedOut === true;
+  let diff: string[];
+  let diffTruncated = false;
+  if (diffTimedOut) {
+    diff = [DIFF_TIMED_OUT_MESSAGE];
+  } else {
+    const allDiffLines = diffResult.stdout
+      .trimEnd()
+      .split("\n")
+      .map(sanitizeDiffLine);
+    if (allDiffLines.length > MAX_DIFF_LINES) {
+      diff = [
+        ...allDiffLines.slice(0, MAX_DIFF_LINES),
+        `… diff truncated after ${MAX_DIFF_LINES.toLocaleString()} lines …`,
+      ];
+      diffTruncated = true;
+    } else {
+      diff = allDiffLines;
+    }
+    if (diffResult.truncated === true && !diffTruncated) {
+      diff = [...diff, DIFF_TRUNCATED_MESSAGE];
+      diffTruncated = true;
+    }
+    if (diff.length === 1 && diff[0] === "") {
+      diff = [NO_DIFF_MESSAGE];
+    }
+  }
 
   return {
     ...stats,
-    diff:
-      diff.length === 1 && diff[0] === ""
-        ? ["No textual diff available."]
-        : diff,
+    diff,
+    diffTimedOut,
+    diffTruncated,
     name: cleanDisplayPath(basename(changedPath.path)),
     path: cleanDisplayPath(changedPath.path),
   } satisfies ChangedFile;
@@ -119,9 +189,27 @@ const loadFile = Effect.fn("git-info.loadFile")(function* (
 export const loadChangedFiles = Effect.fn("git-info.loadChangedFiles")(
   function* (cwd: string) {
     const rootResult = yield* run(cwd, ["rev-parse", "--show-toplevel"]);
-    if (rootResult.code !== 0) return null;
+    if (rootResult.timedOut === true) {
+      return {
+        kind: "timed-out",
+        message: "Timed out while locating the repository.",
+      } satisfies ChangedFilesLoadIssue;
+    }
+    if (rootResult.code !== 0) {
+      if (isNotARepositoryError(rootResult.stderr)) return null;
+      return {
+        kind: "failed",
+        message: "Could not locate the repository.",
+      } satisfies ChangedFilesLoadIssue;
+    }
 
     const repoRoot = rootResult.stdout.trim();
+    if (!repoRoot || rootResult.truncated === true) {
+      return {
+        kind: "failed",
+        message: "Could not locate the repository.",
+      } satisfies ChangedFilesLoadIssue;
+    }
     const [statusResult, headResult] = yield* Effect.all(
       [
         run(repoRoot, [
@@ -134,7 +222,27 @@ export const loadChangedFiles = Effect.fn("git-info.loadChangedFiles")(
       ],
       { concurrency: "unbounded" },
     );
-    if (statusResult.code !== 0) return null;
+    if (statusResult.timedOut === true) {
+      return {
+        kind: "timed-out",
+        message: "Timed out while reading git status.",
+      } satisfies ChangedFilesLoadIssue;
+    }
+    // A truncated status listing is incomplete by definition; never present
+    // it as the full change list.
+    if (statusResult.truncated === true) {
+      return {
+        kind: "truncated",
+        message:
+          "Git status output was truncated; the change list may be incomplete.",
+      } satisfies ChangedFilesLoadIssue;
+    }
+    if (statusResult.code !== 0) {
+      return {
+        kind: "failed",
+        message: "Could not read git status.",
+      } satisfies ChangedFilesLoadIssue;
+    }
 
     const changedPaths = parseChangedPaths(statusResult.stdout);
     const files: ChangedFile[] = [];
@@ -193,7 +301,10 @@ export async function showChangedFiles(
       }
 
       function styleDiffLine(line: string) {
-        const expanded = line.replaceAll("\t", "    ");
+        const expanded = sanitizeDiffLine(line);
+        if (expanded.startsWith("Timed out")) {
+          return theme.fg("warning", theme.bold(expanded));
+        }
         if (
           expanded.startsWith("diff --git") ||
           expanded.startsWith("index ")
@@ -326,12 +437,17 @@ export async function showChangedFiles(
               const marker = isSelected ? "› " : "  ";
               const isBinary =
                 file.additions === null || file.deletions === null;
-              const stats = isBinary
-                ? "binary"
-                : `+${file.additions} -${file.deletions}`;
-              const styledStats = isBinary
-                ? theme.fg("success", stats)
-                : `${theme.fg("success", `+${file.additions}`)} ${theme.fg("error", `-${file.deletions}`)}`;
+              const statsTimedOut = file.diffTimedOut === true;
+              const stats = statsTimedOut
+                ? "timed out"
+                : isBinary
+                  ? "binary"
+                  : `+${file.additions} -${file.deletions}`;
+              const styledStats = statsTimedOut
+                ? theme.fg("warning", stats)
+                : isBinary
+                  ? theme.fg("success", stats)
+                  : `${theme.fg("success", `+${file.additions}`)} ${theme.fg("error", `-${file.deletions}`)}`;
               const nameWidth = Math.max(
                 1,
                 sidebarWidth - visibleWidth(marker) - visibleWidth(stats) - 1,

@@ -220,3 +220,90 @@ test('an interrupted wait leaves queued messages untouched', async () => {
     mailbox.publish(message('after interruption'))
     assert.equal(mailbox.drain()[0]?.text, 'after interruption')
 })
+
+test('a wait does not overtake an earlier in-flight delivery (deferred resolve)', async () => {
+    const mailbox = createAgentMailbox()
+    const first = mailbox.publish(message('first'))
+    assert.ok(first)
+    // Automatic delivery claims sequence 1 before awaiting the host.
+    assert.deepEqual(
+        mailbox.claim({ sequences: [first.sequence] }).map((e) => e.sequence),
+        [1]
+    )
+    const second = mailbox.publish(message('second'))
+    assert.ok(second)
+
+    let finished = false
+    const waiting = Effect.runPromise(mailbox.wait({ afterSequence: 0 })).then(
+        (result) => {
+            finished = true
+            return result
+        }
+    )
+    // Give the waiter a chance to (incorrectly) select sequence 2.
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    assert.ok(
+        finished === false,
+        'wait must block while sequence 1 is in-flight'
+    )
+    // Resolving the earlier delivery wakes the waiter without losing order.
+    mailbox.ack([first.sequence])
+    const resolved = await waiting
+    assert.deepEqual(
+        resolved.events.map((event) => event.sequence),
+        [2]
+    )
+    assert.deepEqual(
+        mailbox.peek().map((event) => event.sequence),
+        []
+    )
+})
+
+test('a wait receives the released earlier sequence in order (deferred reject)', async () => {
+    const mailbox = createAgentMailbox()
+    const first = mailbox.publish(message('first'))
+    assert.ok(first)
+    assert.deepEqual(
+        mailbox.claim({ sequences: [first.sequence] }).map((e) => e.sequence),
+        [1]
+    )
+    const second = mailbox.publish(message('second'))
+    assert.ok(second)
+
+    let finished = false
+    const waiting = Effect.runPromise(mailbox.wait({ afterSequence: 0 })).then(
+        (result) => {
+            finished = true
+            return result
+        }
+    )
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    assert.ok(
+        finished === false,
+        'wait must block while sequence 1 is in-flight'
+    )
+    // Rejecting the earlier delivery releases it for retry in original order.
+    mailbox.release([first.sequence])
+    const resolved = await waiting
+    assert.deepEqual(
+        resolved.events.map((event) => event.sequence),
+        [1, 2]
+    )
+})
+
+test('acknowledging a claim wakes a frontier-blocked waiter', async () => {
+    const mailbox = createAgentMailbox()
+    const first = mailbox.publish(message('first'))
+    assert.ok(first)
+    mailbox.claim({ sequences: [first.sequence] })
+    mailbox.publish(message('second'))
+
+    const waiting = Effect.runPromise(mailbox.wait({ afterSequence: 0 }))
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    mailbox.ack([first.sequence])
+    const result = await waiting
+    assert.deepEqual(
+        result.events.map((event) => event.sequence),
+        [2]
+    )
+})

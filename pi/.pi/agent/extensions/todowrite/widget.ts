@@ -1,17 +1,77 @@
 import type { ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { toSafeDisplayText } from "./renderers.ts";
 import {
   getTodos,
   hasVisibleTodos,
   isWidgetVisible,
   toggleWidgetVisible,
 } from "./state.ts";
+import type { Todo } from "./types.ts";
+
+/** Maximum active-work rows shown inside the widget panel. */
+export const MAX_WIDGET_CONTENT_ROWS = 5;
+
+/**
+ * Constrain the content budget further on short terminals so the widget
+ * never dominates the viewport. Unknown heights keep the full budget.
+ */
+export function contentRowBudget(terminalRows: number | undefined): number {
+  if (
+    typeof terminalRows !== "number" ||
+    !Number.isFinite(terminalRows) ||
+    terminalRows <= 0
+  ) {
+    return MAX_WIDGET_CONTENT_ROWS;
+  }
+  return Math.max(
+    1,
+    Math.min(MAX_WIDGET_CONTENT_ROWS, Math.floor(terminalRows / 4))
+  );
+}
+
+/** Plain-text content rows for the widget: active work plus one summary. */
+function buildContentRows(
+  todos: readonly Todo[],
+  budget: number
+): { text: string; status: Todo["status"] | "summary"; id?: string }[] {
+  const active = [
+    ...todos.filter((todo) => todo.status === "in_progress"),
+    ...todos.filter((todo) => todo.status === "pending"),
+  ];
+  const completed = todos.filter((todo) => todo.status === "completed").length;
+  const total = todos.length;
+  const needsSummary = completed > 0 || active.length > budget;
+  const shownActive = needsSummary
+    ? active.slice(0, Math.max(0, budget - 1))
+    : active.slice(0, budget);
+
+  const rows: {
+    text: string;
+    status: Todo["status"] | "summary";
+    id?: string;
+  }[] = shownActive.map((todo) => ({
+    text: `[${toSafeDisplayText(todo.id)}] ${toSafeDisplayText(todo.content)}`,
+    status: todo.status,
+    id: todo.id,
+  }));
+
+  if (needsSummary) {
+    const hidden = active.length - shownActive.length;
+    const parts: string[] = [];
+    if (hidden > 0) parts.push(`+${hidden} more`);
+    if (total > 0) parts.push(`${completed}/${total} done`);
+    rows.push({ text: parts.join("  "), status: "summary" });
+  }
+  return rows;
+}
 
 /** Build a compact checklist widget. */
 function buildWidgetLines(
   theme: Theme,
   width: number,
-  sessionId: string
+  sessionId: string,
+  terminalRows?: number
 ): string[] {
   const todos = getTodos(sessionId);
 
@@ -21,15 +81,16 @@ function buildWidgetLines(
     const summary = todos
       .map(
         (todo) =>
-          `${todo.status === "completed" ? "✓" : todo.status === "in_progress" ? "→" : "□"} ${todo.content}`
+          `${todo.status === "completed" ? "✓" : todo.status === "in_progress" ? "→" : "□"} ${toSafeDisplayText(todo.content)}`
       )
       .join(" ");
     return [truncateToWidth(summary, width, "")];
   }
 
   const titleText = "todos";
-  const maxItemWidth = todos.reduce((max, todo) => {
-    return Math.max(max, visibleWidth(todo.content) + 2);
+  const contentRows = buildContentRows(todos, contentRowBudget(terminalRows));
+  const maxItemWidth = contentRows.reduce((max, row) => {
+    return Math.max(max, visibleWidth(row.text) + 2);
   }, visibleWidth(titleText));
 
   const panelWidth = Math.min(
@@ -53,19 +114,19 @@ function buildWidgetLines(
   );
 
   const lines: string[] = [top];
-  for (const todo of todos) {
+  for (const row of contentRows) {
     let marker: string;
     let text: string;
 
-    if (todo.status === "in_progress") {
+    if (row.status === "in_progress") {
       marker = theme.fg("accent", "→");
-      text = theme.fg("text", todo.content);
-    } else if (todo.status === "completed") {
-      marker = theme.fg("success", "✓");
-      text = theme.fg("dim", theme.strikethrough(todo.content));
+      text = theme.fg("text", row.text);
+    } else if (row.status === "summary") {
+      marker = theme.fg("dim", "·");
+      text = theme.fg("dim", row.text);
     } else {
       marker = theme.fg("dim", "□");
-      text = theme.fg("muted", todo.content);
+      text = theme.fg("muted", row.text);
     }
 
     const content = truncateToWidth(marker + " " + text, innerWidth, "");
@@ -102,9 +163,14 @@ export function refreshWidget(ctx: ExtensionContext): void {
     return;
   }
 
-  ctx.ui.setWidget("todowrite", (_tui, theme) => ({
+  ctx.ui.setWidget("todowrite", (tui, theme) => ({
     render(width: number): string[] {
-      return buildWidgetLines(theme, width, sessionId);
+      const terminalRows =
+        typeof (tui as { terminal?: { rows?: unknown } })?.terminal?.rows ===
+        "number"
+          ? (tui as { terminal: { rows: number } }).terminal.rows
+          : undefined;
+      return buildWidgetLines(theme, width, sessionId, terminalRows);
     },
     invalidate(): void {},
   }));

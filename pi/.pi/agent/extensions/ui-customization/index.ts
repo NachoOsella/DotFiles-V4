@@ -14,17 +14,23 @@ import {
 import {
   DISCORD_ACTIVITY_CHANNEL,
   emptyGitInfoState,
-  // [LSP-UI-DISABLED] emptyLspInfoState,
   emptyModelInfoState,
   GIT_INFO_CHANNEL,
-  // [LSP-UI-DISABLED] LSP_INFO_CHANNEL,
   MODEL_INFO_CHANNEL,
   REFRESH_CHANNEL,
   isDiscordActivityState,
   isGitInfoState,
-  // [LSP-UI-DISABLED] isLspInfoState,
   isModelInfoState,
+  sanitizeGitInfoState,
+  sanitizeModelInfoState,
 } from "../shared/dashboard-state.ts";
+import {
+  appendOverflowIndicator,
+  columns,
+  fitFooterSegments,
+  normalizeWidth,
+  packExtensionStatuses,
+} from "./src/dashboard-layout.ts";
 
 interface RenderableNode {
   children?: RenderableNode[];
@@ -51,6 +57,13 @@ const TITLE_LINES = [
 const ANSI_PATTERN =
   /[\u001B\u009B][[\]()#;?]*(?:(?:(?:[a-zA-Z\d]*(?:;[a-zA-Z\d]*)*)?\u0007)|(?:(?:\d{1,4}(?:;\d{0,4})*)?[\dA-PR-TZcf-nq-uy=><~]))/g;
 
+// Limitation (P11 step 4): pi exposes no public API to hide the theme
+// resource section, so the recursive private-tree splice below is retained
+// pending approval. Do NOT replace it with another private-tree hack; if
+// approval never comes, the section stays visible and this comment records
+// why. Header defaults are likewise unchanged without approval: the
+// compact one-line policy lives as a tested pure helper
+// (buildHeaderLines in ./src/dashboard-layout.ts) and is not wired here.
 function hasChildren(
   component: RenderableNode,
 ): component is RenderableNode & { children: RenderableNode[] } {
@@ -92,12 +105,6 @@ function hideThemesSection(component: RenderableNode) {
   return false;
 }
 
-function formatTokens(tokens: number) {
-  if (tokens < 1_000) return `${tokens}`;
-  if (tokens < 1_000_000) return `${Math.round(tokens / 1_000)}k`;
-  return `${(tokens / 1_000_000).toFixed(1)}m`;
-}
-
 function formatDirectory(cwd: string) {
   const home = homedir();
   if (cwd === home) return "~";
@@ -110,31 +117,10 @@ function center(text: string, width: number) {
   return truncateToWidth(`${" ".repeat(padding)}${text}`, width);
 }
 
-function columns(left: string, right: string, width: number) {
-  if (!right) return truncateToWidth(left, width);
-
-  const naturalGap = width - visibleWidth(left) - visibleWidth(right);
-  if (naturalGap >= 1) return `${left}${" ".repeat(naturalGap)}${right}`;
-
-  const leftWidth = Math.max(1, Math.floor(width * 0.45));
-  const rightWidth = Math.max(1, width - leftWidth - 1);
-  const fittedLeft = truncateToWidth(left, leftWidth);
-  const fittedRight = truncateToWidth(right, rightWidth);
-  const gap = Math.max(
-    1,
-    width - visibleWidth(fittedLeft) - visibleWidth(fittedRight),
-  );
-  return truncateToWidth(
-    `${fittedLeft}${" ".repeat(gap)}${fittedRight}`,
-    width,
-  );
-}
-
 export default function uiCustomization(pi: ExtensionAPI) {
   let title = "pi";
   let modelInfo = emptyModelInfoState();
   let gitInfo = emptyGitInfoState();
-  // [LSP-UI-DISABLED] let lspInfo = emptyLspInfoState();
   let discordActivityActive = false;
   let requestRender: (() => void) | undefined;
   let activeTui: DashboardTui | undefined;
@@ -142,21 +128,17 @@ export default function uiCustomization(pi: ExtensionAPI) {
 
   const stopModelListener = pi.events.on(MODEL_INFO_CHANNEL, (value) => {
     if (!isModelInfoState(value)) return;
-    modelInfo = value;
+    // Finite-number sanitization at consumption: the shared validator
+    // accepts legacy payloads as-is, so NaN/Infinity are rejected here.
+    modelInfo = sanitizeModelInfoState(value);
     requestRender?.();
   });
 
   const stopGitListener = pi.events.on(GIT_INFO_CHANNEL, (value) => {
     if (!isGitInfoState(value)) return;
-    gitInfo = value;
+    gitInfo = sanitizeGitInfoState(value);
     requestRender?.();
   });
-
-  // [LSP-UI-DISABLED] const stopLspListener = pi.events.on(LSP_INFO_CHANNEL, (value) => {
-  // [LSP-UI-DISABLED]   if (!isLspInfoState(value)) return;
-  // [LSP-UI-DISABLED]   lspInfo = value;
-  // [LSP-UI-DISABLED]   requestRender?.();
-  // [LSP-UI-DISABLED] });
 
   const stopDiscordActivityListener = pi.events.on(
     DISCORD_ACTIVITY_CHANNEL,
@@ -182,6 +164,9 @@ export default function uiCustomization(pi: ExtensionAPI) {
 
   function install(ctx: ExtensionContext) {
     if (ctx.mode !== "tui") return;
+
+    // Resolved once per session: render must not do filesystem/process work.
+    const formattedDirectory = formatDirectory(ctx.cwd);
 
     ctx.ui.setHeader((tui, theme) => {
       activeTui = tui;
@@ -210,62 +195,79 @@ export default function uiCustomization(pi: ExtensionAPI) {
       return {
         invalidate() {},
         render(width: number) {
-          const directory = theme.fg("text", formatDirectory(ctx.cwd));
-          const fileLabel = gitInfo.changedFiles === 1 ? "file" : "files";
-          let git = gitInfo.branch
-            ? `${gitInfo.branch} · ${gitInfo.changedFiles} ${fileLabel} changed`
-            : "";
+          const safeWidth = normalizeWidth(width);
+          // `~` marks live streaming estimates; measured cadences render
+          // bare. Falls back to the generating flag for payloads that
+          // predate throughputIsEstimate.
+          const isEstimate =
+            modelInfo.throughputIsEstimate ?? modelInfo.generating;
+          const fit = fitFooterSegments({
+            width: safeWidth,
+            directory: formattedDirectory,
+            provider: modelInfo.provider,
+            modelId: modelInfo.modelId,
+            thinking: modelInfo.thinking,
+            contextPercent: modelInfo.contextPercent,
+            contextWindow: modelInfo.contextWindow,
+            cost: modelInfo.cost,
+            tokensPerSecond: modelInfo.tokensPerSecond,
+            throughputIsEstimate: isEstimate,
+            branch: gitInfo.branch,
+            changedFiles: gitInfo.changedFiles,
+            pullRequestNumber: gitInfo.pullRequest?.number ?? null,
+            // Forward-compatible freshness: git-info does not emit stale
+            // yet (follow-up on the producer side); absent means fresh.
+            gitStale: gitInfo.stale,
+          });
 
-          if (gitInfo.pullRequest) {
+          const directory = theme.fg("text", fit.row1Left);
+          // Reattach the PR hyperlink when the PR segment survived
+          // degradation. The fitted label carries the exact `PR #N` text.
+          let gitDisplay = fit.row2Right;
+          if (!fit.dropped.includes("pr") && gitInfo.pullRequest) {
             const prLabel = `PR #${gitInfo.pullRequest.number}`;
             const linkedPr = getCapabilities().hyperlinks
               ? hyperlink(prLabel, gitInfo.pullRequest.url)
               : prLabel;
-            git += ` · ${linkedPr}`;
+            gitDisplay = gitDisplay.replace(prLabel, linkedPr);
           }
 
-          const contextPercent =
-            modelInfo.contextPercent === null
-              ? "?"
-              : `${Math.round(modelInfo.contextPercent)}`;
-          const contextWindow =
-            modelInfo.contextWindow > 0
-              ? formatTokens(modelInfo.contextWindow)
-              : "?";
-          const tps =
-            modelInfo.tokensPerSecond === null
-              ? "— tok/s"
-              : `${Math.round(modelInfo.tokensPerSecond)} tok/s`;
-          const usage = `${contextPercent}%/${contextWindow} · $${modelInfo.cost.toFixed(2)} · ${tps}`;
-          const model = modelInfo.provider
-            ? `${modelInfo.provider}/${modelInfo.modelId} · ${modelInfo.thinking}`
-            : modelInfo.modelId;
-          const discordActivityDot = discordActivityActive
-            ? theme.fg("borderAccent", "●")
-            : "";
-          const modelStatus = discordActivityDot
-            ? `${theme.fg("muted", model)} ${discordActivityDot}`
-            : theme.fg("muted", model);
+          // Active-work indicator takes priority over truncation; columns()
+          // truncates only as a last resort.
+          let modelStatus = theme.fg("muted", fit.row1Right);
+          if (discordActivityActive) {
+            modelStatus += ` ${theme.fg("borderAccent", "●")}`;
+          }
 
           const lines = [
-            columns(directory, modelStatus, width),
-            columns(theme.fg("muted", usage), theme.fg("muted", git), width),
-            // [LSP-UI-DISABLED] truncateToWidth(
-            // [LSP-UI-DISABLED]   theme.fg("dim", lspInfo.message),
-            // [LSP-UI-DISABLED]   width,
-            // [LSP-UI-DISABLED]   theme.fg("dim", "..."),
-            // [LSP-UI-DISABLED] ),
+            columns(directory, modelStatus, safeWidth),
+            columns(
+              theme.fg("muted", fit.row2Left),
+              theme.fg("muted", gitDisplay),
+              safeWidth,
+            ),
           ];
 
-          // Extension statuses render after the two dashboard lines, one per row.
+          // Extension statuses pack into a single overflow row. Statuses are
+          // opaque text (never parsed); anything that does not fit is
+          // counted as `+N more`, never silently deleted.
           const statuses = footerData.getExtensionStatuses();
           const statusLines = Array.from(statuses.entries())
             .sort(([a], [b]) => a.localeCompare(b))
             .flatMap(([, text]) => text.split("\n"));
-          for (const statusLine of statusLines) {
+          const packed = packExtensionStatuses(statusLines, safeWidth, 1);
+          if (packed.lines.length > 0) {
             lines.push(
-              truncateToWidth(statusLine, width, theme.fg("dim", "...")),
+              packed.overflow > 0
+                ? appendOverflowIndicator(
+                    packed.lines[0]!,
+                    packed.overflow,
+                    safeWidth,
+                  )
+                : packed.lines[0]!,
             );
+          } else if (packed.overflow > 0) {
+            lines.push(truncateToWidth(`+${packed.overflow} more`, safeWidth));
           }
 
           return lines;
@@ -281,7 +283,6 @@ export default function uiCustomization(pi: ExtensionAPI) {
     title = formatDirectory(ctx.cwd);
     modelInfo = emptyModelInfoState();
     gitInfo = emptyGitInfoState();
-    // [LSP-UI-DISABLED] lspInfo = emptyLspInfoState();
     discordActivityActive = false;
     install(ctx);
   });
@@ -293,7 +294,6 @@ export default function uiCustomization(pi: ExtensionAPI) {
   pi.on("session_shutdown", (_event, ctx) => {
     stopModelListener();
     stopGitListener();
-    // [LSP-UI-DISABLED] stopLspListener();
     stopDiscordActivityListener();
     for (const timer of themeRemovalTimers) clearTimeout(timer);
     themeRemovalTimers = [];

@@ -21,13 +21,46 @@ import {
     formatModelWithThinking,
     type SubagentSnapshot,
 } from '../domain.ts'
-import { formatContextUtilization } from '../format.ts'
+import {
+    countSubagentStates,
+    formatContextUtilization,
+    subagentDisplayState,
+    type SubagentDisplayState,
+} from '../format.ts'
 import type { SubagentReadModel } from '../manager.ts'
 import { buildTranscriptLines, sanitizeText } from './transcript.ts'
 
 /** Dialog width; clamped by the TUI to the terminal width. */
 const OVERLAY_WIDTH = 120
 const TRANSCRIPT_SCROLL_STEP = 6
+/** Below this width (or row count) both views drop box chrome for plain lines. */
+const BORDERLESS_MIN_WIDTH = 12
+const BORDERLESS_MIN_ROWS = 6
+
+/** Explicit blocking-question source, derived from mailbox/report state. */
+export interface SubagentViewOptions {
+    /** Returns true while the subagent waits on a parent decision. */
+    readonly hasPendingQuestion?: (id: string) => boolean
+}
+
+function questionOf(options?: SubagentViewOptions) {
+    return options?.hasPendingQuestion
+}
+
+/** Elapsed-time tickers only matter while something can visibly change. */
+export function dashboardNeedsTicker(
+    subs: ReadonlyArray<Pick<SubagentSnapshot, 'status'>>
+): boolean {
+    return subs.some((snap) => snap.status === 'running')
+}
+
+export function takeoverNeedsTicker(snap: SubagentSnapshot | undefined): boolean {
+    if (!snap) return false
+    if (snap.status === 'running') return true
+    if (snap.liveAssistant?.text.trim() || snap.liveAssistant?.thinking.trim())
+        return true
+    return snap.liveTools.length > 0
+}
 
 function oneLine(text: string) {
     return sanitizeText(text.replace(/\s+/g, ' ')).trim()
@@ -40,27 +73,42 @@ function configuredKeys(
     return keybindings.getKeys(binding).join('/') || 'unbound'
 }
 
-function statusGlyph(snap: SubagentSnapshot, theme: Theme): string {
-    switch (snap.status) {
+function statusGlyph(
+    state: SubagentDisplayState,
+    theme: Theme
+): string {
+    switch (state) {
         case 'running':
+        case 'needs-answer':
             return theme.fg('warning', '■')
-        case 'done':
-            return theme.fg('success', '■')
-        case 'error':
-            return theme.fg('error', '■')
+        case 'queued':
         case 'closed':
             return theme.fg('muted', '■')
+        case 'done':
+            return theme.fg('success', '■')
+        case 'failed':
+        case 'interrupted':
+            return theme.fg('error', '■')
     }
 }
 
-function statusWord(snap: SubagentSnapshot, theme: Theme): string {
-    switch (snap.status) {
+function statusWord(
+    state: SubagentDisplayState,
+    theme: Theme
+): string {
+    switch (state) {
         case 'running':
             return theme.fg('warning', 'running')
+        case 'needs-answer':
+            return theme.fg('accent', 'needs answer')
+        case 'queued':
+            return theme.fg('muted', 'queued')
         case 'done':
             return theme.fg('success', 'done')
-        case 'error':
+        case 'failed':
             return theme.fg('error', 'failed')
+        case 'interrupted':
+            return theme.fg('error', 'interrupted')
         case 'closed':
             return theme.fg('muted', 'closed')
     }
@@ -108,11 +156,100 @@ function bar(
     )
 }
 
+function terminalRows(tui: TUI): number {
+    const rows = tui.terminal.rows ?? 30
+    return Number.isFinite(rows) ? Math.floor(rows) : 30
+}
+
+/**
+ * Final safety net for the rendering contract: no more than `rows` lines and
+ * no line wider than `width` (ANSI-aware). Borderless and framed paths build
+ * within budget already; this only guards against a miscounted label.
+ */
+function clampLines(lines: string[], width: number, rows: number): string[] {
+    if (width <= 0 || rows <= 0) return []
+    const capped = lines.slice(0, Math.max(0, rows))
+    let dirty = capped.length !== lines.length
+    const out = capped.map((line) => {
+        if (visibleWidth(line) <= width) return line
+        dirty = true
+        return truncateToWidth(line, width)
+    })
+    void dirty
+    return out
+}
+
+function useBorderless(width: number, rows: number): boolean {
+    return width < BORDERLESS_MIN_WIDTH || rows < BORDERLESS_MIN_ROWS
+}
+
+export interface ScrollWindow {
+    /** First visible agent index. */
+    readonly start: number
+    /** Number of visible agent rows. */
+    readonly size: number
+    /** Agents hidden above the window (own indicator line when > 0). */
+    readonly topMore: number
+    /** Agents hidden below the window (own indicator line when > 0). */
+    readonly bottomMore: number
+}
+
+/**
+ * Largest scroll window (up to `cap` agent rows) that keeps `selIndex`
+ * visible. Scroll indicators are reported separately so callers render them
+ * on their own lines instead of replacing selectable agent rows.
+ */
+export function fitScrollWindow(
+    count: number,
+    cap: number,
+    selIndex: number
+): ScrollWindow {
+    const sel =
+        count === 0 ? 0 : Math.min(Math.max(0, selIndex), count - 1)
+    if (cap <= 0 || count === 0)
+        return { start: sel, size: 0, topMore: 0, bottomMore: 0 }
+    if (count <= cap)
+        return { start: 0, size: count, topMore: 0, bottomMore: 0 }
+    if (cap === 1)
+        return { start: sel, size: 1, topMore: 0, bottomMore: 0 }
+    const windowStart = (size: number) =>
+        Math.min(Math.max(0, sel - Math.floor(size / 2)), count - size)
+    for (let size = cap; size >= 1; size--) {
+        const start = windowStart(size)
+        const topMore = start
+        const bottomMore = count - start - size
+        if (size + (topMore > 0 ? 1 : 0) + (bottomMore > 0 ? 1 : 0) <= cap) {
+            return { start, size, topMore, bottomMore }
+        }
+    }
+    return { start: sel, size: 1, topMore: 0, bottomMore: 0 }
+}
+
+function plainStatusWord(state: SubagentDisplayState): string {
+    switch (state) {
+        case 'running':
+            return 'running'
+        case 'needs-answer':
+            return 'needs answer'
+        case 'queued':
+            return 'queued'
+        case 'done':
+            return 'done'
+        case 'failed':
+            return 'failed'
+        case 'interrupted':
+            return 'interrupted'
+        case 'closed':
+            return 'closed'
+    }
+}
+
 // --- Entry point ---------------------------------------------------------------
 
 export async function openSubagentPicker(
     ctx: ExtensionCommandContext,
-    view: SubagentReadModel
+    view: SubagentReadModel,
+    options?: SubagentViewOptions
 ) {
     const selection: DashboardSelection = { index: 0 }
 
@@ -130,7 +267,8 @@ export async function openSubagentPicker(
                     keybindings,
                     view,
                     selection,
-                    done
+                    done,
+                    options
                 ),
             {
                 overlay: true,
@@ -147,7 +285,15 @@ export async function openSubagentPicker(
 
         await ctx.ui.custom<null>(
             (tui, theme, keybindings, done) =>
-                new TakeoverView(tui, theme, keybindings, picked, view, done),
+                new TakeoverView(
+                    tui,
+                    theme,
+                    keybindings,
+                    picked,
+                    view,
+                    done,
+                    options
+                ),
             {
                 overlay: true,
                 overlayOptions: {
@@ -192,9 +338,10 @@ export class SubagentDashboard implements Component {
     private view: SubagentReadModel
     private selection: DashboardSelection
     private done: (value: string | null) => void
+    private hasPendingQuestion?: (id: string) => boolean
 
     private closed = false
-    private ticker: ReturnType<typeof setInterval>
+    private ticker?: ReturnType<typeof setInterval>
     private unsubChange: () => void
 
     constructor(
@@ -203,7 +350,8 @@ export class SubagentDashboard implements Component {
         keybindings: KeybindingsManager,
         view: SubagentReadModel,
         selection: DashboardSelection,
-        done: (value: string | null) => void
+        done: (value: string | null) => void,
+        options?: SubagentViewOptions
     ) {
         this.tui = tui
         this.theme = theme
@@ -211,9 +359,23 @@ export class SubagentDashboard implements Component {
         this.view = view
         this.selection = selection
         this.done = done
-        // Elapsed times and statuses tick along at 1Hz.
-        this.ticker = setInterval(() => this.tui.requestRender(), 1000)
-        this.unsubChange = view.subscribe(() => this.tui.requestRender())
+        this.hasPendingQuestion = questionOf(options)
+        this.unsubChange = view.subscribe(() => {
+            this.syncTicker()
+            this.tui.requestRender()
+        })
+        // Elapsed times tick along at 1Hz only while an agent can change.
+        this.syncTicker()
+    }
+
+    private syncTicker() {
+        const needs = dashboardNeedsTicker(this.subs())
+        if (needs && !this.ticker) {
+            this.ticker = setInterval(() => this.tui.requestRender(), 1000)
+        } else if (!needs && this.ticker) {
+            clearInterval(this.ticker)
+            this.ticker = undefined
+        }
     }
 
     private subs(): ReadonlyArray<SubagentSnapshot> {
@@ -223,7 +385,8 @@ export class SubagentDashboard implements Component {
     private cleanup() {
         if (this.closed) return false
         this.closed = true
-        clearInterval(this.ticker)
+        if (this.ticker) clearInterval(this.ticker)
+        this.ticker = undefined
         this.unsubChange()
         return true
     }
@@ -249,7 +412,7 @@ export class SubagentDashboard implements Component {
             if (snap) this.close(snap.id)
             return
         }
-        if (this.keybindings.matches(data, 'tui.select.up') || data === 'k') {
+        if (this.keybindings.matches(data, 'tui.select.up')) {
             if (subs.length > 0) {
                 this.selection.index =
                     (this.selection.index - 1 + subs.length) % subs.length
@@ -258,7 +421,7 @@ export class SubagentDashboard implements Component {
             }
             return
         }
-        if (this.keybindings.matches(data, 'tui.select.down') || data === 'j') {
+        if (this.keybindings.matches(data, 'tui.select.down')) {
             if (subs.length > 0) {
                 this.selection.index = (this.selection.index + 1) % subs.length
                 this.selection.id = subs[this.selection.index]?.id
@@ -266,7 +429,7 @@ export class SubagentDashboard implements Component {
             }
             return
         }
-        if (data === 'x') {
+        if (this.keybindings.matches(data, 'app.clear')) {
             const snap = subs[this.selection.index]
             if (snap && snap.status === 'running')
                 this.view.requestAbort(snap.id)
@@ -282,19 +445,104 @@ export class SubagentDashboard implements Component {
     }
 
     render(width: number): string[] {
-        const theme = this.theme
         const subs = this.subs()
         reconcileDashboardSelection(this.selection, subs)
+        const rows = terminalRows(this.tui)
+        if (width <= 0 || rows <= 0) return []
+        if (useBorderless(width, rows)) {
+            return clampLines(
+                this.renderBorderless(subs, width, rows),
+                width,
+                rows
+            )
+        }
+        return clampLines(this.renderFramed(subs, width, rows), width, rows)
+    }
 
-        const rows = this.tui.terminal.rows ?? 30
-        const innerWidth = Math.max(10, width - 2)
-        // Content-sized dialog: shell (title + summary + bar) plus one row per
-        // agent, but never taller than the terminal minus a small margin.
-        const bodyHeight = Math.min(
-            Math.max(1, subs.length),
-            Math.max(3, rows - 7)
+    /** Plain-words status for the borderless fallback (no ANSI, no symbols). */
+    private borderlessRow(
+        snap: SubagentSnapshot,
+        isSelected: boolean,
+        width: number
+    ): string {
+        const state = subagentDisplayState(snap, this.hasPendingQuestion)
+        const marker = isSelected ? '>' : ' '
+        return truncateToWidth(
+            `${marker} ${oneLine(snap.id)} ${oneLine(snap.taskName ?? snap.title)} ${plainStatusWord(state)}`,
+            width
         )
+    }
 
+    /**
+     * Borderless fallback for narrow/short terminals: title, a scroll window
+     * that always keeps the selected agent visible, and the cancel hint.
+     * Scroll indicators are separate lines, never replacement rows.
+     */
+    private renderBorderless(
+        subs: ReadonlyArray<SubagentSnapshot>,
+        width: number,
+        rows: number
+    ): string[] {
+        const theme = this.theme
+        if (subs.length === 0) {
+            return [
+                truncateToWidth('Subagents (0)', width),
+                truncateToWidth(theme.fg('dim', 'no subagents'), width),
+            ]
+        }
+        const selected =
+            subs[this.selection.index] ?? subs[subs.length - 1]!
+        if (rows === 1) return [this.borderlessRow(selected, true, width)]
+        const position = `${this.selection.index + 1}/${subs.length}`
+        const title =
+            visibleWidth(`Subagents (${subs.length}) ${position}`) <= width
+                ? `Subagents (${subs.length}) ${position}`
+                : visibleWidth(position) <= width
+                  ? position
+                  : `Subagents (${subs.length})`
+        const lines: string[] = [truncateToWidth(title, width)]
+        const hint = truncateToWidth(
+            `${configuredKeys(this.keybindings, 'tui.select.cancel')} close`,
+            width
+        )
+        const roomForHint = rows >= 3 ? 1 : 0
+        const bodyCap = Math.max(0, rows - 1 - roomForHint)
+        const win = fitScrollWindow(subs.length, bodyCap, this.selection.index)
+        if (win.topMore > 0 && win.size > 0)
+            lines.push(
+                truncateToWidth(
+                    theme.fg('dim', `... ${win.topMore} more`),
+                    width
+                )
+            )
+        for (let i = 0; i < win.size; i++) {
+            const snap = subs[win.start + i]!
+            lines.push(
+                this.borderlessRow(
+                    snap,
+                    win.start + i === this.selection.index,
+                    width
+                )
+            )
+        }
+        if (win.bottomMore > 0 && win.size > 0)
+            lines.push(
+                truncateToWidth(
+                    theme.fg('dim', `... ${win.bottomMore} more`),
+                    width
+                )
+            )
+        if (roomForHint > 0) lines.push(hint)
+        return lines
+    }
+
+    private renderFramed(
+        subs: ReadonlyArray<SubagentSnapshot>,
+        width: number,
+        rows: number
+    ): string[] {
+        const theme = this.theme
+        const innerWidth = width - 2
         const lines: string[] = []
 
         // Title bar: ╭─ Subagents ──────────── 5 agents ─╮
@@ -310,102 +558,125 @@ export class SubagentDashboard implements Component {
             )
         )
 
-        // Rows
+        // Body budget: title + summary + bottom bar already account for 3 of
+        // `rows`; scroll indicators take their own lines outside agent rows.
         const divider = theme.fg('border', '│')
-        const rowLines = this.renderRows(subs, innerWidth, bodyHeight)
-        for (let i = 0; i < bodyHeight; i++) {
+        const framedRow = (content: string) =>
+            divider + this.pad(content, innerWidth) + divider
+        const bodyCap = Math.max(1, rows - 3)
+        const win = fitScrollWindow(subs.length, bodyCap, this.selection.index)
+        if (win.topMore > 0)
             lines.push(
-                divider + this.pad(rowLines[i] ?? '', innerWidth) + divider
+                framedRow(theme.fg('dim', `   … ${win.topMore} more`))
+            )
+        for (let i = 0; i < win.size; i++) {
+            const index = win.start + i
+            const snap = subs[index]!
+            lines.push(
+                framedRow(
+                    this.rowContent(snap, index === this.selection.index, innerWidth)
+                )
             )
         }
+        if (win.bottomMore > 0)
+            lines.push(
+                framedRow(theme.fg('dim', `   … ${win.bottomMore} more`))
+            )
 
-        // Status summary: ■ 2 running · ■ 1 done · ■ 1 failed
-        const running = subs.filter((s) => s.status === 'running').length
-        const done = subs.filter((s) => s.status === 'done').length
-        const failed = subs.length - running - done
-        const dot = theme.fg('dim', ' · ')
-        const counts: string[] = []
-        if (running > 0)
-            counts.push(theme.fg('warning', `■ ${running} running`))
-        if (done > 0) counts.push(theme.fg('success', `■ ${done} done`))
-        if (failed > 0) counts.push(theme.fg('error', `■ ${failed} failed`))
-        lines.push(
-            divider +
-                this.pad(
-                    ` ${counts.length > 0 ? counts.join(dot) : theme.fg('dim', 'no subagents')} `,
-                    innerWidth
-                ) +
-                divider
-        )
+        // Status summary with consistent buckets (closed is not failure).
+        lines.push(framedRow(` ${this.summaryContent(subs)} `))
 
-        // Bottom bar: ╰─ ───────────── esc close · x stop ─╯
-        const hints = `${configuredKeys(this.keybindings, 'tui.select.cancel')} close · x stop `
+        // Bottom bar keeps the cancel/confirm/stop hints (cancel first so it
+        // survives truncation) plus a selected-position counter when it fits.
+        const hints =
+            `${configuredKeys(this.keybindings, 'tui.select.cancel')} close · ` +
+            `${configuredKeys(this.keybindings, 'tui.select.confirm')} inspect · ` +
+            `${configuredKeys(this.keybindings, 'app.clear')} stop`
+        const position =
+            subs.length > 0
+                ? ` ${this.selection.index + 1}/${subs.length} `
+                : ''
         lines.push(
-            bar(theme, '╰', '╯', theme.fg('dim', ` ${hints}`), '', innerWidth)
+            bar(
+                theme,
+                '╰',
+                '╯',
+                theme.fg('dim', ` ${hints} `),
+                position ? theme.fg('muted', position) : '',
+                innerWidth
+            )
         )
 
         return lines
     }
 
-    private renderRows(
-        subs: ReadonlyArray<SubagentSnapshot>,
-        width: number,
-        height: number
-    ): string[] {
+    private summaryContent(subs: ReadonlyArray<SubagentSnapshot>): string {
         const theme = this.theme
-        const out: string[] = []
-
-        // Scroll window around selection
-        let start = 0
-        if (subs.length > height) {
-            start = Math.min(
-                Math.max(0, this.selection.index - Math.floor(height / 2)),
-                subs.length - height
+        if (subs.length === 0) return theme.fg('dim', 'no subagents')
+        const counts = countSubagentStates(subs, this.hasPendingQuestion)
+        const dot = theme.fg('dim', ' · ')
+        const parts: string[] = []
+        if (counts.running > 0)
+            parts.push(theme.fg('warning', `■ ${counts.running} running`))
+        if (counts.queued > 0)
+            parts.push(theme.fg('muted', `■ ${counts.queued} queued`))
+        if (counts.done > 0)
+            parts.push(theme.fg('success', `■ ${counts.done} done`))
+        if (counts.failed > 0)
+            parts.push(theme.fg('error', `■ ${counts.failed} failed`))
+        if (counts.interrupted > 0)
+            parts.push(
+                theme.fg('error', `■ ${counts.interrupted} interrupted`)
             )
+        if (counts.closed > 0)
+            parts.push(theme.fg('muted', `■ ${counts.closed} closed`))
+        // The caller pads/truncates to the available inner width.
+        return parts.join(dot)
+    }
+
+    /**
+     * One agent row within `width`: marker, status, task, then optional
+     * metadata (role/id, elapsed, status word) widest-first. Truncation cuts
+     * from the right so the selection marker and task start always survive.
+     */
+    private rowContent(
+        snap: SubagentSnapshot,
+        isSelected: boolean,
+        width: number
+    ): string {
+        const theme = this.theme
+        const state = subagentDisplayState(snap, this.hasPendingQuestion)
+        const marker = isSelected ? theme.fg('accent', '❯') : ' '
+        const task = oneLine(snap.taskName ?? snap.title)
+        const title = isSelected
+            ? theme.fg('accent', task)
+            : theme.fg('text', task)
+        const leftCore = ` ${marker} ${statusGlyph(state, theme)} ${title}`
+        const meta = theme.fg(
+            'dim',
+            `· ${oneLine(snap.role ?? 'default')} · ${oneLine(snap.id)}`
+        )
+        const word = statusWord(state, theme)
+        const fullRight = `${theme.fg('muted', formatElapsed(snap))} ${word}`
+
+        let right = ''
+        if (visibleWidth(leftCore) + 1 + visibleWidth(word) <= width) {
+            right =
+                visibleWidth(leftCore) + 1 + visibleWidth(fullRight) <= width
+                    ? fullRight
+                    : word
         }
-        const visible = subs.slice(start, start + height)
-
-        for (let i = 0; i < visible.length; i++) {
-            const snap = visible[i]
-            const index = start + i
-            const isSelected = index === this.selection.index
-
-            // Left: marker, status square, task, role, and id.
-            const marker = isSelected ? theme.fg('accent', '❯') : ' '
-            const task = snap.taskName ?? snap.title
-            const title = isSelected
-                ? theme.fg('accent', oneLine(task))
-                : theme.fg('text', oneLine(task))
-            const left = ` ${marker} ${statusGlyph(snap, theme)} ${title} ${theme.fg('dim', `· ${snap.role ?? 'default'} · ${snap.id}`)}`
-
-            // Right: elapsed · status
-            const right = `${theme.fg('muted', formatElapsed(snap))} ${statusWord(snap, theme)} `
-
-            const rightWidth = visibleWidth(right)
-            const leftMax = Math.max(0, width - rightWidth - 2)
-            const leftTruncated = truncateToWidth(left, leftMax)
-            const gap = Math.max(
-                2,
-                width - visibleWidth(leftTruncated) - rightWidth
-            )
-            out.push(
-                truncateToWidth(leftTruncated + ' '.repeat(gap) + right, width)
-            )
+        let left = leftCore
+        if (
+            visibleWidth(left) + 1 + visibleWidth(meta) +
+                (right ? 1 + visibleWidth(right) : 0) <=
+            width
+        ) {
+            left += ` ${meta}`
         }
-
-        if (start > 0) {
-            out[0] = truncateToWidth(
-                theme.fg('dim', `   … ${start} more`),
-                width
-            )
-        }
-        if (start + height < subs.length) {
-            out[out.length - 1] = truncateToWidth(
-                theme.fg('dim', `   … ${subs.length - start - height} more`),
-                width
-            )
-        }
-        return out
+        if (!right) return truncateToWidth(left, width)
+        const gap = Math.max(1, width - visibleWidth(left) - visibleWidth(right))
+        return truncateToWidth(left + ' '.repeat(gap) + right, width)
     }
 
     invalidate(): void {}
@@ -457,8 +728,9 @@ export class TakeoverView implements Component, Focusable {
     private transcriptLines: string[] = []
     private unsubscribe: () => void
     private renderTimer?: ReturnType<typeof setTimeout>
-    private ticker: ReturnType<typeof setInterval>
+    private ticker?: ReturnType<typeof setInterval>
     private closed = false
+    private hasPendingQuestion?: (id: string) => boolean
 
     private _focused = false
     get focused(): boolean {
@@ -475,7 +747,8 @@ export class TakeoverView implements Component, Focusable {
         keybindings: KeybindingsManager,
         id: string,
         view: SubagentReadModel,
-        done: (value: null) => void
+        done: (value: null) => void,
+        options?: SubagentViewOptions
     ) {
         this.tui = tui
         this.theme = theme
@@ -483,12 +756,15 @@ export class TakeoverView implements Component, Focusable {
         this.id = id
         this.view = view
         this.done = done
+        this.hasPendingQuestion = questionOf(options)
         this.unsubscribe = view.subscribeTo(id, () => {
             this.hasPendingSnapshotUpdate = true
+            this.syncTicker()
             this.scheduleRender()
         })
-        // Elapsed time in the header ticks along at 1Hz.
-        this.ticker = setInterval(() => this.tui.requestRender(), 1000)
+        // Elapsed time in the header ticks at 1Hz only while visible state
+        // can change on its own.
+        this.syncTicker()
         this.input.onSubmit = (value: string) => {
             const text = value.trim()
             if (!text) return
@@ -501,6 +777,16 @@ export class TakeoverView implements Component, Focusable {
 
     private snap(): SubagentSnapshot | undefined {
         return this.view.get(this.id)
+    }
+
+    private syncTicker() {
+        const needs = takeoverNeedsTicker(this.snap())
+        if (needs && !this.ticker) {
+            this.ticker = setInterval(() => this.tui.requestRender(), 1000)
+        } else if (!needs && this.ticker) {
+            clearInterval(this.ticker)
+            this.ticker = undefined
+        }
     }
 
     private scheduleRender() {
@@ -517,7 +803,8 @@ export class TakeoverView implements Component, Focusable {
         if (this.closed) return false
         this.closed = true
         this.unsubscribe()
-        clearInterval(this.ticker)
+        if (this.ticker) clearInterval(this.ticker)
+        this.ticker = undefined
         if (this.renderTimer) clearTimeout(this.renderTimer)
         this.renderTimer = undefined
         return true
@@ -541,6 +828,7 @@ export class TakeoverView implements Component, Focusable {
         if (this.keybindings.matches(data, 'app.clear')) {
             const snap = this.snap()
             if (snap?.status === 'running') this.view.requestAbort(this.id)
+            this.syncTicker()
             return
         }
         if (
@@ -601,12 +889,58 @@ export class TakeoverView implements Component, Focusable {
     }
 
     render(width: number): string[] {
-        const theme = this.theme
-        const innerWidth = Math.max(1, width - 2)
-        const divider = theme.fg('border', '│')
-        const rows = this.tui.terminal.rows ?? 30
-        const lines: string[] = []
+        const rows = terminalRows(this.tui)
+        if (width <= 0 || rows <= 0) return []
         const snap = this.snap()
+        const lines = useBorderless(width, rows)
+            ? this.renderBorderless(snap, width, rows)
+            : this.renderFramed(snap, width, rows)
+        return clampLines(lines, width, rows)
+    }
+
+    private renderBorderless(
+        snap: SubagentSnapshot | undefined,
+        width: number,
+        rows: number
+    ): string[] {
+        if (!snap) {
+            return [
+                truncateToWidth('Subagent', width),
+                truncateToWidth(`${oneLine(this.id)} is no longer tracked`, width),
+            ]
+        }
+        const state = subagentDisplayState(snap, this.hasPendingQuestion)
+        const title = truncateToWidth(
+            `${oneLine(snap.taskName ?? snap.title)} · ${plainStatusWord(state)}`,
+            width
+        )
+        const inputLine = truncateToWidth(
+            this.input.render(width)[0] ?? '',
+            width
+        )
+        const hint = truncateToWidth(
+            `${configuredKeys(this.keybindings, 'app.interrupt')} close`,
+            width
+        )
+        if (rows === 1) return [title]
+        if (rows === 2) return [title, inputLine]
+        if (rows === 3) return [title, inputLine, hint]
+        const capacity = rows - 3
+        const body = this.bodyLines(snap, width, capacity).map((line) =>
+            truncateToWidth(line, width)
+        )
+        return [title, ...body.slice(0, capacity), inputLine, hint]
+    }
+
+    private renderFramed(
+        snap: SubagentSnapshot | undefined,
+        width: number,
+        rows: number
+    ): string[] {
+        const theme = this.theme
+        const innerWidth = width - 2
+        const divider = theme.fg('border', '│')
+        const lines: string[] = []
         const framed = (content: string) => {
             const clipped = truncateToWidth(
                 content,
@@ -636,24 +970,33 @@ export class TakeoverView implements Component, Focusable {
                 )
             )
             lines.push(
-                framed(theme.fg('dim', `${this.id} is no longer tracked`))
+                framed(
+                    theme.fg(
+                        'dim',
+                        `${oneLine(this.id)} is no longer tracked`
+                    )
+                )
             )
             lines.push(bar(theme, '╰', '╯', '', '', innerWidth))
             return lines
         }
 
+        const state = subagentDisplayState(snap, this.hasPendingQuestion)
         // Title bar: ╭─ ■ <task> · <role> · <id> ───── running ─╮
         const titleLabel =
-            ` ${statusGlyph(snap, theme)} ` +
+            ` ${statusGlyph(state, theme)} ` +
             theme.fg('text', theme.bold(oneLine(snap.taskName ?? snap.title))) +
-            theme.fg('dim', ` · ${snap.role ?? 'default'} · ${snap.id} `)
+            theme.fg(
+                'dim',
+                ` · ${oneLine(snap.role ?? 'default')} · ${oneLine(snap.id)} `
+            )
         lines.push(
             bar(
                 theme,
                 '╭',
                 '╮',
                 titleLabel,
-                ` ${statusWord(snap, theme)} `,
+                ` ${statusWord(state, theme)} `,
                 innerWidth
             )
         )
@@ -670,7 +1013,38 @@ export class TakeoverView implements Component, Focusable {
 
         // Fixed-height transcript viewport. Error and scroll status consume rows
         // inside the viewport so streaming/scrolling never changes overlay height.
+        // Chrome is title + details + input + bottom bar = 4 rows.
         const contentWidth = Math.max(1, innerWidth - 2)
+        const viewport = Math.max(0, rows - 4)
+        const body = this.bodyLines(snap, contentWidth, viewport)
+        while (body.length < viewport) body.push('')
+        lines.push(...body.slice(0, viewport).map(framed))
+
+        // Input row (Input draws its own "> " prompt)
+        lines.push(framed(this.input.render(contentWidth)[0] ?? ''))
+
+        // Bottom bar keeps the close hint before the stop hint.
+        const hints =
+            `${configuredKeys(this.keybindings, 'app.interrupt')} close · ` +
+            `${configuredKeys(this.keybindings, 'app.clear')} stop`
+        lines.push(
+            bar(theme, '╰', '╯', theme.fg('dim', ` ${hints} `), '', innerWidth)
+        )
+
+        return lines
+    }
+
+    /**
+     * Transcript tail for a fixed `capacity`: error note, visible slice,
+     * waiting placeholder, and the paused-scroll notice. Scroll anchoring
+     * (tail-relative offset compensation) is preserved here.
+     */
+    private bodyLines(
+        snap: SubagentSnapshot,
+        contentWidth: number,
+        capacity: number
+    ): string[] {
+        const theme = this.theme
         const transcriptLines = this.transcript(snap, contentWidth)
         // The offset is tail-relative. Compensate for appended streamed lines so a
         // reader who scrolled up stays on the exact output they were inspecting.
@@ -688,7 +1062,6 @@ export class TakeoverView implements Component, Focusable {
         this.previousTranscriptWidth = contentWidth
         this.hasPendingSnapshotUpdate = false
 
-        const viewport = this.viewportHeight(rows)
         const noteRows: string[] = []
         if (snap.errorText) {
             noteRows.push(
@@ -702,13 +1075,19 @@ export class TakeoverView implements Component, Focusable {
 
         const body: string[] = [...noteRows]
         const paused = this.scrollOffset > 0
-        const capacity = Math.max(1, viewport - body.length - (paused ? 1 : 0))
-        const maxOffset = Math.max(0, transcriptLines.length - capacity)
+        const visibleCap = Math.max(
+            0,
+            capacity - body.length - (paused ? 1 : 0)
+        )
+        const maxOffset = Math.max(0, transcriptLines.length - visibleCap)
         if (this.scrollOffset > maxOffset) this.scrollOffset = maxOffset
 
         const end = transcriptLines.length - this.scrollOffset
-        const visible = transcriptLines.slice(Math.max(0, end - capacity), end)
-        if (visible.length === 0) {
+        const visible = transcriptLines.slice(
+            Math.max(0, end - visibleCap),
+            end
+        )
+        if (visible.length === 0 && capacity > body.length + (paused ? 1 : 0)) {
             body.push(
                 theme.fg('warning', '◌ ') +
                     theme.fg('dim', 'waiting for activity')
@@ -723,27 +1102,15 @@ export class TakeoverView implements Component, Focusable {
                     theme.fg('warning', '↑ paused ') +
                         theme.fg(
                             'dim',
-                            `· ${this.scrollOffset} newer · down/pageDown to follow`
+                            `· ${this.scrollOffset} newer · ` +
+                                `${configuredKeys(this.keybindings, 'tui.editor.cursorDown')}/` +
+                                `${configuredKeys(this.keybindings, 'tui.editor.pageDown')} to follow`
                         ),
                     contentWidth
                 )
             )
         }
-        while (body.length < viewport) body.push('')
-        lines.push(...body.slice(0, viewport).map(framed))
-
-        // Input row (Input draws its own "> " prompt)
-        lines.push(framed(this.input.render(contentWidth)[0] ?? ''))
-
-        // Bottom bar: ╰─ ───────────────── esc close · ctrl+c stop ─╯
-        const hints =
-            `${configuredKeys(this.keybindings, 'app.interrupt')} close · ` +
-            `${configuredKeys(this.keybindings, 'app.clear')} stop`
-        lines.push(
-            bar(theme, '╰', '╯', theme.fg('dim', ` ${hints} `), '', innerWidth)
-        )
-
-        return lines
+        return body.slice(0, Math.max(0, capacity))
     }
 
     invalidate(): void {

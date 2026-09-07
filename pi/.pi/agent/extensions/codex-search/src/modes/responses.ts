@@ -4,6 +4,16 @@ import {
   classifyHttpStatus,
   formatHttpErrorBody,
 } from "../errors.ts";
+import {
+  ERROR_BODY_LIMIT_BYTES,
+  ERROR_BODY_TRUNCATION_MARKER,
+  MAX_REQUEST_BODY_BYTES,
+  MAX_CITATIONS,
+  MAX_SEARCH_CALLS,
+  SEARCH_TEXT_LIMIT_BYTES,
+  SSE_FRAME_LIMIT_BYTES,
+  readBoundedResponseText,
+} from "../limits.ts";
 import type { CodexTransport } from "../transport.ts";
 import type {
   CodexWebSearchResult,
@@ -65,17 +75,45 @@ interface ResponseUsage {
 
 interface ResponseEnvelope {
   id?: string;
+  status?: string;
   usage?: ResponseUsage;
+  incomplete_details?: { reason?: string };
 }
 
 interface ResponseEventData {
   response?: ResponseEnvelope;
   item?: ResponseOutputItem;
   delta?: string;
+  incomplete_details?: { reason?: string };
   error?: {
     message?: string;
     code?: string;
   };
+}
+
+function assertRequestBodySize(bodyText: string): void {
+  if (bodyText.length > MAX_REQUEST_BODY_BYTES) {
+    throw new CodexError(
+      "schema",
+      `Codex responses request body is ${bodyText.length} chars, exceeding the ` +
+        `${MAX_REQUEST_BODY_BYTES} char pathological-size guard. Shorten the query ` +
+        `before retrying. Request schemas are unchanged; this guard only rejects ` +
+        `payloads that would risk unbounded upload/memory use.`,
+    );
+  }
+}
+
+function isRecognizedSseType(type: string): boolean {
+  return type.startsWith("response.");
+}
+
+function textLimitError(additional: number, total: number): CodexError {
+  return new CodexError(
+    "transport",
+    `Codex responses stream exceeded the ${SEARCH_TEXT_LIMIT_BYTES} char accumulated ` +
+      `search-text budget (current ${total}, +${additional}). Cancelling the stream; ` +
+      `partial provider output is not returned as authoritative.`,
+  );
 }
 
 export async function runResponsesSearch(
@@ -107,36 +145,47 @@ export async function runResponsesSearch(
   };
   if (indexedWebAccess) webSearchTool.indexed_web_access = true;
 
+  const bodyText = JSON.stringify({
+    model,
+    instructions:
+      "You are a concise web search assistant. Use web search, answer the query, and preserve source citations from annotations.",
+    input: [
+      {
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text: query }],
+      },
+    ],
+    tools: [webSearchTool],
+    tool_choice: "required",
+    parallel_tool_calls: true,
+    store: false,
+    stream: true,
+    include: [],
+  });
+  assertRequestBodySize(bodyText);
+
   const response = await transport.fetch(transport.resolveEndpoint("responses"), {
     method: "POST",
     headers,
-    body: JSON.stringify({
-      model,
-      instructions:
-        "You are a concise web search assistant. Use web search, answer the query, and preserve source citations from annotations.",
-      input: [
-        {
-          type: "message",
-          role: "user",
-          content: [{ type: "input_text", text: query }],
-        },
-      ],
-      tools: [webSearchTool],
-      tool_choice: "required",
-      parallel_tool_calls: true,
-      store: false,
-      stream: true,
-      include: [],
-    }),
+    body: bodyText,
     signal,
   });
 
   if (!response.ok) {
     const status = response.status;
-    const text = formatHttpErrorBody(await response.text(), "responses");
+    const { text: rawError, truncated } = await readBoundedResponseText(
+      response,
+      ERROR_BODY_LIMIT_BYTES,
+    );
+    const boundedError = truncated
+      ? rawError.slice(0, ERROR_BODY_LIMIT_BYTES - ERROR_BODY_TRUNCATION_MARKER.length) +
+        ERROR_BODY_TRUNCATION_MARKER
+      : rawError;
+    const formatted = formatHttpErrorBody(boundedError, "responses");
     throw new CodexError(
       classifyHttpStatus(status),
-      `Codex responses request failed: HTTP ${status}: ${text}`,
+      `Codex responses request failed: HTTP ${status}: ${formatted}`,
       status,
     );
   }
@@ -147,29 +196,58 @@ export async function runResponsesSearch(
   let responseId: string | undefined;
   let usage: ResponseUsage | undefined;
   let streamedText = "";
+  let totalTextLength = 0;
   const messageTextParts: string[] = [];
   const searchCalls = new Map<string, CodexSearchCall>();
   const citations = new Map<string, CodexCitation>();
+  let completed = false;
 
-  for await (const event of parseSse(response.body)) {
+  const accountForText = (additional: number): void => {
+    if (additional <= 0) return;
+    if (totalTextLength + additional > SEARCH_TEXT_LIMIT_BYTES) {
+      throw textLimitError(additional, totalTextLength);
+    }
+    totalTextLength += additional;
+  };
+
+  for await (const event of parseSse(response.body, {
+    frameLimit: SSE_FRAME_LIMIT_BYTES,
+    signal,
+  })) {
+    if (signal?.aborted) {
+      throw new DOMException("Codex responses request was aborted", "AbortError");
+    }
     const data = event.data as ResponseEventData | undefined;
-    if (!data) continue;
+    if (!data) {
+      if (event.raw !== undefined && isRecognizedSseType(event.type)) {
+        throw new CodexError(
+          "schema",
+          `Codex responses stream contained a malformed ${event.type || "(unknown)"} frame ` +
+            `that could not be parsed as JSON. Cancelling the stream.`,
+        );
+      }
+      continue;
+    }
 
     if (event.type === "response.created") {
-      responseId = data.response?.id;
+      const id = data.response?.id;
+      if (typeof id === "string" && id.length > 0) responseId = id;
       continue;
     }
 
     if (event.type === "response.output_text.delta") {
       const delta = data.delta ?? "";
-      streamedText += delta;
-      onTextDelta?.(delta);
+      if (delta.length > 0) {
+        accountForText(delta.length);
+        streamedText += delta;
+        onTextDelta?.(delta);
+      }
       continue;
     }
 
     if (event.type === "response.output_item.added" && data.item?.type === "web_search_call") {
       const item = data.item;
-      if (item.id) {
+      if (item.id && searchCalls.size < MAX_SEARCH_CALLS && !searchCalls.has(item.id)) {
         searchCalls.set(item.id, {
           id: item.id,
           status: item.status,
@@ -179,19 +257,47 @@ export async function runResponsesSearch(
     }
 
     if (event.type === "response.output_item.done") {
-      collectOutputItem(data.item, searchCalls, messageTextParts, citations);
+      collectOutputItem(data.item, searchCalls, messageTextParts, citations, accountForText);
       continue;
     }
 
     if (event.type === "response.completed") {
-      usage = data.response?.usage;
+      completed = true;
+      const envelopeId = data.response?.id;
+      if (typeof envelopeId === "string" && envelopeId.length > 0 && !responseId) {
+        responseId = envelopeId;
+      }
+      if (data.response?.usage) usage = data.response.usage;
       continue;
+    }
+
+    if (event.type === "response.incomplete") {
+      const reason =
+        data.response?.incomplete_details?.reason ??
+        data.incomplete_details?.reason ??
+        data.response?.status ??
+        "unknown reason";
+      throw new CodexError(
+        "transport",
+        `Codex responses stream ended incomplete: ${reason}. Partial provider ` +
+          `output is not returned as authoritative.`,
+      );
     }
 
     if (event.type === "response.failed") {
       const message = data.error?.message ?? data.error?.code ?? "Codex web search failed";
       throw new CodexError(classifyEventErrorMessage(message), message);
     }
+
+    // Unknown valid event types are ignored for forward compatibility.
+  }
+
+  if (!completed) {
+    throw new CodexError(
+      "transport",
+      "Codex responses stream ended without response.completed. The connection " +
+        "may have been truncated; partial provider output is not returned as authoritative.",
+    );
   }
 
   return {
@@ -210,14 +316,34 @@ export async function runResponsesSearch(
   };
 }
 
-async function* parseSse(body: ReadableStream<Uint8Array>): AsyncGenerator<SseEvent> {
+async function* parseSse(
+  body: ReadableStream<Uint8Array>,
+  opts?: { frameLimit?: number; signal?: AbortSignal },
+): AsyncGenerator<SseEvent> {
+  const frameLimit = opts?.frameLimit ?? SSE_FRAME_LIMIT_BYTES;
+  const signal = opts?.signal;
   const reader = body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
+  let abortListener: (() => void) | undefined;
+
+  if (signal) {
+    if (signal.aborted) {
+      reader.releaseLock();
+      throw new DOMException("Codex responses request was aborted", "AbortError");
+    }
+    abortListener = () => {
+      reader.cancel().catch(() => undefined);
+    };
+    signal.addEventListener("abort", abortListener, { once: true });
+  }
 
   let doneReading = false;
   try {
     while (true) {
+      if (signal?.aborted) {
+        throw new DOMException("Codex responses request was aborted", "AbortError");
+      }
       const { done, value } = await reader.read();
       if (done) {
         doneReading = true;
@@ -228,18 +354,43 @@ async function* parseSse(body: ReadableStream<Uint8Array>): AsyncGenerator<SseEv
       let separator = findSseSeparator(buffer);
       while (separator) {
         const frame = buffer.slice(0, separator.index);
+        if (frame.length > frameLimit) {
+          throw new CodexError(
+            "transport",
+            `Codex SSE frame exceeded the ${frameLimit} char single-frame budget ` +
+              `before a delimiter arrived. Cancelling the stream.`,
+          );
+        }
         buffer = buffer.slice(separator.index + separator.length);
         const event = parseSseFrame(frame);
         if (event) yield event;
         separator = findSseSeparator(buffer);
       }
+      if (buffer.length > frameLimit) {
+        throw new CodexError(
+          "transport",
+          `Codex SSE frame exceeded the ${frameLimit} char single-frame budget ` +
+            `before a delimiter arrived. Cancelling the stream.`,
+        );
+      }
     }
   } finally {
+    if (signal && abortListener) {
+      signal.removeEventListener("abort", abortListener);
+    }
     if (!doneReading) await reader.cancel().catch(() => undefined);
     reader.releaseLock();
   }
 
   buffer += decoder.decode();
+  if (buffer.trim().length === 0) return;
+  if (buffer.length > frameLimit) {
+    throw new CodexError(
+      "transport",
+      `Codex SSE frame exceeded the ${frameLimit} char single-frame budget ` +
+        `before a delimiter arrived. Cancelling the stream.`,
+    );
+  }
   const event = parseSseFrame(buffer);
   if (event) yield event;
 }
@@ -278,11 +429,14 @@ function collectOutputItem(
   searchCalls: Map<string, CodexSearchCall>,
   messageTextParts: string[],
   citations: Map<string, CodexCitation>,
+  accountForText: (additional: number) => void,
 ): void {
   if (!item) return;
 
   if (item.type === "web_search_call") {
+    if (searchCalls.size >= MAX_SEARCH_CALLS) return;
     const key = item.id ?? `search-${searchCalls.size + 1}`;
+    if (searchCalls.has(key)) return;
     const query = item.action?.query ?? item.action?.queries?.join(", ");
     searchCalls.set(key, {
       id: item.id,
@@ -298,9 +452,15 @@ function collectOutputItem(
 
   for (const part of item.content ?? []) {
     if (part.type !== "output_text") continue;
-    messageTextParts.push(part.text ?? "");
+    const text = part.text ?? "";
+    if (text.length > 0) {
+      accountForText(text.length);
+      messageTextParts.push(text);
+    }
     for (const annotation of part.annotations ?? []) {
       if (annotation.type !== "url_citation" || !annotation.url) continue;
+      if (citations.size >= MAX_CITATIONS) break;
+      if (citations.has(annotation.url)) continue;
       citations.set(annotation.url, {
         title: annotation.title,
         url: annotation.url,

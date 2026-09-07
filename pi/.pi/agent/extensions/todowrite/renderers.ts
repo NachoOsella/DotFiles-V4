@@ -2,6 +2,18 @@ import type { Theme } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import type { Todo, TodoDetails } from "./types.ts";
 
+/**
+ * Normalize model-authored text for themed display.
+ * Control characters and line breaks would corrupt row layout and width
+ * measurement, so strip them here. Stored state keeps the original text.
+ */
+export function toSafeDisplayText(value: string): string {
+  return value
+    .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, "")
+    .replace(/[\r\n]+/g, " ")
+    .replace(/\t/g, " ");
+}
+
 /** Render the compact todowrite call header. */
 export function renderTodoCall(args: { todos?: Todo[] }, theme: Theme): Text {
   const count = (args.todos ?? []).length;
@@ -54,30 +66,34 @@ export function renderTodoResult(
 /** Build the collapsed one-line todo summary. */
 function buildSummaryParts(details: TodoDetails, theme: Theme): string[] {
   const parts: string[] = [];
-  if (details.current) {
-    parts.push(
-      theme.fg("accent", ">") + theme.fg("text", " " + details.current)
-    );
+  const currentItem =
+    details.currentId !== undefined && details.currentId !== null
+      ? details.items.find((item) => item.id === details.currentId)
+      : details.items.find((item) => item.status === "in_progress");
+  const currentText =
+    currentItem !== undefined
+      ? `[${toSafeDisplayText(currentItem.id)}] ${toSafeDisplayText(currentItem.content)}`
+      : details.current !== null
+        ? toSafeDisplayText(details.current)
+        : null;
+  if (currentText !== null) {
+    parts.push(theme.fg("accent", ">") + theme.fg("text", " " + currentText));
   }
-  if (details.pending > 0) {
-    parts.push(theme.fg("dim", "+" + details.pending));
-  }
-  if (details.completed > 0) {
-    parts.push(theme.fg("success", "✓" + details.completed));
-  }
+  parts.push(theme.fg("dim", `${details.completed}/${details.total} done`));
   return parts;
 }
 
 /** Render one expanded todo item line. */
 function renderExpandedItem(item: Todo, theme: Theme): string {
+  const label = `[${toSafeDisplayText(item.id)}] ${toSafeDisplayText(item.content)}`;
   if (item.status === "in_progress") {
-    return theme.fg("accent", "  > ") + theme.fg("text", item.content);
+    return theme.fg("accent", "  > ") + theme.fg("text", label);
   }
   if (item.status === "completed") {
     return (
       theme.fg("success", "  [✓] ") +
-      theme.fg("dim", theme.strikethrough(item.content))
+      theme.fg("dim", theme.strikethrough(label))
     );
   }
-  return theme.fg("dim", "  [ ] ") + theme.fg("dim", item.content);
+  return theme.fg("dim", "  [ ] ") + theme.fg("dim", label);
 }

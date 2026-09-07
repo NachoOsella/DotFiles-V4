@@ -32,6 +32,15 @@ import {
   type ResolvedConfig,
 } from "./src/config.ts";
 import { resolveCodexAccountId } from "./src/pi-auth.ts";
+import {
+  FINAL_TOOL_TEXT_LIMIT_BYTES,
+  FINAL_TOOL_TRUNCATION_MARKER,
+  TEXT_LIMIT_TRUNCATION_MARKER,
+  appendBoundedPreview,
+  createThrottledUpdater,
+  truncateWithMarker,
+  type ThrottledUpdater,
+} from "./src/limits.ts";
 
 const OPENAI_CODEX_PROVIDER = "openai-codex";
 
@@ -506,7 +515,6 @@ function buildTool(config: ResolvedConfig) {
 
       const total = queries.length;
       let completed = 0;
-      let streamedText = "";
 
       const emitPartial = (partialText: string) => {
         onUpdate?.({
@@ -521,13 +529,23 @@ function buildTool(config: ResolvedConfig) {
 
       if (total > 1) emitPartial(formatProgress(completed, total));
 
+      // Bounded streaming preview: keep at most a 4 KiB preview buffer instead of a
+      // second full copy of the 1 MiB search text, and throttle onUpdate to one
+      // emission per 100 ms plus a final flush. Timers/listeners are settled via
+      // the updater so none survive abort/failure/completion.
+      let previewUpdater: ThrottledUpdater | undefined;
+      let previewText = "";
+      if (total === 1 && onUpdate) {
+        previewUpdater = createThrottledUpdater((preview) => emitPartial(preview), { signal });
+      }
+
       const settled = await Promise.allSettled(
         queries.map(async (query: string) => {
           const onTextDelta =
-            total === 1
+            total === 1 && previewUpdater
               ? (delta: string) => {
-                  streamedText += delta;
-                  emitPartial(streamedText);
+                  previewText = appendBoundedPreview(previewText, delta);
+                  previewUpdater?.push(previewText);
                 }
               : undefined;
           try {
@@ -572,6 +590,14 @@ function buildTool(config: ResolvedConfig) {
           failures.push({ query, kind, message });
         }
       });
+
+      if (previewUpdater) {
+        // Flush the final preview only when at least one query produced usable
+        // output; otherwise drop pending text so failure/abort emits no stale
+        // partial. Either path settles timers and the abort listener.
+        if (signal?.aborted || successes.length === 0) previewUpdater.dispose();
+        else previewUpdater.flush();
+      }
 
       if (successes.length === 0) {
         const primary = failures[0];
@@ -757,22 +783,74 @@ function formatProgress(completed: number, total: number): string {
   return `Searching ${completed}/${total} ${completed === total ? "complete" : "in progress"}`;
 }
 
-function formatToolText(successes: QuerySuccess[], failures: QueryFailure[]): string {
-  const blocks: string[] = [];
+export function formatToolText(successes: QuerySuccess[], failures: QueryFailure[]): string {
   const total = successes.length + failures.length;
   const multiple = total > 1;
-
-  for (const success of successes) {
-    blocks.push(formatSuccessBlock(success, multiple));
-  }
-  for (const failure of failures) {
-    blocks.push(formatFailureBlock(failure, multiple));
-  }
-
-  return blocks.join("\n\n");
+  const full = [
+    ...successes.map((success) => formatSuccessBlock(success, multiple)),
+    ...failures.map((failure) => formatFailureBlock(failure, multiple)),
+  ].join("\n\n");
+  if (full.length <= FINAL_TOOL_TEXT_LIMIT_BYTES) return full;
+  return clipToolTextPreservingSources(successes, failures, multiple);
 }
 
-function formatSuccessBlock(success: QuerySuccess, multiple: boolean): string {
+/**
+ * Clip model-visible tool text to 32 KiB while keeping source references
+ * intact. Body text is truncated first; Sources/Source-refs blocks are
+ * preserved fully when they fit. Complete content remains in result details.
+ */
+function clipToolTextPreservingSources(
+  successes: QuerySuccess[],
+  failures: QueryFailure[],
+  multiple: boolean,
+): string {
+  const failureBlocks = failures.map((failure) => formatFailureBlock(failure, multiple));
+  const failuresLength = failureBlocks.join("\n\n").length;
+  const separators = failureBlocks.length > 0 && successes.length > 0 ? 2 : 0;
+  const markerLength = FINAL_TOOL_TRUNCATION_MARKER.length;
+  const budget = FINAL_TOOL_TEXT_LIMIT_BYTES - markerLength;
+  // Exact overhead: formatted block length minus its body text length.
+  const overheads = successes.map((success) => {
+    const bodyText = success.text || "(no response text)";
+    return formatSuccessBlock(success, multiple).length - bodyText.length;
+  });
+  const totalOverhead =
+    overheads.reduce((acc, value) => acc + value, 0) +
+    Math.max(0, successes.length - 1) * 2 +
+    failuresLength +
+    separators;
+  let remaining = budget - totalOverhead;
+  const clippedTexts =
+    remaining < 0
+      ? successes.map(() => TEXT_LIMIT_TRUNCATION_MARKER)
+      : distributeTextBudget(successes, remaining);
+  const blocks = [
+    ...successes.map((success, index) =>
+      formatSuccessBlock(
+        { ...success, text: clippedTexts[index] ?? TEXT_LIMIT_TRUNCATION_MARKER },
+        multiple,
+      ),
+    ),
+    ...failureBlocks,
+  ].join("\n\n");
+  // Blocks now fit by construction; if sources alone exceed the budget, fall
+  // back to an explicit generic truncation rather than returning oversized text.
+  if (blocks.length <= budget) return blocks + FINAL_TOOL_TRUNCATION_MARKER;
+  return (
+    truncateWithMarker(blocks, budget, TEXT_LIMIT_TRUNCATION_MARKER) + FINAL_TOOL_TRUNCATION_MARKER
+  );
+}
+
+function distributeTextBudget(successes: QuerySuccess[], remaining: number): string[] {
+  const perSuccess = Math.floor(remaining / Math.max(1, successes.length));
+  return successes.map((success) => {
+    const text = success.text || "(no response text)";
+    if (text.length <= perSuccess) return text;
+    return truncateWithMarker(text, perSuccess, TEXT_LIMIT_TRUNCATION_MARKER);
+  });
+}
+
+export function formatSuccessBlock(success: QuerySuccess, multiple: boolean): string {
   const text = success.text || "(no response text)";
   const sourceLines = success.citations.map((citation, index) => {
     const title = citation.title?.trim() || citation.url;

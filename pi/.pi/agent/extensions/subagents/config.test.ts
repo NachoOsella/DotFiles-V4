@@ -10,7 +10,7 @@ test('subagent configuration reads limits, models, and reasoning by role', () =>
         PI_SUBAGENTS_EXPLORER_REASONING: 'minimal',
         PI_SUBAGENTS_WORKER_MODEL: 'capable/worker',
         PI_SUBAGENTS_WORKER_REASONING: 'high',
-        PI_SUBAGENTS_EXPLORER_EXTENSION_TOOLS: 'lsp, fff, lsp',
+        PI_SUBAGENTS_EXPLORER_EXTENSION_TOOLS: 'search, fff, search',
         PI_SUBAGENTS_REVIEWER_EXTENSION_TOOLS: 'safe-review',
     })
 
@@ -20,7 +20,7 @@ test('subagent configuration reads limits, models, and reasoning by role', () =>
     assert.equal(config.roleModels.worker, 'capable/worker')
     assert.equal(config.roleReasoningEfforts.explorer, 'minimal')
     assert.equal(config.roleReasoningEfforts.worker, 'high')
-    assert.deepEqual(config.allowedExtensionTools?.explorer, ['lsp', 'fff'])
+    assert.deepEqual(config.allowedExtensionTools?.explorer, ['search', 'fff'])
     assert.deepEqual(config.allowedExtensionTools?.reviewer, ['safe-review'])
 })
 

@@ -12,13 +12,12 @@ export const DEFAULT_MAX_TRACKED = 64
 export const DEFAULT_ALLOWED_EXTENSION_TOOLS: Partial<
     Record<AgentRoleName, ReadonlyArray<string>>
 > = {
-    // explorer: read-only investigator — fast search + language + web context
-    explorer: ['find_files', 'fff_multi_grep', 'lsp', 'codex_search'],
+    // explorer: read-only investigator — fast search + web context
+    explorer: ['find_files', 'fff_multi_grep', 'codex_search'],
     // worker/default: full implementation — plan, search, run, validate
     worker: [
         'find_files',
         'fff_multi_grep',
-        'lsp',
         'todowrite',
         'bg_start',
         'bg_status',
@@ -26,11 +25,10 @@ export const DEFAULT_ALLOWED_EXTENSION_TOOLS: Partial<
         'bg_kill',
         'codex_search',
     ],
-    // tester: validation — search, LSP, plan, background runs
+    // tester: validation — search, plan, background runs
     tester: [
         'find_files',
         'fff_multi_grep',
-        'lsp',
         'todowrite',
         'bg_start',
         'bg_status',
@@ -39,11 +37,10 @@ export const DEFAULT_ALLOWED_EXTENSION_TOOLS: Partial<
         'codex_search',
     ],
     // reviewer: read + web — no background terminals by default
-    reviewer: ['find_files', 'fff_multi_grep', 'lsp', 'todowrite', 'codex_search'],
+    reviewer: ['find_files', 'fff_multi_grep', 'todowrite', 'codex_search'],
     default: [
         'find_files',
         'fff_multi_grep',
-        'lsp',
         'todowrite',
         'bg_start',
         'bg_status',

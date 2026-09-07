@@ -35,7 +35,6 @@ Preserve:
 | `codex-plan-mode` | `codex-plan-mode/index.ts` | Entry handles state and Pi hooks; plan parsing, prompt builders, message helpers, and request-user-input are split out. |
 | `checkpoint` | `checkpoint/checkpoint.ts` | Package entry preserved; core git operations are in `checkpoint-core.ts`. |
 | `session-stats` | `session-stats/index.ts` | Entry handles `/stats`; parser, aggregation, formatting, modal, panels, and output builders are split out. |
-| `lsp` | `lsp/index.ts` | Effect v4 LSP clients, semantic navigation, and post-edit diagnostics. |
 | `pi-diff-minimal` | `pi-diff-minimal/src/index.ts` | Package-style extension; renderer is the main remaining monolith. |
 | `pi-engram-memory` | `pi-engram-memory/index.ts` | Largest extension; config, types, pure utilities, row formatting, and tool renderers are split out. |
 
@@ -50,7 +49,47 @@ Preserve:
 - Prefer no-op/fallback behavior over throwing during startup.
 - Check `ctx.hasUI` before using interactive UI surfaces.
 
+## Allowed offline test scope
+
+`npm run test:allowed` selects direct `*.test.ts` files from an explicit directory allowlist. It includes the nested Codex test directory and fails when a selected directory has no matching tests.
+
+| Directory | Selected files |
+|-----------|----------------|
+| `extensions/ask-user` | `extensions/ask-user/*.test.ts` |
+| `extensions/background-terminals` | `extensions/background-terminals/*.test.ts` |
+| `extensions/codex-search/tests` | `extensions/codex-search/tests/*.test.ts` |
+| `extensions/git-info` | `extensions/git-info/*.test.ts` |
+| `extensions/model-info` | `extensions/model-info/*.test.ts` |
+| `extensions/subagents` | `extensions/subagents/*.test.ts` |
+| `extensions/todowrite` | `extensions/todowrite/*.test.ts` |
+| `extensions/ui-customization` | `extensions/ui-customization/*.test.ts` |
+| `extensions/shared` | `extensions/shared/*.test.ts` |
+
+The selector intentionally excludes `prompt-inspector`, `pi-zen-free`, `discord-activity`, and `session-stats`. It also leaves the deferred `extensions/file-search` test target and `extensions/firecrawl-search` workspace entry unchanged. This selector is offline only. It does not run live provider checks or visual terminal checks.
+
 ## Validation
+
+Run the scoped offline tests from `/home/nacho/.pi/agent`:
+
+```bash
+npm run test:allowed
+```
+
+The existing repository-wide scripts remain available and unchanged. `npm test` still includes its existing `extensions/*/*.test.ts` target and the deferred `npm --prefix extensions/file-search test` follow-up, so use `test:allowed` for this allowlisted scope. The existing type checks remain:
+
+```bash
+npm run check
+npm run check:extensions
+```
+
+For scoped extension type checks, run the package configurations explicitly:
+
+```bash
+for name in ask-user background-terminals codex-search git-info model-info subagents todowrite ui-customization; do
+  ./node_modules/.bin/tsc --noEmit --preserveSymlinks \
+    -p "extensions/$name/tsconfig.json"
+done
+```
 
 Syntax-check modified extension entries with esbuild:
 
@@ -72,6 +111,8 @@ For package-style extensions, also run their local tests when available:
 cd ~/.pi/agent/extensions/checkpoint && npm test
 cd ~/.pi/agent/extensions/pi-diff-minimal && npm test
 ```
+
+New helper modules should use `.js` suffixes in relative TypeScript imports. Direct Node strip-types tests in this workspace currently require `.ts` imports in existing test paths. Do not mass-convert imports to reconcile these two resolution paths.
 
 ## Next refactor phases
 

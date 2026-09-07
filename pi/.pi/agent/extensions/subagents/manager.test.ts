@@ -441,10 +441,17 @@ test('ID waits stay pending across the settle-to-queued-run transition', async (
                 runId: firstRunId,
                 outcome: { _tag: 'Completed', finalText: 'first output' },
             })
-            while (manager.view.get(snap.id)?.status !== 'done')
+            // Queued follow-ups keep the snapshot visibly active: the finished
+            // run publishes its mailbox result, but list/status must not report
+            // `done` while waitFor still treats the child as pending.
+            while (
+                manager.view.get(snap.id)?.lastRun?.id !== firstRunId ||
+                manager.view.get(snap.id)?.lastRun?.status !== 'completed'
+            )
                 await new Promise((resolve) => setImmediate(resolve))
             await new Promise((resolve) => setImmediate(resolve))
             assert.equal(waitFinished, false)
+            assert.equal(manager.view.get(snap.id)?.status, 'running')
 
             const secondRunId = gated.session().sent[0]?.runId
             const thirdRunId = gated.session().sent[1]?.runId
@@ -523,6 +530,44 @@ test('an ended backend stream fails queued runs instead of stranding a wait', as
     )
 })
 
+test('an ended stream does not re-settle a completed run', async () => {
+    const gated = makeGatedBackend()
+    await withManager(
+        async (manager, runtime) => {
+            const settled: Array<{ id: string; status: string }> = []
+            manager.view.setOnSettled((snapshot) =>
+                settled.push({
+                    id: snapshot.lastRun?.id ?? '?',
+                    status: snapshot.lastRun?.status ?? '?',
+                })
+            )
+            const snap = await runTool(
+                runtime,
+                manager.spawn(
+                    'pi',
+                    task('first run', { taskName: 'gated-ended-duplicate' })
+                )
+            )
+            const firstRunId = snap.currentRunId
+            assert.ok(firstRunId)
+            await runTool(runtime, manager.send(snap.id, 'queued run'))
+            await gated.session().emit({
+                _tag: 'RunSettled',
+                runId: firstRunId,
+                outcome: { _tag: 'Completed', finalText: 'first output' },
+            })
+            await gated.session().end()
+            await new Promise((resolve) => setImmediate(resolve))
+            assert.deepEqual(settled, [
+                { id: firstRunId, status: 'completed' },
+                { id: `${snap.id}:run-2`, status: 'failed' },
+            ])
+        },
+        undefined,
+        createTestRegistry(gated.backend)
+    )
+})
+
 test('interrupt discards queued follow-ups after the prior run settles', async () => {
     const gated = makeGatedBackend()
     await withManager(
@@ -542,8 +587,14 @@ test('interrupt discards queued follow-ups after the prior run settles', async (
                 runId: firstRunId,
                 outcome: { _tag: 'Completed', finalText: 'first output' },
             })
-            while (manager.view.get(snap.id)?.status !== 'done')
+            // The finished run settles, but the queued follow-up keeps the
+            // snapshot visibly active until interrupt discards it.
+            while (
+                manager.view.get(snap.id)?.lastRun?.id !== firstRunId ||
+                manager.view.get(snap.id)?.lastRun?.status !== 'completed'
+            )
                 await new Promise((resolve) => setImmediate(resolve))
+            assert.equal(manager.view.get(snap.id)?.status, 'running')
 
             const report = await runTool(runtime, manager.interrupt([snap.id]))
             assert.equal(report[0]?.cancelled, true)
@@ -581,8 +632,14 @@ test('close makes a queued follow-up terminal without starting it', async () => 
                 runId: firstRunId,
                 outcome: { _tag: 'Completed', finalText: 'first output' },
             })
-            while (manager.view.get(snap.id)?.status !== 'done')
+            // The finished run settles, but the queued follow-up keeps the
+            // snapshot visibly active until close discards it.
+            while (
+                manager.view.get(snap.id)?.lastRun?.id !== firstRunId ||
+                manager.view.get(snap.id)?.lastRun?.status !== 'completed'
+            )
                 await new Promise((resolve) => setImmediate(resolve))
+            assert.equal(manager.view.get(snap.id)?.status, 'running')
 
             const report = await runTool(runtime, manager.close([snap.id]))
             assert.equal(report[0]?.terminal, true)

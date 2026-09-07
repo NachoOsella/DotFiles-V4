@@ -1,8 +1,0 @@
-{
-    "extends": "../../tsconfig.json",
-    "compilerOptions": {
-        "plugins": [{ "name": "@effect/language-service" }],
-        "preserveSymlinks": true
-    },
-    "include": ["index.ts", "src/**/*.ts", "*.test.ts"]
-}

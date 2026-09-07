@@ -6,9 +6,13 @@ import {
     buildHandoffBehaviorPrompt,
     evaluateBehaviorHandoff,
     evaluateBehaviorPolling,
+    evaluateBehaviorIntegration,
     evaluateBehaviorQuestionHandling,
     evaluateBehaviorSynchronization,
+    evaluateBehaviorValidation,
+    evaluateScriptedBehaviorTrace,
     HANDOFF_EVALS,
+    SCRIPTED_BEHAVIOR_TRACES,
     spawnPrompts,
 } from './src/delegation-behavior-eval.ts'
 import { DELEGATION_EVALS, hasImmediateWait } from './delegation-evals.ts'
@@ -52,6 +56,31 @@ test('behavioral layer scores real spawn prompts, not just counts', () => {
     ]
     assert.deepEqual(spawnPrompts(poorCalls), ['Fix this.'])
     assert.equal(evaluateBehaviorHandoff(poorCalls, scenario).passed, false)
+})
+
+test('offline scripted traces are exposed by the behavior evaluator', () => {
+    assert.equal(SCRIPTED_BEHAVIOR_TRACES.length, 8)
+    assert.equal(
+        evaluateBehaviorValidation({
+            command: 'npm test -- parser',
+            observed: 'failed',
+            finalReport: 'Validation failed.',
+        }).passed,
+        true
+    )
+    assert.equal(
+        evaluateBehaviorIntegration({
+            newerParentWork: true,
+            reconciled: true,
+        }).passed,
+        true
+    )
+    assert.equal(
+        SCRIPTED_BEHAVIOR_TRACES.every(
+            (trace) => evaluateScriptedBehaviorTrace(trace).passed
+        ),
+        true
+    )
 })
 
 test('behavioral layer exposes synchronization, polling, and question checks', () => {

@@ -4,6 +4,15 @@ import {
   formatHttpErrorBody,
   isCloudflareChallenge,
 } from "../errors.ts";
+import {
+  ERROR_BODY_LIMIT_BYTES,
+  ERROR_BODY_TRUNCATION_MARKER,
+  MAX_CITATIONS,
+  MAX_REQUEST_BODY_BYTES,
+  SEARCH_TEXT_LIMIT_BYTES,
+  STANDALONE_RESPONSE_LIMIT_BYTES,
+  readBoundedResponseText,
+} from "../limits.ts";
 import type { CodexTransport } from "../transport.ts";
 import type {
   CodexWebSearchResult,
@@ -230,6 +239,7 @@ export async function runStandaloneCommands(
   body.max_output_tokens = maxOutputTokens ?? 8000;
 
   const bodyText = JSON.stringify(body);
+  assertStandaloneRequestSize(bodyText);
   let response = await transport.fetch(transport.resolveSearchEndpoint(), {
     method: "POST",
     headers,
@@ -238,8 +248,15 @@ export async function runStandaloneCommands(
   });
 
   if (!response.ok) {
+    const readErrorPrefix = async (res: Response): Promise<string> => {
+      const { text: raw, truncated } = await readBoundedResponseText(res, ERROR_BODY_LIMIT_BYTES);
+      return truncated
+        ? raw.slice(0, ERROR_BODY_LIMIT_BYTES - ERROR_BODY_TRUNCATION_MARKER.length) +
+            ERROR_BODY_TRUNCATION_MARKER
+        : raw;
+    };
     let status = response.status;
-    let rawText = await response.text();
+    let rawText = await readErrorPrefix(response);
     if (status === 403 && isCloudflareChallenge(rawText) && !signal?.aborted) {
       await delay(750, signal);
       if (signal?.aborted) {
@@ -253,7 +270,7 @@ export async function runStandaloneCommands(
       });
       if (!response.ok) {
         status = response.status;
-        rawText = await response.text();
+        rawText = await readErrorPrefix(response);
       }
     }
     if (!response.ok) {
@@ -266,8 +283,16 @@ export async function runStandaloneCommands(
     }
   }
 
-  const data = (await response.json()) as StandaloneSearchResponse;
+  const data = (await readBoundedStandaloneJson(response)) as StandaloneSearchResponse;
   const text = typeof data.output === "string" ? data.output : "";
+  if (text.length > SEARCH_TEXT_LIMIT_BYTES) {
+    throw new CodexError(
+      "transport",
+      `Codex standalone output exceeded the ${SEARCH_TEXT_LIMIT_BYTES} char accumulated ` +
+        `search-text budget. Cancelling the request; partial provider output is not ` +
+        `returned as authoritative.`,
+    );
+  }
   const structuredResults = Array.isArray(data.results) ? data.results : undefined;
   const refIds = {
     ...extractRefIds(text),
@@ -287,18 +312,46 @@ export async function runStandaloneCommands(
   return result;
 }
 
+function assertStandaloneRequestSize(bodyText: string): void {
+  if (bodyText.length > MAX_REQUEST_BODY_BYTES) {
+    throw new CodexError(
+      "schema",
+      `Codex standalone request body is ${bodyText.length} chars, exceeding the ` +
+        `${MAX_REQUEST_BODY_BYTES} char pathological-size guard. Shorten the command ` +
+        `before retrying. Request schemas are unchanged; this guard only rejects ` +
+        `payloads that would risk unbounded upload/memory use.`,
+    );
+  }
+}
+
+async function readBoundedStandaloneJson(response: Response): Promise<unknown> {
+  const { text, truncated } = await readBoundedResponseText(
+    response,
+    STANDALONE_RESPONSE_LIMIT_BYTES,
+  );
+  if (truncated) {
+    throw new CodexError(
+      "transport",
+      `Codex standalone response exceeded the ${STANDALONE_RESPONSE_LIMIT_BYTES} char ` +
+        `response budget. Cancelling the request; partial provider output is not ` +
+        `returned as authoritative.`,
+    );
+  }
+  return JSON.parse(text);
+}
+
 async function delay(ms: number, signal: AbortSignal | undefined): Promise<void> {
   if (signal?.aborted) return;
   await new Promise<void>((resolve) => {
-    const timeout = setTimeout(resolve, ms);
-    signal?.addEventListener(
-      "abort",
-      () => {
-        clearTimeout(timeout);
-        resolve();
-      },
-      { once: true },
-    );
+    const timeout = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    const onAbort = (): void => {
+      clearTimeout(timeout);
+      resolve();
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
   });
 }
 
@@ -367,7 +420,10 @@ function extractRefIds(text: string): Record<string, string> {
   const refs: Record<string, string> = {};
   for (const match of text.matchAll(REF_ID_PATTERN)) {
     const refId = match[1];
-    if (refId) refs[refId] = refId;
+    if (refId && !(refId in refs)) {
+      if (Object.keys(refs).length >= MAX_CITATIONS) break;
+      refs[refId] = refId;
+    }
   }
   return refs;
 }
@@ -377,7 +433,10 @@ function extractStructuredRefIds(results: unknown[] | undefined): Record<string,
   for (const result of results ?? []) {
     if (!isRecord(result)) continue;
     const refId = result.ref_id;
-    if (typeof refId === "string" && EXACT_REF_ID_PATTERN.test(refId)) refs[refId] = refId;
+    if (typeof refId === "string" && EXACT_REF_ID_PATTERN.test(refId) && !(refId in refs)) {
+      if (Object.keys(refs).length >= MAX_CITATIONS) break;
+      refs[refId] = refId;
+    }
   }
   return refs;
 }
@@ -385,13 +444,16 @@ function extractStructuredRefIds(results: unknown[] | undefined): Record<string,
 function extractCitations(results: unknown[] | undefined, text: string): CodexCitation[] {
   const citations = new Map<string, CodexCitation>();
   for (const result of results ?? []) {
+    if (citations.size >= MAX_CITATIONS) break;
     if (!isRecord(result) || typeof result.url !== "string" || !isHttpUrl(result.url)) continue;
+    if (citations.has(result.url)) continue;
     citations.set(result.url, {
       title: typeof result.title === "string" ? result.title : undefined,
       url: result.url,
     });
   }
   for (const citation of extractMarkdownCitations(text)) {
+    if (citations.size >= MAX_CITATIONS) break;
     if (!citations.has(citation.url)) citations.set(citation.url, citation);
   }
   return [...citations.values()];
@@ -414,6 +476,7 @@ function extractMarkdownCitations(text: string): CodexCitation[] {
   const citations = new Map<string, CodexCitation>();
   const markdownLinkPattern = /\[([^\]\n]{1,200})\]\((https?:\/\/[^)\s]+)\)/g;
   for (const match of text.matchAll(markdownLinkPattern)) {
+    if (citations.size >= MAX_CITATIONS) break;
     const title = match[1]?.trim();
     const url = match[2]?.trim();
     if (!url || citations.has(url)) continue;

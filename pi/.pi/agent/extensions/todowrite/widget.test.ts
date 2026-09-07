@@ -39,6 +39,118 @@ function createWidgetContext(
   return { ctx, getWidget: () => widget, calls };
 }
 
+function renderLines(
+  getWidget: () => Widget,
+  width: number,
+  tui: unknown = {}
+): string[] {
+  const widget = getWidget();
+  assert.equal(typeof widget, "function");
+  return (
+    widget as (
+      tui: unknown,
+      theme: Theme
+    ) => { render(width: number): string[]; invalidate(): void }
+  )(tui, theme).render(width);
+}
+
+function planTodos(count: number) {
+  return Array.from({ length: count }, (_, index) => ({
+    id: String(index + 1),
+    content: `Task ${index + 1}`,
+    status: (index === 0 ? "in_progress" : "pending") as
+      "in_progress" | "pending",
+  }));
+}
+
+test("widget caps a 20-item plan at five content rows", () => {
+  const sessionId = "widget-budget";
+  removeSessionState(sessionId);
+  setTodos(sessionId, planTodos(20));
+  toggleWidgetVisible(sessionId);
+  const { ctx, getWidget } = createWidgetContext(sessionId, "tui", true);
+
+  refreshWidget(ctx);
+  const lines = renderLines(getWidget, 80);
+
+  assert.ok(
+    lines.length <= 7,
+    `20-item plan consumed ${lines.length} widget rows`
+  );
+  assert.ok(lines.some((line) => line.includes("0/20 done")));
+  assert.ok(lines.some((line) => line.includes("[1]")));
+
+  removeSessionState(sessionId);
+});
+
+test("widget summarizes completed items instead of rendering every row", () => {
+  const sessionId = "widget-completed-summary";
+  removeSessionState(sessionId);
+  setTodos(sessionId, [
+    { id: "1", content: "Active work", status: "in_progress" },
+    { id: "2", content: "Upcoming work", status: "pending" },
+    { id: "3", content: "Finished one", status: "completed" },
+    { id: "4", content: "Finished two", status: "completed" },
+  ]);
+  toggleWidgetVisible(sessionId);
+  const { ctx, getWidget } = createWidgetContext(sessionId, "tui", true);
+
+  refreshWidget(ctx);
+  const lines = renderLines(getWidget, 80);
+
+  assert.deepEqual(lines.length, 5);
+  assert.ok(!lines.some((line) => line.includes("Finished one")));
+  assert.ok(!lines.some((line) => line.includes("Finished two")));
+  assert.ok(lines.some((line) => line.includes("2/4 done")));
+  assert.ok(lines.some((line) => line.includes("[1] Active work")));
+
+  removeSessionState(sessionId);
+});
+
+test("widget shrinks its content budget on short terminals", () => {
+  const sessionId = "widget-short-terminal";
+  removeSessionState(sessionId);
+  setTodos(sessionId, planTodos(20));
+  toggleWidgetVisible(sessionId);
+  const { ctx, getWidget } = createWidgetContext(sessionId, "tui", true);
+
+  refreshWidget(ctx);
+  const lines = renderLines(getWidget, 80, { terminal: { rows: 8 } });
+
+  assert.ok(
+    lines.length <= 4,
+    `short terminal consumed ${lines.length} widget rows`
+  );
+
+  removeSessionState(sessionId);
+});
+
+test("widget strips control characters from model-authored text", () => {
+  const sessionId = "widget-safe-text";
+  removeSessionState(sessionId);
+  setTodos(sessionId, [
+    {
+      id: "1\n[9] injected",
+      content: "Line one\nLine two\u001b[31mred",
+      status: "in_progress",
+    },
+  ]);
+  toggleWidgetVisible(sessionId);
+  const { ctx, getWidget } = createWidgetContext(sessionId, "tui", true);
+
+  refreshWidget(ctx);
+  const lines = renderLines(getWidget, 80);
+
+  assert.ok(lines.length > 0);
+  for (const line of lines) {
+    assert.ok(!line.includes("\n"));
+    assert.ok(!line.includes("\u001b[31m"));
+    assert.ok(visibleWidth(line) <= 80);
+  }
+
+  removeSessionState(sessionId);
+});
+
 test("widget lines fit every width from 1 through 80", () => {
   const sessionId = "widget-width";
   removeSessionState(sessionId);

@@ -6,14 +6,14 @@
  *
  * Setup:
  *   1. Start the Discord desktop app.
- *   2. Restart Pi (or /reload if the extension is already loaded).
+ *   2. Run `/discord on` when you want to show your activity.
  *
- * Discord automatically applies the activity to the account signed in to its
- * desktop app. DISCORD_CLIENT_ID can optionally override the bundled Pi
- * application ID when using a custom Discord application.
+ * Discord applies the activity to the account signed in to its desktop app.
+ * DISCORD_CLIENT_ID can optionally override the bundled Pi application ID when
+ * using a custom Discord application.
  *
- * The extension automatically sets your Discord activity to show
- * "Prompting" / "Coding with Pi <project-name>" while you're using Pi.
+ * The activity is manual. Use `/discord`, `/discord on`, or `/discord off` to
+ * control whether Discord shows "prompteando" / "Coding with Pi <project-name>".
  */
 
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent'
@@ -117,11 +117,7 @@ const connectDiscord = (
         (client, _exit) =>
             pipe(
                 Effect.tryPromise(() => client.destroy()),
-                Effect.catch((err: unknown) =>
-                    Effect.sync(() =>
-                        console.warn('[pi-discord] Error disconnecting:', err)
-                    )
-                )
+                Effect.catch(() => Effect.void)
             )
     )
 
@@ -195,7 +191,7 @@ function projectName(cwd: string): string {
  */
 function buildActivity(project: string): DiscordActivity {
     return {
-        name: 'Prompting',
+        name: 'prompteando',
         type: 0,
         details: `Coding with Pi ${project}`,
         timestamps: {
@@ -216,14 +212,14 @@ function buildActivity(project: string): DiscordActivity {
  * Full lifecycle effect:
  *   connect -> set activity -> idle forever (until scope is closed).
  *
- * Wrapped in Effect.scoped, so the acquireRelease finalizer (client.destroy)
- * runs automatically when the fiber is interrupted.
+ * Wrapped in Effect.scoped, so the activity is cleared and the client is
+ * destroyed when the fiber is interrupted.
  */
 const sessionEffect = (
     clientId: string,
     project: string,
     onActivitySet: () => void,
-    onUnavailable: () => void
+    onUnavailable: (error: unknown) => void
 ): Effect.Effect<void, Error, never> =>
     pipe(
         Effect.scoped(
@@ -231,15 +227,22 @@ const sessionEffect = (
                 const client: Client = yield* connectDiscord(clientId)
                 yield* setActivity(client, buildActivity(project))
                 yield* Effect.sync(onActivitySet)
-                console.log(`[pi-discord] Activity set: Coding with Pi ${project}`)
 
                 // Keep the scope alive while Discord is connected. Interruption or a
                 // disconnect closes the scope and destroys the RPC client.
-                yield* waitForDisconnect(client)
+                yield* Effect.ensuring(
+                    waitForDisconnect(client),
+                    pipe(
+                        clearActivity(client),
+                        Effect.catch(() => Effect.void)
+                    )
+                )
             })
         ),
         // Discord is optional, so an unavailable desktop client should not surface as a Pi error.
-        Effect.catch(() => Effect.sync(onUnavailable))
+        Effect.catch((error: unknown) =>
+            Effect.sync(() => onUnavailable(error))
+        )
     )
 
 // ---------------------------------------------------------------------------
@@ -261,31 +264,37 @@ export default function (pi: ExtensionAPI) {
         publishActivityState(activityActive)
     })
 
-    // --- Session start: connect to Discord and show activity ---
-    pi.on('session_start', async (_event, ctx) => {
-        // Headless print sessions include in-process subagents and must not
-        // compete with the interactive parent for Discord RPC activity.
-        if (ctx.mode === 'print') return
+    const stopDiscord = async (): Promise<boolean> => {
+        sessionGeneration += 1
+        publishActivityState(false)
+
+        const fiber = discordFiber
+        discordFiber = undefined
+        if (!fiber) return false
+
+        try {
+            await Effect.runPromise(Fiber.interrupt(fiber))
+        } catch {
+            // Discord cleanup is best-effort because the process may already be gone.
+        }
+        return true
+    }
+
+    const startDiscord = (cwd: string): boolean => {
+        if (discordFiber) return false
 
         const clientId =
             process.env.DISCORD_CLIENT_ID?.trim() || DEFAULT_DISCORD_CLIENT_ID
         const generation = ++sessionGeneration
-        publishActivityState(false)
-
-        // If there's already a Discord fiber from a previous session, clean it up first.
-        if (discordFiber) {
-            await Effect.runPromise(Fiber.interrupt(discordFiber)).catch(
-                () => {}
-            )
-            discordFiber = undefined
-        }
-
-        const project = projectName(ctx.cwd)
+        const project = projectName(cwd)
         const onActivitySet = () => {
-            if (generation === sessionGeneration) publishActivityState(true)
-        }
-        const onUnavailable = () => {
             if (generation !== sessionGeneration) return
+
+            publishActivityState(true)
+        }
+        const onUnavailable = (_error: unknown) => {
+            if (generation !== sessionGeneration) return
+
             discordFiber = undefined
             publishActivityState(false)
         }
@@ -295,26 +304,49 @@ export default function (pi: ExtensionAPI) {
                 sessionEffect(clientId, project, onActivitySet, onUnavailable)
             )
             discordFiber = fiber
-        } catch (err) {
-            onUnavailable()
-            console.warn('[pi-discord] Failed to start Discord session:', err)
+            return true
+        } catch (error) {
+            onUnavailable(error)
+            return false
         }
+    }
+
+    pi.registerCommand('discord', {
+        description: 'Toggle Discord activity (on, off, status)',
+        getArgumentCompletions: (prefix) => {
+            const options = ['on', 'off', 'status', 'toggle']
+            const matches = options
+                .filter((option) => option.startsWith(prefix.toLowerCase()))
+                .map((value) => ({ value, label: value }))
+            return matches.length > 0 ? matches : null
+        },
+        handler: async (args, ctx) => {
+            const command = args.trim().toLowerCase()
+            const action = command || 'toggle'
+
+            if (!['on', 'off', 'status', 'toggle'].includes(action)) return
+            if (action === 'status') return
+
+            const shouldEnable =
+                action === 'on' || (action === 'toggle' && !discordFiber)
+            if (shouldEnable) {
+                startDiscord(ctx.cwd)
+                return
+            }
+
+            await stopDiscord()
+        },
     })
 
-    // --- Session shutdown: tear down Discord connection ---
-    pi.on('session_shutdown', async () => {
-        sessionGeneration += 1
-        publishActivityState(false)
-        stopRefreshListener()
+    // A new session starts with Discord activity disabled. This only cleans up
+    // a fiber left by a previous session; it never connects automatically.
+    pi.on('session_start', async (_event, ctx) => {
+        if (ctx.mode === 'print') return
+        await stopDiscord()
+    })
 
-        if (discordFiber) {
-            try {
-                await Effect.runPromise(Fiber.interrupt(discordFiber))
-                console.log('[pi-discord] Disconnected from Discord')
-            } catch (err) {
-                console.warn('[pi-discord] Error during Discord cleanup:', err)
-            }
-            discordFiber = undefined
-        }
+    pi.on('session_shutdown', async () => {
+        await stopDiscord()
+        stopRefreshListener()
     })
 }

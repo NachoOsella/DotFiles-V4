@@ -3,36 +3,22 @@ import type { AgentEnvelope } from './mailbox.ts'
 
 /** All model-facing strings for the subagent tools. */
 
-export const SUBAGENT_SPAWN_TOOL_DESCRIPTION = `Spawn a background child for one bounded task.
-
-The child has its own conversation context and does not know what the parent learned earlier unless that information is included in the task prompt. It may also run a smaller model, so a precise handoff matters.
-
-Use a child only when delegation provides a clear advantage, such as meaningful parallel work, isolated investigation, specialized review, independent validation, or substantial context reduction. Avoid delegation for trivial, tightly coupled, quickly solvable, or mostly sequential work.
-
-Give the child one clear responsibility. Its prompt should transfer all relevant task-specific knowledge already available to the parent and make the expected outcome unambiguous.
-
-When relevant, include the objective, definition of done, established decisions and findings, relevant files or symbols, exact scope, constraints, ownership, expected validation, and what the final report should contain.
-
-Do not send vague prompts that force the child to reconstruct context the parent already has.
-
-The child shares the filesystem with the parent and other children. Keep parallel responsibilities independent and avoid overlapping modifications.
-
-This call is fire-and-forget. After spawning, continue useful independent work. Synchronize with subagent_wait when the child's result becomes relevant to the parent's next step.`
+export const SUBAGENT_SPAWN_TOOL_DESCRIPTION = `Start one background child session for a bounded task.
+Use subagent_spawn when worthwhile independent work, review, investigation, validation, or parallelism outweighs handoff cost. Keep trivial and tightly coupled work in the parent.`
 export const SUBAGENT_SPAWN_PROMPT_SNIPPET =
-    'Delegate one bounded task with a complete handoff of the relevant context you already know'
+    'Use subagent_spawn for worthwhile bounded work with a complete handoff'
 export const SUBAGENT_SPAWN_PROMPT_GUIDELINES = [COLLABORATION_POLICY]
 
 export const SUBAGENT_SPAWN_PARAMETER_DESCRIPTIONS = {
-    prompt: "Complete handoff for the child. The child cannot see the parent's conversation, so include the task-specific context already known by the parent instead of making it rediscover that information. State the concrete objective and expected outcome, and when relevant include established decisions or findings, relevant files or symbols, exact scope and ownership, constraints or invariants, validation to perform, and what the final report should contain. Be specific enough that a capable smaller model can execute the task correctly from this prompt plus the repository alone.",
-    name: 'Short name shown in listings and the UI',
-    taskName: 'Unique task name. Defaults to name.',
+    prompt: "Complete child handoff. Include the objective, known context and findings, owned paths, constraints, acceptance, validation, and final-report requirements. The child cannot see the parent's conversation.",
+    name: 'Short display name',
+    taskName: 'Unique task name; defaults to name',
     agentType: 'Child role: default, explorer, worker, reviewer, or tester',
-    workingDir: 'Working directory. Defaults to the current directory.',
-    model: 'Optional provider/model-id override. Otherwise role configuration or the parent model is used.',
+    workingDir: 'Working directory; defaults to the current directory',
+    model: 'Optional model override; otherwise role or parent configuration applies',
     reasoningEffort:
-        'Optional reasoning effort override. Otherwise the configured role effort, role default, or parent effort is used.',
-    ownedPaths:
-        'Optional paths the child may modify. Overlaps with other workers produce a warning, not a lock.',
+        'Optional effort override; otherwise configured role effort, role default, or parent effort applies',
+    ownedPaths: 'Paths this child may modify; overlap warns but does not lock',
 }
 
 export function buildSubagentSpawnResult(options: {
@@ -55,50 +41,34 @@ export function buildSubagentSpawnResult(options: {
     return `Spawned ${options.id} ${options.taskName} (${options.role ?? 'default'}, ${options.modelLabel}).${warning}`
 }
 
-export const SUBAGENT_SEND_TOOL_DESCRIPTION = `Send an instruction or answer to an existing child session.
-
-Use this to answer a child's blocking question, clarify its assignment, or assign a subsequent bounded piece of work to the same session.
-
-Prefer follow-up for normal communication. If a child asked a question and stopped its run, answer it with follow-up so it can continue with the parent's decision.
-
-Use steer only when the child is actively working and its current direction needs to change now. Do not use steer for routine updates or information that can wait for the next turn.
-
-When a child asks for a decision, prefer answering through this tool rather than taking over work that still belongs to the child.`
+export const SUBAGENT_SEND_TOOL_DESCRIPTION = `Communicate with an existing child session.
+Use subagent_send with follow-up for answers, ordinary instructions, and queued work. Use steer only to redirect an active run immediately. Answer blocking questions here instead of taking over the child's assignment.`
 export const SUBAGENT_SEND_PARAMETER_DESCRIPTIONS = {
     id: 'Subagent id',
     message:
-        'Concrete instruction, clarification, or answer for the child. Preserve its existing scope unless you intentionally change the assignment.',
+        'Instruction, clarification, or answer; preserve scope unless changing it',
     delivery:
-        'follow-up continues the child normally and is the default for answers or additional work; steer redirects an active run immediately and should be reserved for correcting its current direction',
+        'follow-up resumes normal work and is the default; steer redirects an active run',
 }
 
-export const SUBAGENT_WAIT_TOOL_DESCRIPTION = `Synchronize with delegated work when the parent's next meaningful step depends on it.
-
-With ids, wait until the selected children finish, fail, are interrupted, are closed, or one asks a blocking question. A child question returns early without cancelling the other children.
-
-Do not wait immediately after spawning while useful independent parent work remains.
-
-Conversely, do not continue making decisions, editing dependent code, integrating related work, or finishing the parent task after a child's result has become relevant.
-
-Use this at the dependency boundary: continue independent work first, then wait before crossing into work that depends on the delegated result.
-
-Without ids, wait for a new child mailbox message.`
+export const SUBAGENT_WAIT_TOOL_DESCRIPTION = `Synchronize with delegated work before a dependent decision or integration.
+With ids, wait for completion, failure, interruption, closure, or a blocking question. Without ids, wait for the next child mailbox message.`
 export const SUBAGENT_WAIT_PARAMETER_DESCRIPTIONS = {
     ids: 'Optional subagent ids',
     afterSequence: 'Only return mailbox messages after this sequence',
 }
 
 export const SUBAGENT_CANCEL_TOOL_DESCRIPTION =
-    'Compatibility alias for interrupting one or more running subagents.'
+    'Compatibility alias for interrupting running subagents.'
 export const SUBAGENT_CANCEL_PARAMETER_DESCRIPTIONS = { ids: 'Subagent ids' }
 export const SUBAGENT_INTERRUPT_TOOL_DESCRIPTION =
-    'Interrupt the current run while keeping each subagent session reusable.'
+    'Interrupt the current run while keeping the session reusable.'
 export const SUBAGENT_INTERRUPT_PARAMETER_DESCRIPTIONS = { ids: 'Subagent ids' }
 export const SUBAGENT_CLOSE_TOOL_DESCRIPTION =
-    'Close one or more subagents permanently and release their resources.'
+    'Close subagents permanently and release their resources.'
 export const SUBAGENT_CLOSE_PARAMETER_DESCRIPTIONS = { ids: 'Subagent ids' }
 export const SUBAGENT_CHECK_TOOL_DESCRIPTION =
-    "Inspect a child's current status and recent activity without consuming its result. Use this for occasional diagnosis or when progress itself matters, not for repeated polling while the child is working normally."
+    "Inspect a child's status and recent activity without consuming its result. Use subagent_check for occasional diagnosis, not routine polling."
 export const SUBAGENT_CHECK_PARAMETER_DESCRIPTIONS = { id: 'Subagent id' }
 export const SUBAGENT_LIST_TOOL_DESCRIPTION =
     'List running, finished, and closed Pi subagents.'

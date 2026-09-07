@@ -9,7 +9,9 @@ import {
     evaluateQuestionHandling,
     evaluateRecordedHandoffs,
     evaluateSynchronizationBoundary,
+    evaluateScriptedBehaviorTrace,
     HANDOFF_EVALS,
+    SCRIPTED_BEHAVIOR_TRACES,
 } from './src/handoff-eval.ts'
 
 function handoffCase(name: string) {
@@ -177,6 +179,70 @@ test('synchronization boundary rejects immediate waits and missing waits', () =>
     )
     assert.equal(missing.passed, false)
     assert.match(missing.failures.join(' '), /never synchronized/)
+})
+
+test('scripted traces cover the offline delegation behavior packet', () => {
+    const names = SCRIPTED_BEHAVIOR_TRACES.map((trace) => trace.name)
+    assert.deepEqual(names, [
+        'trivial-direct-work',
+        'disjoint-parallel-work',
+        'no-independent-work',
+        'complete-context-handoff',
+        'early-child-question',
+        'queued-follow-up',
+        'failed-validation',
+        'stale-child-output',
+    ])
+
+    for (const trace of SCRIPTED_BEHAVIOR_TRACES) {
+        const result = evaluateScriptedBehaviorTrace(trace)
+        assert.equal(result.passed, true, `${trace.name}: ${result.failures}`)
+    }
+})
+
+test('scripted traces reject unsupported validation and stale integration', () => {
+    const queued = SCRIPTED_BEHAVIOR_TRACES.find(
+        (trace) => trace.name === 'queued-follow-up'
+    )
+    assert.ok(queued)
+    assert.equal(
+        evaluateScriptedBehaviorTrace({
+            ...queued,
+            calls: [
+                ...(queued.calls ?? []).slice(0, -1),
+                { name: 'subagent_send', args: { delivery: 'steer' } },
+            ],
+        }).passed,
+        false
+    )
+
+    const failedValidation = SCRIPTED_BEHAVIOR_TRACES.find(
+        (trace) => trace.name === 'failed-validation'
+    )
+    assert.ok(failedValidation)
+    assert.equal(
+        evaluateScriptedBehaviorTrace({
+            ...failedValidation,
+            validation: {
+                command: 'npm test -- parser',
+                observed: 'failed',
+                finalReport: 'Validation passed.',
+            },
+        }).passed,
+        false
+    )
+
+    const staleOutput = SCRIPTED_BEHAVIOR_TRACES.find(
+        (trace) => trace.name === 'stale-child-output'
+    )
+    assert.ok(staleOutput)
+    assert.equal(
+        evaluateScriptedBehaviorTrace({
+            ...staleOutput,
+            integration: { newerParentWork: true, reconciled: false },
+        }).passed,
+        false
+    )
 })
 
 test('blocking questions expect subagent_send, not takeover', () => {

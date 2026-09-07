@@ -21,13 +21,15 @@ export const VALID_STATUSES: ReadonlySet<TodoStatus> = new Set([
 /** JSON schema for one todo item. */
 const TodoSchema = Type.Object({
   id: Type.String({
-    description: "Stable unique identity within the current plan, such as \"1\"",
+    description:
+      "Stable unique identity within the current plan, such as \"1\". Reuse the same ID for a task in every later update. Never renumber IDs or reuse an ID for different work. Maximum 50 characters.",
     minLength: 1,
     maxLength: MAX_ID_LENGTH,
     pattern: "\\S",
   }),
   content: Type.String({
-    description: "Brief description of the task",
+    description:
+      "Brief description of the task. Maximum 200 characters.",
     minLength: 1,
     maxLength: MAX_CONTENT_LENGTH,
     pattern: "\\S",
@@ -40,7 +42,8 @@ const TodoSchema = Type.Object({
 /** JSON schema for the todowrite tool parameters. */
 export const TodoWriteParams = Type.Object({
   todos: Type.Array(TodoSchema, {
-    description: "Complete replacement todo list for the session",
+    description:
+      "Complete replacement todo list for the session. Resubmit every item on each call, including completed ones. Never submit only the changed item. Maximum 20 todos.",
     maxItems: MAX_TODOS,
   }),
 });

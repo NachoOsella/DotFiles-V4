@@ -34,69 +34,54 @@ test('built-in roles have focused instructions and expected permissions', () => 
     assert.equal(AGENT_ROLES.reviewer.canUseWriteTools, false)
     assert.equal(AGENT_ROLES.reviewer.defaultReasoningEffort, 'high')
     assert.equal(AGENT_ROLES.tester.canUseWriteTools, false)
-    assert.ok(AGENT_ROLES.reviewer.instructions.includes('concurrency'))
+    assert.ok(AGENT_ROLES.reviewer.instructions.includes('races'))
     assert.ok(
         AGENT_ROLES.reviewer.instructions.toLowerCase().includes('shell access')
     )
-    assert.ok(AGENT_ROLES.tester.instructions.includes('tests'))
+    assert.ok(AGENT_ROLES.tester.instructions.includes('focused'))
     assert.ok(AGENT_ROLES.tester.instructions.includes('validation'))
     assert.match(CHILD_BASE_POLICY, /report_to_parent/)
-    assert.match(
-        CHILD_BASE_POLICY,
-        /finish the current run rather than repeatedly polling/
-    )
+    assert.match(CHILD_BASE_POLICY, /finish this run/)
     assert.doesNotMatch(CHILD_BASE_POLICY, /Report them to the parent instead/)
+    assert.match(CHILD_BASE_POLICY, /blocking parent decision/)
     assert.match(
         CHILD_BASE_POLICY,
-        /Use report_to_parent only when you need a specific parent decision/
+        /progress, findings, and non-blocking issues/
     )
+    assert.match(CHILD_BASE_POLICY, /share the filesystem/)
     assert.match(
         CHILD_BASE_POLICY,
-        /Never use report_to_parent for progress updates/
+        /Do not spawn agents or ask the user directly/
     )
-    assert.match(
-        CHILD_BASE_POLICY,
-        /Do not perform broad repository exploration/
-    )
-    assert.match(CHILD_BASE_POLICY, /stop investigating and act/)
-    assert.match(
-        CHILD_BASE_POLICY,
-        /For small assignments, keep the execution correspondingly small/
-    )
-    assert.match(CHILD_BASE_POLICY, /Record unrelated issues/)
-    assert.match(
-        CHILD_BASE_POLICY,
-        /When the requested work and appropriate focused validation are complete, finish/
-    )
+    assert.match(CHILD_BASE_POLICY, /Start narrow/)
+    assert.match(CHILD_BASE_POLICY, /Keep small work small/)
+    assert.match(CHILD_BASE_POLICY, /Run focused validation/)
 })
 
 test('role instructions teach bounded execution and stopping rules', () => {
-    assert.match(AGENT_ROLES.explorer.instructions, /Start from the context/)
     assert.match(
         AGENT_ROLES.explorer.instructions,
-        /Stop investigating once you have enough evidence/
+        /Start from supplied context/
+    )
+    assert.match(
+        AGENT_ROLES.explorer.instructions,
+        /Stop when the answer is supported/
     )
     assert.match(AGENT_ROLES.worker.instructions, /smallest complete change/)
     assert.match(
         AGENT_ROLES.worker.instructions,
-        /Once the definition of done is satisfied/
+        /Validate the requested behavior/
     )
-    assert.match(
-        AGENT_ROLES.worker.instructions,
-        /Do not spend time rediscovering context/
-    )
-    assert.match(AGENT_ROLES.reviewer.instructions, /Do not manufacture issues/)
+    assert.match(AGENT_ROLES.worker.instructions, /Inspect named files/)
+    assert.match(AGENT_ROLES.reviewer.instructions, /do not invent issues/)
     assert.match(
         AGENT_ROLES.reviewer.instructions,
-        /Collect them in the final review/
+        /report prioritized findings/
     )
+    assert.match(AGENT_ROLES.tester.instructions, /smallest focused check/)
     assert.match(
         AGENT_ROLES.tester.instructions,
-        /Start with the smallest validation/
-    )
-    assert.match(
-        AGENT_ROLES.tester.instructions,
-        /Do not continue running broader validation/
+        /Do not repair application code/
     )
 })
 

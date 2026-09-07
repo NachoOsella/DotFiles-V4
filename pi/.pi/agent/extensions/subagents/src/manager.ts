@@ -276,8 +276,13 @@ interface Entry {
     /** Terminal state to restore if the backend rejects an idle restart. */
     restartState?: Pick<
         MutableSnapshot,
-        'status' | 'settledAt' | 'errorText' | 'lastRun'
-    >
+        | 'status'
+        | 'settledAt'
+        | 'errorText'
+        | 'lastRun'
+        | 'currentRunId'
+        | 'finalText'
+    > & { runStartedAt: number }
     nextRunNumber: number
     pendingRunIds: Set<string>
     runStartedAt: number
@@ -380,11 +385,22 @@ export interface SubagentManagerShape {
      * "consumed". A question returns its event and leaves all other work
      * running. Interruption (tool abort) releases the interest and leaves the
      * subagents running.
+     *
+     * Filtered ID-wait semantics: `afterSequence` filters only the returned
+     * mailbox events (sequences strictly greater than the cursor). The
+     * pending/completed calculation still considers all listed children, so
+     * an unrelated pending event for another agent never blocks this wait
+     * indefinitely. Events at or below the cursor are retained, not consumed,
+     * and callers must return a conservative cursor that never advances past
+     * the earliest still-undelivered sequence; otherwise a global cursor
+     * would silently skip an in-flight event that later releases. See the
+     * tool-layer next_sequence calculation.
      */
     waitFor(
         ids: ReadonlyArray<string>,
         onPending?: (pending: string[]) => void,
-        timeoutMs?: number
+        timeoutMs?: number,
+        afterSequence?: number
     ): Effect.Effect<WaitResult>
     /** Interrupt running subagents; they remain reusable. */
     interrupt(
@@ -627,13 +643,19 @@ const makeManager = (config: SubagentConfig) =>
                 return
             entry.restarting = false
             entry.restartState = undefined
-            s.settledAt = Date.now()
+            // Queued follow-ups keep the snapshot visibly active so list/status
+            // and waitFor agree: the finished run still publishes its mailbox
+            // result below, but the snapshot only goes terminal once every
+            // queued assignment has started and settled.
+            const hasQueuedWork = entry.pendingRunIds.size > 0
+            if (!hasQueuedWork) s.settledAt = Date.now()
+            else s.settledAt = undefined
             let output = ''
             let error: string | undefined
             let runStatus: NonNullable<SubagentSnapshot['lastRun']>['status']
             switch (outcome._tag) {
                 case 'Completed':
-                    s.status = 'done'
+                    s.status = hasQueuedWork ? 'running' : 'done'
                     s.errorText = undefined
                     output = truncateUtf8(
                         outcome.finalText,
@@ -643,7 +665,7 @@ const makeManager = (config: SubagentConfig) =>
                     runStatus = 'completed'
                     break
                 case 'Failed':
-                    s.status = 'error'
+                    s.status = hasQueuedWork ? 'running' : 'error'
                     error = bounded(outcome.errorText)
                     s.errorText = error
                     output = truncateUtf8(
@@ -655,7 +677,7 @@ const makeManager = (config: SubagentConfig) =>
                     runStatus = 'failed'
                     break
                 case 'Interrupted':
-                    s.status = 'error'
+                    s.status = hasQueuedWork ? 'running' : 'error'
                     error = 'Run was aborted'
                     s.errorText = error
                     output = truncateUtf8(
@@ -1087,7 +1109,10 @@ const makeManager = (config: SubagentConfig) =>
                     ).pipe(
                         Effect.ensuring(
                             Effect.sync(() => {
-                                if (entry.snapshot.status === 'running')
+                                if (
+                                    entry.snapshot.status === 'running' &&
+                                    entry.snapshot.lastRun?.status === 'running'
+                                )
                                     settle(entry, {
                                         _tag: 'Failed',
                                         errorText:
@@ -1124,9 +1149,16 @@ const makeManager = (config: SubagentConfig) =>
         const waitFor = (
             ids: ReadonlyArray<string>,
             onPending?: (pending: string[]) => void,
-            timeoutMs?: number
+            timeoutMs?: number,
+            afterSequence?: number
         ) =>
             Effect.suspend(() => {
+                const cursor = afterSequence ?? 0
+                if (!Number.isSafeInteger(cursor) || cursor < 0) {
+                    throw new RangeError(
+                        'afterSequence must be a non-negative safe integer.'
+                    )
+                }
                 const unique = [...new Set(ids)]
                 for (const id of unique) {
                     const entry = entries.get(id)
@@ -1156,7 +1188,11 @@ const makeManager = (config: SubagentConfig) =>
                 const questionEvents = () =>
                     mailbox
                         .peek({ agentIds: unique })
-                        .filter((event) => event.kind === 'question')
+                        .filter(
+                            (event) =>
+                                event.kind === 'question' &&
+                                event.sequence > cursor
+                        )
                 const collectResult = (
                     result: Omit<WaitResult, 'events'>,
                     questions: ReadonlyArray<AgentEnvelope> = []
@@ -1164,15 +1200,27 @@ const makeManager = (config: SubagentConfig) =>
                     const runIds = result.completed
                         .map((id) => entries.get(id)?.snapshot.lastRun?.id)
                         .filter((runId): runId is string => runId !== undefined)
-                    const completionEvents = mailbox.peek({
-                        agentIds: unique,
-                        runIds,
-                    })
+                    // Filter returned events by the cursor, not the pending
+                    // child calculation above. Events at or below the cursor
+                    // are retained (never drained here) so a global cursor
+                    // cannot silently skip them; the tool layer returns a
+                    // conservative next_sequence instead of advancing past
+                    // the earliest still-undelivered sequence.
+                    const completionEvents = mailbox
+                        .peek({
+                            agentIds: unique,
+                            runIds,
+                        })
+                        .filter((event) => event.sequence > cursor)
+                    const freshQuestions = questions.filter(
+                        (event) => event.sequence > cursor
+                    )
                     const sequences = [
                         ...completionEvents,
-                        ...questions,
+                        ...freshQuestions,
                     ].map((event) => event.sequence)
-                    const events = mailbox.drain({ sequences })
+                    const events =
+                        sequences.length > 0 ? mailbox.drain({ sequences }) : []
                     for (const event of events)
                         suppressedDeliveries.delete(event.sequence)
                     return { ...result, events }
@@ -1250,11 +1298,19 @@ const makeManager = (config: SubagentConfig) =>
                             settle(entry, { _tag: 'Interrupted' })
                             return
                         }
-                        if (!wasRunning && queuedRunId) {
-                            // The previous run is already terminal, but the backend
-                            // has not emitted RunStarted for this queued run yet.
-                            // Give the cancelled request a terminal run record without
-                            // allowing a late start to resurrect the session.
+                        // The previous run is already terminal, but the backend
+                        // has not emitted RunStarted for this queued run yet.
+                        // Give the cancelled request a terminal run record without
+                        // allowing a late start to resurrect the session.
+                        // Note: since settlements keep the snapshot active
+                        // while follow-ups are queued, the snapshot can still
+                        // report `running` with an already-terminal current run.
+                        // In that case the queued assignment likewise never started.
+                        if (
+                            queuedRunId &&
+                            (!wasRunning ||
+                                entry.snapshot.lastRun?.status !== 'running')
+                        ) {
                             if (
                                 entry.snapshot.currentRunId !== queuedRunId ||
                                 entry.snapshot.status !== 'running'
@@ -1532,6 +1588,10 @@ const makeManager = (config: SubagentConfig) =>
                         status: snapshot.status,
                         settledAt: snapshot.settledAt,
                         errorText: snapshot.errorText,
+                        currentRunId: snapshot.currentRunId,
+                        lastRun: snapshot.lastRun,
+                        finalText: snapshot.finalText,
+                        runStartedAt: entry.runStartedAt,
                     }
                     entry.restarting = true
                     snapshot.status = 'running'
@@ -1554,7 +1614,19 @@ const makeManager = (config: SubagentConfig) =>
                                 const previous = entry.restartState
                                 entry.restarting = false
                                 entry.restartState = undefined
-                                if (previous) Object.assign(snapshot, previous)
+                                if (previous) {
+                                    // Restore the complete previous snapshot state:
+                                    // rolling back only the visible status would
+                                    // leave a dangling currentRunId/lastRun.
+                                    snapshot.status = previous.status
+                                    snapshot.settledAt = previous.settledAt
+                                    snapshot.errorText = previous.errorText
+                                    snapshot.currentRunId =
+                                        previous.currentRunId
+                                    snapshot.lastRun = previous.lastRun
+                                    snapshot.finalText = previous.finalText
+                                    entry.runStartedAt = previous.runStartedAt
+                                }
                                 bump(snapshot)
                                 notify(snapshot.id)
                             })

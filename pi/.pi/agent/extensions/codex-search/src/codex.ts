@@ -64,8 +64,14 @@ export interface FetchCodexModelsOptions {
 export async function fetchCodexModels(
   options: FetchCodexModelsOptions,
 ): Promise<import("./modes/types.ts").CodexModel[]> {
-  const { CodexError, classifyHttpStatus } = await import("./errors.ts");
+  const { CodexError, classifyHttpStatus, formatHttpErrorBody } = await import("./errors.ts");
   const { createTransport } = await import("./transport.ts");
+  const {
+    ERROR_BODY_LIMIT_BYTES,
+    ERROR_BODY_TRUNCATION_MARKER,
+    MODEL_CATALOG_LIMIT_BYTES,
+    readBoundedResponseText,
+  } = await import("./limits.ts");
   const transport = createTransport({
     token: options.token,
     accountId: options.accountId,
@@ -86,7 +92,15 @@ export async function fetchCodexModels(
 
   if (!response.ok) {
     const status = response.status;
-    const text = await response.text();
+    const { text: rawError, truncated: errorTruncated } = await readBoundedResponseText(
+      response,
+      ERROR_BODY_LIMIT_BYTES,
+    );
+    const boundedError = errorTruncated
+      ? rawError.slice(0, ERROR_BODY_LIMIT_BYTES - ERROR_BODY_TRUNCATION_MARKER.length) +
+        ERROR_BODY_TRUNCATION_MARKER
+      : rawError;
+    const text = formatHttpErrorBody(boundedError, "responses");
     throw new CodexError(
       classifyHttpStatus(status),
       `Codex models request failed: HTTP ${status}: ${text}`,
@@ -94,7 +108,19 @@ export async function fetchCodexModels(
     );
   }
 
-  const data = (await response.json()) as {
+  const { text: catalogText, truncated } = await readBoundedResponseText(
+    response,
+    MODEL_CATALOG_LIMIT_BYTES,
+  );
+  if (truncated) {
+    throw new CodexError(
+      "transport",
+      `Codex models response exceeded the ${MODEL_CATALOG_LIMIT_BYTES} char catalog ` +
+        `budget. Cancelling the request; partial provider output is not returned as ` +
+        `authoritative.`,
+    );
+  }
+  const data = JSON.parse(catalogText) as {
     models?: Array<{
       slug?: string;
       id?: string;

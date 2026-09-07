@@ -6,7 +6,6 @@
     "extensions/discord-activity",
     "extensions/firecrawl-search",
     "extensions/git-info",
-    "extensions/lsp",
     "extensions/model-info",
     "extensions/session-stats",
     "extensions/subagents",
@@ -22,9 +21,7 @@
     "acorn": "^8.17.0",
     "effect": "4.0.0-beta.98",
     "firecrawl": "^4.30.0",
-    "typebox": "^1.3.6",
-    "vscode-jsonrpc": "^8.2.1",
-    "vscode-languageserver-types": "^3.17.5"
+    "typebox": "^1.3.6"
   },
   "overrides": {
     "effect": "4.0.0-beta.98",
@@ -43,7 +40,7 @@
     "format": "prettier --write \"extensions/**/*.{ts,cjs}\" \"*.json\"",
     "format:check": "prettier --check \"extensions/**/*.{ts,cjs}\" \"*.json\"",
     "test": "node --test --experimental-strip-types extensions/*/*.test.ts && npm --prefix extensions/file-search test",
-    "test:lsp": "node --preserve-symlinks --preserve-symlinks-main --test --test-concurrency=1 --experimental-strip-types extensions/lsp/*.test.ts",
+    "test:allowed": "node --input-type=module --eval 'import { readdirSync } from \"node:fs\"; import { spawnSync } from \"node:child_process\"; const patterns = [\"extensions/ask-user/*.test.ts\", \"extensions/background-terminals/*.test.ts\", \"extensions/codex-search/tests/*.test.ts\", \"extensions/git-info/*.test.ts\", \"extensions/model-info/*.test.ts\", \"extensions/subagents/*.test.ts\", \"extensions/todowrite/*.test.ts\", \"extensions/ui-customization/*.test.ts\", \"extensions/shared/*.test.ts\"]; const files = patterns.flatMap((pattern) => { const directory = pattern.slice(0, pattern.lastIndexOf(\"/\")); const matches = readdirSync(directory, { withFileTypes: true }).filter((entry) => entry.isFile() && entry.name.endsWith(\".test.ts\")).map((entry) => entry.name).sort(); if (matches.length === 0) throw new Error(`No test files match ${pattern}`); return matches.map((entry) => `${directory}/${entry}`); }); const result = spawnSync(process.execPath, [\"--preserve-symlinks\", \"--preserve-symlinks-main\", \"--test\", \"--test-concurrency=1\", \"--experimental-strip-types\", ...files], { stdio: \"inherit\" }); process.exit(result.status ?? 1);'",
     "test:todowrite": "node --preserve-symlinks --preserve-symlinks-main --test --experimental-strip-types extensions/todowrite/*.test.ts",
     "test:zen-free": "node --preserve-symlinks --preserve-symlinks-main --test --experimental-strip-types extensions/pi-zen-free/*.test.ts"
   }

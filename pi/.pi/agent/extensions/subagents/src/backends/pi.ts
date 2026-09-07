@@ -6,7 +6,9 @@
  * - real session files visible in /resume, child resources loaded per-cwd
  *   with trust gating, and an explicit built-in child tool allowlist;
  * - `session.subscribe()` events translated to normalized SubagentEvents;
- * - send() steers a streaming run or starts a fresh prompt() when idle;
+ * - send() steers a streaming run via native steer, or enqueues one
+ *   backend-owned follow-up record per logical run; each record is launched
+ *   through its own top-level prompt() after the prior SDK run settles;
  * - interrupt clears the queue and aborts; closing the session scope emits
  *   the child session_shutdown hook and disposes the session.
  */
@@ -598,8 +600,9 @@ const makePiSession = (
                     // Hooks still run in-process; this allowlist limits callable
                     // tools, not arbitrary side effects from trusted extensions.
                     session.setActiveToolsByName([...activeTools])
-                    // Give each queued follow-up its own lifecycle so manager run IDs
-                    // remain one-to-one with child runs.
+                    // Native follow-up queues are unused by this backend (each
+                    // logical run gets its own top-level prompt), but keep the
+                    // SDK in single-drain mode for predictable steering behavior.
                     session.setFollowUpMode('one-at-a-time')
                 } catch (error) {
                     await shutdownAndDisposeChildSession(session)
@@ -612,6 +615,17 @@ const makePiSession = (
 
         const state = {
             closed: false,
+            // Backend-owned dispatch lifecycle. Never rely solely on
+            // `session.isStreaming`: prompt preflight runs while it is false.
+            // Only `idle` may start a new top-level `session.prompt`.
+            lifecycle: 'idle' as 'idle' | 'starting' | 'running',
+            // The SDK reports `isStreaming === false` during prompt preflight.
+            // Retain the operation so interrupt/close cannot acknowledge cleanup
+            // before that preflight either settles or times out.
+            promptOperation: undefined as Promise<void> | undefined,
+            // Invalidates in-flight prompt handlers after interrupt/close so a
+            // late preflight rejection can never settle a newer run.
+            epoch: 0,
             runCounter: Number(task.runId?.match(/:run-(\d+)$/)?.[1] ?? 0),
             activeRun: undefined as
                 | {
@@ -621,7 +635,14 @@ const makePiSession = (
                       error?: string
                   }
                 | undefined,
-            pendingFollowUpRunIds: [] as string[],
+            // Backend-owned FIFO of follow-up assignments. Native
+            // `session.followUp` is never used for logical runs: the SDK drains
+            // native follow-ups inside the same agent loop without a fresh
+            // `agent_start`/`agent_settled` pair, which stranded manager runs.
+            // Each record is launched via its own top-level `session.prompt`
+            // after the prior SDK run fully settles.
+            queue: [] as Array<{ runId: string; text: string }>,
+            nativeSteering: [] as string[],
         }
 
         const events = yield* Queue.make<SubagentEvent, Cause.Done>()
@@ -687,9 +708,114 @@ const makePiSession = (
             return runId
         }
 
-        const settle = () => {
-            const run = state.activeRun
+        const emitQueue = () => {
+            if (state.closed) return
+            emit({
+                _tag: 'QueueChanged',
+                runId: state.activeRun?.id,
+                queued: [
+                    ...state.nativeSteering.map((text) => ({
+                        text,
+                        kind: 'steer' as const,
+                    })),
+                    ...state.queue.map(({ text, runId }) => ({
+                        text,
+                        kind: 'follow-up' as const,
+                        runId,
+                    })),
+                ],
+            })
+        }
+
+        /**
+         * Launch the next queued assignment only when the prior SDK run has
+         * settled (lifecycle idle) AND its top-level prompt promise has
+         * resolved. `agent_settled` can arrive while that promise is still
+         * pending; dispatching early would overlap prompts. The pending
+         * prompt handler drains the queue once it clears `promptOperation`.
+         */
+        const pumpNext = () => {
+            if (state.closed) return
+            if (state.lifecycle !== 'idle') return
+            if (state.promptOperation) return
+            const next = state.queue.shift()
+            if (!next) return
+            dispatch(next)
+        }
+
+        /**
+         * Reserve `starting` synchronously, then launch one top-level
+         * `session.prompt`. All later follow-ups enqueue until this prompt
+         * settles. Prompt handlers are correlated to the captured run so a
+         * rejection from A can never settle B.
+         */
+        const dispatch = (record: { runId: string; text: string }) => {
+            if (state.closed) return
+            if (state.lifecycle !== 'idle' || state.promptOperation) {
+                state.queue.unshift(record)
+                return
+            }
+            state.lifecycle = 'starting'
+            const epochAtDispatch = state.epoch
+            beginRun(record.runId)
+            emitQueue()
+            const captured = state.activeRun
+            if (!captured) {
+                state.lifecycle = 'idle'
+                return
+            }
+            const promptOperation = Promise.resolve().then(() =>
+                session.prompt(record.text)
+            )
+            state.promptOperation = promptOperation
+            void promptOperation.then(
+                () => {
+                    if (state.promptOperation === promptOperation)
+                        state.promptOperation = undefined
+                    if (state.closed || epochAtDispatch !== state.epoch) {
+                        if (state.lifecycle === 'idle') pumpNext()
+                        return
+                    }
+                    if (state.activeRun !== captured || captured.settled) {
+                        if (state.lifecycle === 'idle') pumpNext()
+                        return
+                    }
+                    // Success without any agent lifecycle (for example an
+                    // extension command): no `agent_settled` will arrive.
+                    settleRun(captured)
+                },
+                (error) => {
+                    if (state.promptOperation === promptOperation)
+                        state.promptOperation = undefined
+                    if (state.closed || epochAtDispatch !== state.epoch) {
+                        if (state.lifecycle === 'idle') pumpNext()
+                        return
+                    }
+                    if (
+                        state.activeRun !== captured ||
+                        captured.settled
+                    ) {
+                        if (state.lifecycle === 'idle') pumpNext()
+                        return
+                    }
+                    // Preflight failures never start the agent lifecycle, so no
+                    // `agent_settled` will arrive for them.
+                    captured.error = boundedError(error)
+                    settleRun(captured)
+                }
+            )
+        }
+
+        const settleRun = (
+            captured:
+                | NonNullable<typeof state.activeRun>
+                | undefined
+        ) => {
+            const run = captured ?? state.activeRun
             if (!run || run.settled) return
+            // A late callback from a previous dispatch must never settle the
+            // newer active run.
+            if (state.activeRun !== run) return
             run.settled = true
             const last = lastAssistantMessage(session, run.startMessageIndex)
             const partialText =
@@ -700,6 +826,9 @@ const makePiSession = (
                     runId: run.id,
                     outcome: { _tag: 'Interrupted', partialText },
                 })
+                state.lifecycle = 'idle'
+                emitQueue()
+                pumpNext()
                 return
             }
             const errorText =
@@ -717,6 +846,9 @@ const makePiSession = (
                         partialText,
                     },
                 })
+                state.lifecycle = 'idle'
+                emitQueue()
+                pumpNext()
                 return
             }
             emit({
@@ -727,6 +859,9 @@ const makePiSession = (
                     finalText: finalOutput(session, run.startMessageIndex),
                 },
             })
+            state.lifecycle = 'idle'
+            emitQueue()
+            pumpNext()
         }
 
         const handleEvent = (event: AgentSessionEvent) => {
@@ -735,9 +870,15 @@ const makePiSession = (
                 case 'agent_start':
                     // Extensions may register tools between runs; guard new ones too.
                     toolTimeout.apply(session)
-                    if (!state.activeRun || state.activeRun.settled) {
-                        const runId = state.pendingFollowUpRunIds.shift()
-                        if (runId) beginRun(runId)
+                    // Logical runs are allocated at dispatch time, not here. A
+                    // single top-level prompt can emit extra starts for native
+                    // retry/compaction continuations; they share the active run.
+                    if (
+                        state.activeRun &&
+                        !state.activeRun.settled &&
+                        state.lifecycle === 'starting'
+                    ) {
+                        state.lifecycle = 'running'
                     }
                     break
                 case 'message_update': {
@@ -815,20 +956,11 @@ const makePiSession = (
                     })
                     break
                 case 'queue_update':
-                    emit({
-                        _tag: 'QueueChanged',
-                        runId: state.activeRun?.id,
-                        queued: [
-                            ...event.steering.map((text) => ({
-                                text,
-                                kind: 'steer' as const,
-                            })),
-                            ...event.followUp.map((text) => ({
-                                text,
-                                kind: 'follow-up' as const,
-                            })),
-                        ],
-                    })
+                    // Merge native steering with the backend-owned follow-up
+                    // FIFO. Native follow-ups are never used for logical runs;
+                    // the takeover UI reads the merged view.
+                    state.nativeSteering = [...event.steering]
+                    emitQueue()
                     break
                 case 'thinking_level_changed':
                     emit({
@@ -838,7 +970,14 @@ const makePiSession = (
                     })
                     break
                 case 'agent_settled':
-                    settle()
+                    if (state.activeRun && !state.activeRun.settled) {
+                        settleRun(state.activeRun)
+                    } else if (state.lifecycle === 'idle') {
+                        // Stale settlement from an orphaned SDK run: the logical
+                        // run was already resolved, but the SDK just became idle.
+                        // Drain anything queued while it was busy.
+                        pumpNext()
+                    }
                     break
             }
         }
@@ -850,18 +989,42 @@ const makePiSession = (
             closePromise = (async () => {
                 const errors: string[] = []
                 state.closed = true
+                state.epoch++
                 unsubscribe()
                 try {
                     session.clearQueue()
                 } catch (error) {
                     errors.push(`clear queue failed: ${boundedError(error)}`)
                 }
-                state.pendingFollowUpRunIds = []
+                state.queue = []
+                state.nativeSteering = []
                 const aborted = await waitBounded(
                     Promise.resolve().then(() => session.abort()),
                     cleanupTimeoutMs
                 )
                 if (!aborted) errors.push('session abort failed or timed out')
+                const promptOperation = state.promptOperation
+                if (promptOperation) {
+                    const completed = await waitBounded(
+                        promptOperation,
+                        cleanupTimeoutMs
+                    )
+                    if (!completed)
+                        errors.push('active prompt failed or timed out')
+                    // A preflight can finish and start the SDK run after the
+                    // first abort call. Abort once more before disposal so a
+                    // prompt that did settle is not left running.
+                    if (completed) {
+                        const abortedAfterPrompt = await waitBounded(
+                            Promise.resolve().then(() => session.abort()),
+                            cleanupTimeoutMs
+                        )
+                        if (!abortedAfterPrompt)
+                            errors.push(
+                                'session abort after prompt failed or timed out'
+                            )
+                    }
+                }
                 const disposed = await shutdownAndDisposeChildSession(
                     session,
                     cleanupTimeoutMs
@@ -879,26 +1042,13 @@ const makePiSession = (
         })
         yield* Effect.addFinalizer(() => closeSession)
 
-        /** Start a fresh run and convert prompt failures into terminal events. */
-        const startRun = (text: string, runId?: string) => {
-            beginRun(runId)
-            void session.prompt(text).catch((error) => {
-                if (state.activeRun && !state.activeRun.settled) {
-                    state.activeRun.error = boundedError(error)
-                }
-                // Preflight failures may never start the agent lifecycle, so no
-                // agent_settled will arrive for them.
-                if (!session.isStreaming) settle()
-            })
-        }
-
         // Session naming is best-effort.
         yield* Effect.try(() =>
             session.sessionManager.appendSessionInfo(`subagent: ${task.title}`)
         ).pipe(Effect.ignore)
 
         emit({ _tag: 'MetaChanged', meta: currentMeta() })
-        startRun(task.prompt, task.runId)
+        dispatch({ runId: task.runId ?? nextRunId(), text: task.prompt })
 
         return {
             meta: Effect.sync(currentMeta),
@@ -914,49 +1064,56 @@ const makePiSession = (
                             message: 'Subagent session is closed.',
                         })
                     }
-                    if (session.isStreaming) {
-                        // Queue through the SDK so queue_update and transcript events stay
-                        // aligned with the child session's native state.
-                        const queuedRunId =
-                            delivery === 'follow-up'
-                                ? (runId ?? nextRunId())
-                                : undefined
-                        if (queuedRunId)
-                            state.pendingFollowUpRunIds.push(queuedRunId)
+                    if (
+                        delivery === 'steer' &&
+                        state.lifecycle !== 'idle'
+                    ) {
+                        // Redirect the active run without allocating a new
+                        // logical assignment.
                         return Effect.tryPromise({
-                            try: () =>
-                                delivery === 'follow-up'
-                                    ? session.followUp(text)
-                                    : session.steer(text),
-                            catch: (error) => {
-                                if (queuedRunId) {
-                                    const index =
-                                        state.pendingFollowUpRunIds.lastIndexOf(
-                                            queuedRunId
-                                        )
-                                    if (index >= 0)
-                                        state.pendingFollowUpRunIds.splice(
-                                            index,
-                                            1
-                                        )
-                                }
-                                return new SendError({
+                            try: () => session.steer(text),
+                            catch: (error) =>
+                                new SendError({
                                     message: boundedError(error),
-                                })
-                            },
+                                }),
                         }).pipe(Effect.asVoid)
                     }
-                    return Effect.sync(() => startRun(text, runId))
+                    // One logical follow-up assignment per manager run ID.
+                    // The reservation below is synchronous so two concurrent
+                    // sends cannot both observe `idle` during prompt preflight.
+                    // Queue while the prior prompt promise is still pending,
+                    // even when settlement already flipped lifecycle to idle.
+                    const record = {
+                        runId: runId ?? nextRunId(),
+                        text,
+                    }
+                    if (state.lifecycle !== 'idle' || state.promptOperation) {
+                        state.queue.push(record)
+                        emitQueue()
+                        return Effect.void
+                    }
+                    return Effect.sync(() => {
+                        dispatch(record)
+                    })
                 }),
             interrupt: Effect.promise(async () => {
                 if (state.closed) return
+                state.epoch++
+                state.queue = []
+                state.nativeSteering = []
                 try {
                     session.clearQueue()
                 } catch {
                     // Abort regardless.
                 }
-                state.pendingFollowUpRunIds = []
+                emitQueue()
                 await session.abort().catch(() => undefined)
+                // `session.abort()` cannot see SDK prompt preflight because the
+                // session still reports idle. Wait for the outstanding prompt
+                // operation before acknowledging interrupt; the manager bounds
+                // this effect and force-disposes on timeout if it never settles.
+                const promptOperation = state.promptOperation
+                if (promptOperation) await promptOperation.catch(() => undefined)
                 // Only resolve once streaming has actually stopped: reporting the
                 // interrupt as complete while the run keeps working would let the
                 // manager settle a run that is still mutating the workspace. The
@@ -966,6 +1123,9 @@ const makePiSession = (
                 }
                 // No streaming run means no agent_settled will arrive; emit the
                 // terminal event (once) so the run cannot look running forever.
+                // Late prompt handlers are epoch-invalidated and cannot settle
+                // a newer run. If a stale preflight later starts an orphaned
+                // SDK run, its stale settlement still pumps queued work.
                 if (
                     !state.closed &&
                     state.activeRun &&
@@ -977,6 +1137,8 @@ const makePiSession = (
                         runId: state.activeRun.id,
                         outcome: { _tag: 'Interrupted' },
                     })
+                    state.lifecycle = 'idle'
+                    emitQueue()
                 }
             }),
             close: closeSession,

@@ -672,7 +672,8 @@ describe("codex helpers", () => {
   it("sends canonical indexed_web_access to /codex/responses", async () => {
     let requestedBody = {} as { tools?: Array<Record<string, unknown>> };
     const sse =
-      'event: response.output_item.done\ndata: {"item":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"ok"}]}}\n\n';
+      'event: response.output_item.done\ndata: {"item":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"ok"}]}}\n\n' +
+      'event: response.completed\ndata: {"response":{}}\n\n';
     const fetchImpl = async (_input: string | URL | Request, init?: RequestInit) => {
       requestedBody = JSON.parse(String(init?.body));
       return new Response(sse, { headers: { "content-type": "text/event-stream" } });

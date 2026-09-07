@@ -34,7 +34,15 @@ export function formatHttpErrorBody(text: string, mode: "responses" | "standalon
         : "Retry after Codex/ChatGPT has refreshed its Cloudflare clearance.";
     return `Cloudflare challenge blocked the Codex request. ${advice}`;
   }
-  return text;
+  return truncateErrorBody(text);
+}
+
+/** Retain at most 8 KiB of HTTP error context with an explicit marker. */
+function truncateErrorBody(text: string): string {
+  const limit = 8 * 1024;
+  const marker = "\n[…truncated to 8 KiB…]";
+  if (text.length <= limit) return text;
+  return text.slice(0, limit - marker.length) + marker;
 }
 
 export function isCloudflareChallenge(text: string): boolean {

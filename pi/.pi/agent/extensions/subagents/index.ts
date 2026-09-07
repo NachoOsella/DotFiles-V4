@@ -34,6 +34,7 @@ import {
     formatSize,
     getAgentDir,
     getMarkdownTheme,
+    keyHint,
     ProjectTrustStore,
     truncateHead,
 } from '@earendil-works/pi-coding-agent'
@@ -46,7 +47,11 @@ import {
     REASONING_EFFORTS,
     type SubagentSnapshot,
 } from './src/domain.ts'
-import { formatActivityStatus, formatContextUtilization } from './src/format.ts'
+import {
+    countSubagentStates,
+    formatActivityStatus,
+    formatContextUtilization,
+} from './src/format.ts'
 import { deliverMailbox as deliverMailboxToParent } from './src/delivery.ts'
 import { SubagentManager, type SubagentManagerShape } from './src/manager.ts'
 import type { AgentEnvelope } from './src/mailbox.ts'
@@ -82,8 +87,110 @@ import { openSubagentPicker } from './src/ui/takeover.ts'
 const SUBAGENT_OUTPUT_MAX_BYTES = 8 * 1024
 const WAIT_OUTPUT_MAX_BYTES = 32 * 1024
 const WAIT_PER_AGENT_MAX_BYTES = 8 * 1024
+const WAIT_MANIFEST_MAX_BYTES = 4 * 1024
+const WAIT_OMISSION_MAX_BYTES = 4 * 1024
+const WAIT_TRUNCATION_RESERVE_BYTES = 1024
 const CHECK_PREVIEW_MAX_BYTES = 1024
 const DELIVERY_BATCH_MS = 100
+
+function utf8Bytes(text: string) {
+    return Buffer.byteLength(text, 'utf8')
+}
+
+/** Truncate UTF-8 without splitting a code point. */
+function truncateUtf8Bytes(text: string, maxBytes: number) {
+    if (maxBytes <= 0) return ''
+    if (utf8Bytes(text) <= maxBytes) return text
+    let bytes = 0
+    let out = ''
+    for (const character of text) {
+        const size = utf8Bytes(character)
+        if (bytes + size > maxBytes) break
+        out += character
+        bytes += size
+    }
+    return out
+}
+
+function boundMetaText(text: string, maxBytes: number) {
+    if (utf8Bytes(text) <= maxBytes) return text
+    const marker = '…'
+    const markerBytes = utf8Bytes(marker)
+    if (maxBytes <= markerBytes) return truncateUtf8Bytes(text, maxBytes)
+    return `${truncateUtf8Bytes(text, maxBytes - markerBytes)}${marker}`
+}
+
+function retrievalRoute(snap: SubagentSnapshot | undefined) {
+    if (!snap) return 'no transcript file available'
+    return snap.meta.sessionFilePath
+        ? `session transcript: ${snap.meta.sessionFilePath}`
+        : 'no transcript file available'
+}
+
+/**
+ * Conservative cursor for filtered waits. Never advance past the earliest
+ * still-undelivered sequence so a global cursor cannot silently skip an
+ * in-flight event that later releases. Retained events stay consumable by a
+ * future wait with the returned cursor.
+ */
+function conservativeNextSequence(
+    requestedAfter: number,
+    events: ReadonlyArray<AgentEnvelope>,
+    earliestUndelivered: number | undefined
+) {
+    if (events.length === 0) return requestedAfter
+    const maxReturned = Math.max(...events.map((event) => event.sequence))
+    if (
+        earliestUndelivered !== undefined &&
+        earliestUndelivered < maxReturned
+    ) {
+        return Math.max(0, earliestUndelivered - 1)
+    }
+    return maxReturned
+}
+
+function boundOutputWithNotice(body: string, maxBytes: number) {
+    if (utf8Bytes(body) <= maxBytes) return body
+    const notice = `\n\n[Output truncated: showing partial output within ${formatSize(maxBytes)} budget. Use subagent_check for per-child status or the session transcript path listed for each child for full output.]`
+    const available = Math.max(0, maxBytes - utf8Bytes(notice))
+    return `${truncateUtf8Bytes(body, available)}${notice}`
+}
+
+function buildWaitManifest(
+    ids: ReadonlyArray<string>,
+    getSnap: (id: string) => SubagentSnapshot | undefined
+) {
+    const parts = ids.map((id) => {
+        const snap = getSnap(id)
+        if (!snap) return `${boundMetaText(id, 128)} (unknown)`
+        const task = boundMetaText(snap.taskName ?? snap.title ?? '?', 128)
+        const role = boundMetaText(snap.role ?? 'default', 64)
+        return `${snap.id} ${task} (${role}; ${snap.status})`
+    })
+    const manifest = `Requested ${ids.length} subagent(s): ${parts.join(', ')}`
+    if (utf8Bytes(manifest) <= WAIT_MANIFEST_MAX_BYTES) return manifest
+    // Manifest must name every requested ID; bound per-ID fields already, so
+    // fall back to IDs only rather than dropping any child.
+    const idsOnly = `Requested ${ids.length} subagent(s): ${ids.map((id) => boundMetaText(id, 128)).join(', ')}`
+    return truncateUtf8Bytes(idsOnly, WAIT_MANIFEST_MAX_BYTES)
+}
+
+function buildOmissionNotice(
+    omitted: ReadonlyArray<{ id: string; retrieval: string }>,
+    total: number
+) {
+    if (omitted.length === 0) return undefined
+    const listed = omitted
+        .map(
+            (entry) =>
+                `${boundMetaText(entry.id, 128)} (${boundMetaText(entry.retrieval, 256)})`
+        )
+        .join(', ')
+    const notice = `Omitted ${omitted.length} of ${total} requested subagent(s) from displayed output to stay within ${formatSize(WAIT_OUTPUT_MAX_BYTES)} budget: ${listed}. Retrieve each omitted child via subagent_check or its session transcript path above; when no transcript file exists the notice says so.`
+    if (utf8Bytes(notice) <= WAIT_OMISSION_MAX_BYTES) return notice
+    const idsOnly = `Omitted ${omitted.length} of ${total} requested subagent(s) from displayed output to stay within ${formatSize(WAIT_OUTPUT_MAX_BYTES)} budget: ${omitted.map((entry) => boundMetaText(entry.id, 128)).join(', ')}. Retrieve each omitted child via subagent_check or its session transcript path.`
+    return truncateUtf8Bytes(idsOnly, WAIT_OMISSION_MAX_BYTES)
+}
 
 function describeSubagent(snap: SubagentSnapshot) {
     const details = [
@@ -180,12 +287,23 @@ export function createSubagentsExtension(
             ui.setStatus('subagents', undefined)
             return
         }
-        const running = subs.filter((snap) => snap.status === 'running').length
-        const failed = subs.filter((snap) => snap.status === 'error').length
-        const done = subs.length - running - failed
+        // Same buckets as the dashboard summary: closed is not failure and
+        // interruption is distinct from failure via lastRun.status.
+        const hasPendingQuestion = (id: string) =>
+            manager
+                .peekMailbox({ agentIds: [id] })
+                .some((envelope) => envelope.kind === 'question')
+        const counts = countSubagentStates(subs, hasPendingQuestion)
         ui.setStatus(
             'subagents',
-            formatActivityStatus(ui.theme, { running, done, failed })
+            formatActivityStatus(ui.theme, {
+                running: counts.running,
+                queued: counts.queued,
+                done: counts.done,
+                failed: counts.failed,
+                interrupted: counts.interrupted,
+                closed: counts.closed,
+            })
         )
     }
 
@@ -213,12 +331,22 @@ export function createSubagentsExtension(
         deliveryTimer = undefined
         deliveryDueAt = undefined
         if (deliveryStopped) return
-        void getManager().then(async (manager) => {
-            if (deliveryStopped) return
-            const result = await deliverMailbox(manager)
-            if (!deliveryStopped && !result.delivered && result.retry)
-                scheduleMailboxDelivery(result.retryAfterMs)
-        })
+        void getManager()
+            .then(async (manager) => {
+                if (deliveryStopped) return
+                try {
+                    const result = await deliverMailbox(manager)
+                    if (!deliveryStopped && !result.delivered && result.retry)
+                        scheduleMailboxDelivery(result.retryAfterMs)
+                } catch {
+                    // A disposed runtime or host failure must not produce an
+                    // unhandled rejection; never retry against disposal.
+                    if (deliveryStopped) return
+                }
+            })
+            .catch(() => {
+                // getManager failed (runtime disposed during shutdown).
+            })
     }
 
     const scheduleMailboxDelivery = (delayMs = DELIVERY_BATCH_MS) => {
@@ -234,21 +362,31 @@ export function createSubagentsExtension(
 
     const onMailbox = (envelope: AgentEnvelope) => {
         if (deliveryStopped) return
-        void getManager().then(async (manager) => {
-            if (deliveryStopped) return
-            if (envelope.kind === 'question') {
-                if (deliveryTimer) clearTimeout(deliveryTimer)
-                deliveryTimer = undefined
-                deliveryDueAt = undefined
-                const result = await deliverMailbox(manager)
+        void getManager()
+            .then(async (manager) => {
                 if (deliveryStopped) return
-                if (!result.delivered && result.retry)
-                    scheduleMailboxDelivery(result.retryAfterMs)
-                else if (result.delivered) scheduleMailboxDelivery()
-                return
-            }
-            scheduleMailboxDelivery()
-        })
+                try {
+                    if (envelope.kind === 'question') {
+                        if (deliveryTimer) clearTimeout(deliveryTimer)
+                        deliveryTimer = undefined
+                        deliveryDueAt = undefined
+                        const result = await deliverMailbox(manager)
+                        if (deliveryStopped) return
+                        if (!result.delivered && result.retry)
+                            scheduleMailboxDelivery(result.retryAfterMs)
+                        else if (result.delivered) scheduleMailboxDelivery()
+                        return
+                    }
+                    scheduleMailboxDelivery()
+                } catch {
+                    // Detached delivery must never produce an unhandled
+                    // rejection and must not retry against a disposed runtime.
+                    if (deliveryStopped) return
+                }
+            })
+            .catch(() => {
+                // getManager failed (runtime disposed during shutdown).
+            })
     }
 
     pi.on('session_start', (_event, ctx) => {
@@ -425,14 +563,22 @@ export function createSubagentsExtension(
                 )
                 for (const event of result.events)
                     deliveryAttempts.delete(event.sequence)
+                // Aggregate byte limit: a per-envelope cap is not enough when
+                // many events are combined. Truncate with an explicit notice
+                // (never present a displayed subset as complete) while keeping
+                // the full events in details. UTF-8 safe and within budget.
+                const mailboxText =
+                    result.events.length > 0
+                        ? boundOutputWithNotice(
+                              buildMailboxMessage(result.events),
+                              WAIT_OUTPUT_MAX_BYTES
+                          )
+                        : 'No new subagent messages.'
                 return {
                     content: [
                         {
                             type: 'text',
-                            text:
-                                result.events.length > 0
-                                    ? buildMailboxMessage(result.events)
-                                    : 'No new subagent messages.',
+                            text: mailboxText,
                         },
                     ],
                     details: {
@@ -450,19 +596,25 @@ export function createSubagentsExtension(
                     `Unknown subagent id(s): ${unknown.join(', ')}. Known: ${known.join(', ') || 'none'}.`
                 )
             }
+            const requestedAfterSequence = params.after_sequence ?? 0
             const waitResult = await runTool(
                 getRuntime(),
-                manager.waitFor(ids, (pending) => {
-                    onUpdate?.({
-                        content: [
-                            {
-                                type: 'text',
-                                text: `Waiting for ${pending.join(', ')}...`,
-                            },
-                        ],
-                        details: { pending },
-                    })
-                }),
+                manager.waitFor(
+                    ids,
+                    (pending) => {
+                        onUpdate?.({
+                            content: [
+                                {
+                                    type: 'text',
+                                    text: `Waiting for ${pending.join(', ')}...`,
+                                },
+                            ],
+                            details: { pending },
+                        })
+                    },
+                    undefined,
+                    requestedAfterSequence
+                ),
                 {
                     signal,
                     interruptMessage: 'Wait aborted. Subagents keep running.',
@@ -471,71 +623,135 @@ export function createSubagentsExtension(
 
             const events = waitResult.events
             for (const event of events) deliveryAttempts.delete(event.sequence)
+            // Conservative cursor: never advance past the earliest
+            // still-undelivered sequence so a future global wait cannot
+            // silently skip an in-flight event. Retained events stay
+            // consumable with the returned cursor.
+            const earliestUndelivered =
+                manager.mailbox.earliestUndeliveredSequence()
+            const nextSequence = conservativeNextSequence(
+                requestedAfterSequence,
+                events,
+                earliestUndelivered
+            )
             const questions = events.filter(
                 (event) => event.kind === 'question'
             )
             const questionWake =
                 questions.length > 0 && waitResult.pending.length > 0
+            // Reserve bytes for the all-requested-IDs manifest and an omission
+            // notice before adding response bodies, so a displayed subset is
+            // never presented as the complete result.
+            const manifest = buildWaitManifest(ids, (id) =>
+                manager.view.get(id)
+            )
+            let bodiesBudget =
+                WAIT_OUTPUT_MAX_BYTES -
+                utf8Bytes(manifest) -
+                WAIT_OMISSION_MAX_BYTES -
+                WAIT_TRUNCATION_RESERVE_BYTES
+            if (bodiesBudget < 512) bodiesBudget = 512
+            let remainingBytes = bodiesBudget
+            const takeBounded = (raw: string) => {
+                if (utf8Bytes(raw) <= remainingBytes) {
+                    remainingBytes -= utf8Bytes(raw) + 2
+                    return raw
+                }
+                const truncated = boundOutputWithNotice(raw, remainingBytes)
+                remainingBytes = 0
+                return truncated
+            }
+            const rawQuestionMessage =
+                questions.length > 0
+                    ? buildMailboxMessage(questions)
+                    : undefined
+            const questionMessage =
+                rawQuestionMessage !== undefined
+                    ? takeBounded(rawQuestionMessage)
+                    : undefined
+            const gapWarnings = events
+                .filter((event) => event.kind === 'gap')
+                .map((event) => boundMetaText(event.text, 1024))
+            const rawGapWarning =
+                gapWarnings.length > 0
+                    ? `Mailbox warning:\n${gapWarnings.join('\n')}`
+                    : undefined
+            const gapWarning =
+                rawGapWarning !== undefined
+                    ? takeBounded(rawGapWarning)
+                    : undefined
             const sections: string[] = []
+            const omitted: Array<{ id: string; retrieval: string }> = []
             if (!questionWake) {
-                let remainingBytes = WAIT_OUTPUT_MAX_BYTES
                 for (const id of ids) {
                     const snap = manager.view.get(id)
-                    if (!snap) continue
-                    let section = `## ${snap.id} ${snap.taskName ?? snap.title} (${snap.role ?? 'default'})`
-                    if (snap.errorText) section += `\nError: ${snap.errorText}`
+                    if (!snap) {
+                        omitted.push({
+                            id,
+                            retrieval: 'no transcript file available',
+                        })
+                        continue
+                    }
+                    const header = `## ${boundMetaText(snap.id, 128)} ${boundMetaText(snap.taskName ?? snap.title ?? '?', 256)} (${boundMetaText(snap.role ?? 'default', 64)})`
+                    const errorPart = snap.errorText
+                        ? `\nError: ${boundMetaText(snap.errorText, 1024)}`
+                        : ''
+                    const base = `${header}${errorPart}`
+                    const baseBytes = utf8Bytes(base)
+                    if (baseBytes + 2 > remainingBytes) {
+                        omitted.push({ id, retrieval: retrievalRoute(snap) })
+                        continue
+                    }
                     const budget = Math.max(
                         512,
                         Math.min(
                             WAIT_PER_AGENT_MAX_BYTES,
-                            remainingBytes - Buffer.byteLength(section, 'utf8') - 2
+                            remainingBytes - baseBytes - 2
                         )
                     )
-                    section += `\n\n${truncatedOutput(snap, budget)}`
-                    if (Buffer.byteLength(section, 'utf8') > remainingBytes)
-                        break
+                    const section = `${base}\n\n${truncatedOutput(snap, budget)}`
+                    if (utf8Bytes(section) > remainingBytes) {
+                        omitted.push({ id, retrieval: retrievalRoute(snap) })
+                        continue
+                    }
                     sections.push(section)
-                    remainingBytes -= Buffer.byteLength(section, 'utf8')
+                    remainingBytes -= utf8Bytes(section) + 8
                 }
             }
-            const questionMessage =
-                questions.length > 0
-                    ? buildMailboxMessage(questions)
-                    : undefined
-            const gapWarnings = events
-                .filter((event) => event.kind === 'gap')
-                .map((event) => event.text)
-            const gapWarning =
-                gapWarnings.length > 0
-                    ? `Mailbox warning:\n${gapWarnings.join('\n')}`
-                    : undefined
+            // Question wakes stay concise by design (no per-child bodies) and
+            // keep the blocking question first so existing `^Subagent`
+            // expectations hold; the manifest still names every requested ID
+            // so the displayed subset is never presented as complete.
+            const omissionNotice = questionWake
+                ? undefined
+                : buildOmissionNotice(omitted, ids.length)
+            const stillRunning = `Still running: ${waitResult.pending.join(', ')}`
             const body = questionWake
-                ? [
-                      questionMessage,
-                      `Still running: ${waitResult.pending.join(', ')}`,
-                      gapWarning,
-                  ]
+                ? [questionMessage, stillRunning, gapWarning, manifest]
                       .filter(
-                          (section): section is string =>
-                              section !== undefined
+                          (section): section is string => section !== undefined
                       )
                       .join('\n\n')
-                : [questionMessage, gapWarning, ...sections]
+                : [
+                      questionMessage,
+                      gapWarning,
+                      ...sections,
+                      manifest,
+                      omissionNotice,
+                  ]
                       .filter(
-                          (section): section is string =>
-                              section !== undefined
+                          (section): section is string => section !== undefined
                       )
                       .join('\n\n---\n\n')
-            const bounded = truncateHead(body, {
-                maxBytes: WAIT_OUTPUT_MAX_BYTES,
-                maxLines: DEFAULT_MAX_LINES,
-            })
+            const boundedText = boundOutputWithNotice(
+                body,
+                WAIT_OUTPUT_MAX_BYTES
+            )
             return {
-                content: [{ type: 'text', text: bounded.content }],
+                content: [{ type: 'text', text: boundedText }],
                 details: {
                     events,
-                    next_sequence:
-                        events.at(-1)?.sequence ?? params.after_sequence ?? 0,
+                    next_sequence: nextSequence,
                     timed_out: waitResult.timedOut,
                     pending: waitResult.pending,
                     completed: waitResult.completed,
@@ -834,7 +1050,7 @@ export function createSubagentsExtension(
             for (const line of previewLines)
                 text += `\n${theme.fg('toolOutput', line)}`
             if (body.split('\n').length > 8)
-                text += `\n${theme.fg('dim', '... (ctrl+o to expand)')}`
+                text += `\n${theme.fg('dim', '... (')}${keyHint('app.tools.expand', 'to expand')}${theme.fg('dim', ')')}`
             return new Text(text, 0, 0)
         }
     )
@@ -860,7 +1076,12 @@ export function createSubagentsExtension(
                 )
                 return
             }
-            await openSubagentPicker(ctx, manager.view)
+            await openSubagentPicker(ctx, manager.view, {
+                hasPendingQuestion: (id) =>
+                    manager
+                        .peekMailbox({ agentIds: [id] })
+                        .some((envelope) => envelope.kind === 'question'),
+            })
         },
     })
 }

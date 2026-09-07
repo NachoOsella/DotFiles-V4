@@ -28,31 +28,21 @@ test('the collaboration policy appears only when spawning is available', () => {
         COLLABORATION_POLICY
     )
     assert.deepEqual(SUBAGENT_SPAWN_PROMPT_GUIDELINES, [COLLABORATION_POLICY])
-    assert.match(COLLABORATION_POLICY, /Default to doing the work yourself/)
+    assert.match(COLLABORATION_POLICY, /work yourself/)
     assert.match(COLLABORATION_POLICY, /one bounded responsibility/)
-    assert.match(
-        COLLABORATION_POLICY,
-        /does not have your conversation context/
-    )
-    assert.match(COLLABORATION_POLICY, /Do not make the child rediscover/)
-    assert.match(COLLABORATION_POLICY, /what counts as done/)
-    assert.match(
-        COLLABORATION_POLICY,
-        /Never delegate with a vague instruction/
-    )
-    assert.match(
-        COLLABORATION_POLICY,
-        /continue useful independent work instead of immediately waiting/
-    )
-    assert.match(
-        COLLABORATION_POLICY,
-        /At that synchronization point, use subagent_wait/
-    )
-    assert.match(COLLABORATION_POLICY, /Answer the child with subagent_send/)
-    assert.match(COLLABORATION_POLICY, /Reconcile child results/)
+    assert.match(COLLABORATION_POLICY, /complete handoff/)
+    assert.match(COLLABORATION_POLICY, /rediscover known facts/)
+    assert.match(COLLABORATION_POLICY, /vague prompt/)
+    assert.match(COLLABORATION_POLICY, /continue useful independent work/)
+    assert.match(COLLABORATION_POLICY, /dependency boundary/)
+    assert.match(COLLABORATION_POLICY, /blocking child questions/)
+    assert.match(COLLABORATION_POLICY, /Integrate and verify/)
+    assert.match(COLLABORATION_POLICY, /observed validation/)
+    assert.match(COLLABORATION_POLICY, /never claim unobserved success/)
+    assert.match(COLLABORATION_POLICY, /Reconcile stale or conflicting/)
     assert.doesNotMatch(COLLABORATION_POLICY, /cheapest capable model/)
     assert.match(SUBAGENT_WAIT_TOOL_DESCRIPTION, /blocking question/)
-    assert.match(SUBAGENT_WAIT_TOOL_DESCRIPTION, /dependency boundary/)
+    assert.match(SUBAGENT_WAIT_TOOL_DESCRIPTION, /dependent decision/)
     assert.match(
         SUBAGENT_SPAWN_PARAMETER_DESCRIPTIONS.reasoningEffort,
         /configured role effort, role default, or parent effort/
@@ -66,17 +56,50 @@ test('the orchestration tool set is identifiable for child filtering', () => {
     assert.equal(isSubagentOrchestrationTool('bash'), false)
 })
 
-test('parent prompts teach complete handoffs and synchronization', () => {
-    assert.match(
+test('prompt layers keep behavior, schema, and coordination guidance separate', () => {
+    assert.match(COLLABORATION_POLICY, /subagent_spawn/)
+    assert.match(COLLABORATION_POLICY, /subagent_wait/)
+    assert.match(COLLABORATION_POLICY, /subagent_send/)
+    assert.doesNotMatch(COLLABORATION_POLICY, /Use this tool/i)
+    assert.doesNotMatch(
         SUBAGENT_SPAWN_TOOL_DESCRIPTION,
-        /does not know what the parent learned/
+        /owned paths|final report/i
     )
-    assert.match(SUBAGENT_SPAWN_TOOL_DESCRIPTION, /precise handoff matters/)
-    assert.match(SUBAGENT_SPAWN_TOOL_DESCRIPTION, /Do not send vague prompts/)
     assert.match(
-        SUBAGENT_SPAWN_TOOL_DESCRIPTION,
-        /Synchronize with subagent_wait/
+        SUBAGENT_SPAWN_PARAMETER_DESCRIPTIONS.prompt,
+        /objective|expected outcome/i
     )
+    for (const signal of [
+        'objective',
+        'context',
+        'owned paths',
+        'constraints',
+        'acceptance',
+        'validation',
+        'final-report',
+    ]) {
+        assert.match(
+            SUBAGENT_SPAWN_PARAMETER_DESCRIPTIONS.prompt,
+            new RegExp(signal, 'i')
+        )
+    }
+
+    const universalToolDescriptions = [
+        SUBAGENT_SPAWN_TOOL_DESCRIPTION,
+        SUBAGENT_SEND_TOOL_DESCRIPTION,
+        SUBAGENT_WAIT_TOOL_DESCRIPTION,
+        SUBAGENT_CHECK_TOOL_DESCRIPTION,
+    ]
+    for (const description of universalToolDescriptions) {
+        assert.doesNotMatch(description, /pricing|cheapest|provider\//i)
+    }
+})
+
+test('parent prompts teach tool behavior and complete handoffs', () => {
+    assert.match(SUBAGENT_SPAWN_TOOL_DESCRIPTION, /bounded task/)
+    assert.match(SUBAGENT_SPAWN_TOOL_DESCRIPTION, /worthwhile/)
+    assert.match(COLLABORATION_POLICY, /share the filesystem/)
+    assert.match(COLLABORATION_POLICY, /parallel ownership/)
     assert.match(SUBAGENT_SPAWN_PROMPT_SNIPPET, /complete handoff/)
     assert.match(
         SUBAGENT_SPAWN_PARAMETER_DESCRIPTIONS.prompt,
@@ -84,14 +107,16 @@ test('parent prompts teach complete handoffs and synchronization', () => {
     )
     assert.match(
         SUBAGENT_SPAWN_PARAMETER_DESCRIPTIONS.prompt,
-        /capable smaller model/
+        /known context.*findings/
     )
     assert.match(
         SUBAGENT_SEND_TOOL_DESCRIPTION,
-        /prefer answering through this tool rather than taking over/
+        /follow-up.*ordinary instructions.*queued work/
     )
-    assert.match(SUBAGENT_SEND_TOOL_DESCRIPTION, /Use steer only when/)
-    assert.match(SUBAGENT_CHECK_TOOL_DESCRIPTION, /not for repeated polling/)
+    assert.match(SUBAGENT_SEND_TOOL_DESCRIPTION, /steer only/)
+    assert.match(SUBAGENT_SEND_TOOL_DESCRIPTION, /blocking questions/)
+    assert.match(SUBAGENT_WAIT_TOOL_DESCRIPTION, /dependent decision/)
+    assert.match(SUBAGENT_CHECK_TOOL_DESCRIPTION, /not routine polling/)
 })
 
 test('mailbox wording guides answers and reconciliation', () => {
