@@ -91,6 +91,7 @@ function makeGatedBackend() {
               emit(event: SubagentEvent): Promise<void>
               end(): Promise<void>
               ask(message: string): void
+              notify(message: string): void
               sent: Array<{ text: string; runId?: string }>
           }
         | undefined
@@ -110,6 +111,7 @@ function makeGatedBackend() {
                 current = {
                     sent,
                     ask: (message) => spawnTask.reportToParent?.(message),
+                    notify: (message) => spawnTask.notifyParent?.(message),
                     emit: (event) =>
                         Effect.runPromise(Queue.offer(events, event)).then(
                             () => undefined
@@ -774,6 +776,81 @@ test('zero-timeout ID waits return an already pending question', async () => {
             assert.deepEqual(
                 result.events.map((event) => [event.kind, event.text]),
                 [['question', 'Which option should I choose?']]
+            )
+        },
+        undefined,
+        createTestRegistry(gated.backend)
+    )
+})
+
+test('ID waits wake on a child update while the run continues', async () => {
+    const gated = makeGatedBackend()
+    await withManager(
+        async (manager, runtime) => {
+            const first = await runTool(
+                runtime,
+                manager.spawn('pi', task('A', { taskName: 'update-a' }))
+            )
+            const second = await runTool(
+                runtime,
+                manager.spawn('pi', task('B', { taskName: 'update-b' }))
+            )
+            const waiting = runTool(
+                runtime,
+                manager.waitFor([first.id, second.id])
+            )
+            await new Promise((resolve) => setImmediate(resolve))
+            gated
+                .sessionFor(first.id)
+                .notify('Found the auth module, still mapping callers')
+
+            let updateTimeout: ReturnType<typeof setTimeout> | undefined
+            const timeout = new Promise<never>((_, reject) => {
+                updateTimeout = setTimeout(
+                    () => reject(new Error('update did not wake wait')),
+                    100
+                )
+            })
+            const result = await Promise.race([waiting, timeout])
+            if (updateTimeout) clearTimeout(updateTimeout)
+            assert.deepEqual(result.pending, [first.id, second.id])
+            assert.deepEqual(result.completed, [])
+            assert.equal(result.timedOut, false)
+            assert.deepEqual(
+                result.events.map((event) => [event.kind, event.text]),
+                [['update', 'Found the auth module, still mapping callers']]
+            )
+            assert.equal(manager.view.get(first.id)?.status, 'running')
+            assert.equal(manager.view.get(second.id)?.status, 'running')
+        },
+        undefined,
+        createTestRegistry(gated.backend)
+    )
+})
+
+test('child updates are capped at three per run', async () => {
+    const gated = makeGatedBackend()
+    await withManager(
+        async (manager, runtime) => {
+            const snap = await runTool(
+                runtime,
+                manager.spawn('pi', task('Capped updates'))
+            )
+            const session = gated.sessionFor(snap.id)
+            assert.equal(session.notify('one'), true)
+            assert.equal(session.notify('two'), true)
+            assert.equal(session.notify('three'), true)
+            assert.equal(session.notify('four'), false)
+
+            const result = await runTool(
+                runtime,
+                manager.waitFor([snap.id], undefined, 0)
+            )
+            assert.equal(result.timedOut, false)
+            assert.deepEqual(result.pending, [snap.id])
+            assert.deepEqual(
+                result.events.map((event) => event.text),
+                ['one', 'two', 'three']
             )
         },
         undefined,

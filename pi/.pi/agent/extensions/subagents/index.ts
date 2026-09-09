@@ -634,11 +634,11 @@ export function createSubagentsExtension(
                 events,
                 earliestUndelivered
             )
-            const questions = events.filter(
-                (event) => event.kind === 'question'
+            const wakeEvents = events.filter(
+                (event) => event.kind === 'question' || event.kind === 'update'
             )
-            const questionWake =
-                questions.length > 0 && waitResult.pending.length > 0
+            const earlyWake =
+                wakeEvents.length > 0 && waitResult.pending.length > 0
             // Reserve bytes for the all-requested-IDs manifest and an omission
             // notice before adding response bodies, so a displayed subset is
             // never presented as the complete result.
@@ -661,13 +661,13 @@ export function createSubagentsExtension(
                 remainingBytes = 0
                 return truncated
             }
-            const rawQuestionMessage =
-                questions.length > 0
-                    ? buildMailboxMessage(questions)
+            const rawWakeMessage =
+                wakeEvents.length > 0
+                    ? buildMailboxMessage(wakeEvents)
                     : undefined
-            const questionMessage =
-                rawQuestionMessage !== undefined
-                    ? takeBounded(rawQuestionMessage)
+            const wakeMessage =
+                rawWakeMessage !== undefined
+                    ? takeBounded(rawWakeMessage)
                     : undefined
             const gapWarnings = events
                 .filter((event) => event.kind === 'gap')
@@ -682,7 +682,7 @@ export function createSubagentsExtension(
                     : undefined
             const sections: string[] = []
             const omitted: Array<{ id: string; retrieval: string }> = []
-            if (!questionWake) {
+            if (!earlyWake) {
                 for (const id of ids) {
                     const snap = manager.view.get(id)
                     if (!snap) {
@@ -718,22 +718,22 @@ export function createSubagentsExtension(
                     remainingBytes -= utf8Bytes(section) + 8
                 }
             }
-            // Question wakes stay concise by design (no per-child bodies) and
-            // keep the blocking question first so existing `^Subagent`
-            // expectations hold; the manifest still names every requested ID
-            // so the displayed subset is never presented as complete.
-            const omissionNotice = questionWake
+            // Early wakes stay concise by design (no per-child bodies) and
+            // keep the blocking question or latest update first so existing
+            // `^Subagent` expectations hold; the manifest still names every
+            // requested ID so the displayed subset is never presented as complete.
+            const omissionNotice = earlyWake
                 ? undefined
                 : buildOmissionNotice(omitted, ids.length)
             const stillRunning = `Still running: ${waitResult.pending.join(', ')}`
-            const body = questionWake
-                ? [questionMessage, stillRunning, gapWarning, manifest]
+            const body = earlyWake
+                ? [wakeMessage, stillRunning, gapWarning, manifest]
                       .filter(
                           (section): section is string => section !== undefined
                       )
                       .join('\n\n')
                 : [
-                      questionMessage,
+                      wakeMessage,
                       gapWarning,
                       ...sections,
                       manifest,

@@ -338,10 +338,12 @@ export default function (pi: ExtensionAPI) {
         },
     })
 
-    // A new session starts with Discord activity disabled. This only cleans up
-    // a fiber left by a previous session; it never connects automatically.
+    // Never connect automatically. On startup do literally nothing unless a
+    // fiber leaked from a previous session, so opening pi stays silent when
+    // Discord is closed.
     pi.on('session_start', async (_event, ctx) => {
         if (ctx.mode === 'print') return
+        if (!discordFiber) return
         await stopDiscord()
     })
 

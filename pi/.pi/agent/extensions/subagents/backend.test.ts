@@ -359,11 +359,13 @@ test('child allowlists exclude custom and orchestration tools', () => {
         assert.equal(tools.includes(excluded), false)
 })
 
-test('report_to_parent is a blocking-question tool, not a progress channel', () => {
+test('report_to_parent supports blocking questions and capped progress updates', () => {
     assert.match(REPORT_TO_PARENT_TOOL_DESCRIPTION, /genuine blocking question/)
+    assert.match(REPORT_TO_PARENT_TOOL_DESCRIPTION, /kind update/)
+    assert.match(REPORT_TO_PARENT_TOOL_DESCRIPTION, /max 3 per run/)
     assert.match(
         REPORT_TO_PARENT_TOOL_DESCRIPTION,
-        /Do not use this tool for progress updates/
+        /Do not use question for progress updates/
     )
     assert.match(
         REPORT_TO_PARENT_TOOL_DESCRIPTION,

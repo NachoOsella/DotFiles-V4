@@ -440,3 +440,28 @@ test('child communication covers six required behaviors', () => {
     )
     assert.equal(fixedUnrelated.passed, false)
 })
+
+test('child updates allow short progress notes up to three per run', () => {
+    const within = evaluateChildTrace(
+        {
+            reportMessages: [],
+            updateMessages: ['Found the auth module, still mapping callers.'],
+            toolCalls: ['read'],
+            finalReport:
+                'Mapped the auth flow. Files: src/auth.ts. Validation: none yet, still investigating.',
+        },
+        {}
+    )
+    assert.equal(within.passed, true)
+
+    const over = evaluateChildTrace(
+        {
+            reportMessages: [],
+            updateMessages: ['one', 'two', 'three', 'four'],
+            toolCalls: ['read'],
+            finalReport: 'Done. Validation: focused test passed with details.',
+        },
+        {}
+    )
+    assert.equal(over.passed, false)
+})

@@ -10,6 +10,8 @@ import type { ModelRegistry } from '@earendil-works/pi-coding-agent'
 import { Data } from 'effect'
 
 export const BACKEND_NAMES = ['pi'] as const
+/** Non-blocking child updates accepted per run; the rest stays in the final report. */
+export const MAX_CHILD_UPDATES_PER_RUN = 3
 export type BackendName = (typeof BACKEND_NAMES)[number]
 
 /** Pi thinking levels. Omitted values inherit the parent level. */
@@ -55,6 +57,12 @@ export interface SpawnTask {
     readonly runId?: string
     /** Child-only questions enter the parent manager mailbox through this hook. */
     readonly reportToParent?: (message: string) => void
+    /**
+     * Child-only progress notes enter the mailbox as non-blocking updates.
+     * Returns false when the per-run update budget is spent and the child
+     * must keep the rest for its final report.
+     */
+    readonly notifyParent?: (message: string) => boolean
     readonly cwd: string
     /** Pi model hint: "provider/model-id" or a bare model id. */
     readonly model?: string

@@ -42,7 +42,7 @@ import type {
     SubagentMeta,
     TranscriptPart,
 } from '../domain.ts'
-import { SendError, SpawnError } from '../domain.ts'
+import { MAX_CHILD_UPDATES_PER_RUN, SendError, SpawnError } from '../domain.ts'
 import {
     CODING_TOOL_NAMES,
     READ_ONLY_TOOL_NAMES,
@@ -418,7 +418,7 @@ export interface ChildReport {
     readonly agentId?: string
     readonly taskName?: string
     readonly role?: string
-    readonly kind: 'question'
+    readonly kind: 'question' | 'update'
     readonly message: string
 }
 
@@ -427,10 +427,10 @@ export type PiSessionFactory = (
 ) => ReturnType<typeof createAgentSession>
 
 export const REPORT_TO_PARENT_TOOL_DESCRIPTION =
-    'Ask the parent for one specific decision or missing piece of information that is required to continue the assigned task correctly. Use this only for a genuine blocking question that cannot be resolved from the task prompt, repository, tests, or established project conventions. Do not use this tool for progress updates, status reports, discoveries, warnings, suggestions, optional improvements, or non-blocking findings. Keep those for your final response.'
+    'Ask the parent for one specific decision with kind question, or share a short progress note with kind update. Use question only for a genuine blocking question that cannot be resolved from the task prompt, repository, tests, or established project conventions. Use update for short non-blocking findings the parent must know now, max 3 per run; put the rest in the final response. Do not use question for progress updates, status reports, discoveries, warnings, suggestions, optional improvements, or non-blocking findings. Keep those for your final response unless they qualify as one short update.'
 
 export const REPORT_TO_PARENT_MESSAGE_DESCRIPTION =
-    'One concise blocking question for the parent. Include the relevant context, why the decision is needed, and the meaningful alternatives when applicable.'
+    'The message for the parent. For kind question: one concise blocking question, with the relevant context, why the decision is needed, and the meaningful alternatives when applicable. For kind update: the short finding with its evidence.'
 
 export interface PiBackendOptions {
     /** Receives bounded questions from the child-only report_to_parent tool. */
@@ -450,7 +450,13 @@ function createChildReportTool(
         label: 'Report to parent',
         description: REPORT_TO_PARENT_TOOL_DESCRIPTION,
         parameters: Type.Object({
-            kind: Type.Literal('question'),
+            kind: Type.Union(
+                [Type.Literal('question'), Type.Literal('update')],
+                {
+                    description:
+                        'question interrupts the parent for a blocking decision; update is a non-blocking note and the run continues',
+                }
+            ),
             message: Type.String({
                 minLength: 1,
                 description: REPORT_TO_PARENT_MESSAGE_DESCRIPTION,
@@ -475,6 +481,36 @@ function createChildReportTool(
                         {
                             type: 'text',
                             text: `Question exceeds the ${CHILD_REPORT_MAX_BYTES}-byte limit.`,
+                        },
+                    ],
+                    details: {},
+                }
+            }
+            if (params.kind === 'update') {
+                const delivered = task.notifyParent?.(message) ?? true
+                if (!delivered) {
+                    return {
+                        content: [
+                            {
+                                type: 'text',
+                                text: `Update budget spent (max ${MAX_CHILD_UPDATES_PER_RUN} per run). Keep the rest for the final response.`,
+                            },
+                        ],
+                        details: {},
+                    }
+                }
+                await onChildReport({
+                    agentId: task.agentId,
+                    taskName: task.taskName,
+                    role: task.role,
+                    kind: params.kind,
+                    message,
+                })
+                return {
+                    content: [
+                        {
+                            type: 'text',
+                            text: 'Update sent to parent. The run continues.',
                         },
                     ],
                     details: {},
@@ -545,7 +581,9 @@ const makePiSession = (
                     role
                 )
                 const canReportToParent =
-                    !!task.reportToParent || !!onChildReport
+                    !!task.reportToParent ||
+                    !!task.notifyParent ||
+                    !!onChildReport
                 // Initial allowedToolNames must include both role base tools and
                 // explicitly allowed extension tools, otherwise the AgentSession's
                 // allowedToolNames filter (isAllowedTool) would prevent extension

@@ -8,6 +8,8 @@
  * describe what it would do.
  */
 
+import { MAX_CHILD_UPDATES_PER_RUN } from './domain.ts'
+
 export interface HandoffSignal {
     readonly label: string
     /** Case-insensitive substrings; matching any alias satisfies the signal. */
@@ -750,8 +752,10 @@ export function evaluateScriptedBehaviorTrace(
 // --- Child communication -----------------------------------------------------
 
 export interface ChildTrace {
-    /** Messages sent via report_to_parent. */
+    /** Blocking questions sent via report_to_parent with kind question. */
     readonly reportMessages: ReadonlyArray<string>
+    /** Non-blocking notes sent via report_to_parent with kind update. */
+    readonly updateMessages?: ReadonlyArray<string>
     /** Tool calls made by the child (name only is enough for footprint). */
     readonly toolCalls: ReadonlyArray<string>
     readonly finalReport: string
@@ -859,6 +863,11 @@ export function evaluateChildTrace(
     if (expectBlocker && trace.reportMessages.length > 1) {
         failures.push(
             'multiple report_to_parent calls for one blocker; ask once and finish the run'
+        )
+    }
+    if ((trace.updateMessages ?? []).length > MAX_CHILD_UPDATES_PER_RUN) {
+        failures.push(
+            `more than ${MAX_CHILD_UPDATES_PER_RUN} update messages in one run; keep the rest for the final report`
         )
     }
 

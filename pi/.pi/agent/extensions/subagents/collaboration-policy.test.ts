@@ -152,6 +152,47 @@ test('mailbox wording guides answers and reconciliation', () => {
     assert.doesNotMatch(result, /Subagent updates:/)
 })
 
+test('mailbox wording covers non-blocking child updates', () => {
+    const update = buildMailboxMessage([
+        {
+            sequence: 3,
+            agentId: 'sa-1',
+            taskName: 'u',
+            role: 'explorer',
+            kind: 'update',
+            runId: 'run-1',
+            text: 'halfway',
+            createdAt: 3,
+        },
+    ])
+    assert.match(update, /Subagent update:/)
+    assert.match(update, /steer/)
+    assert.doesNotMatch(update, /Subagent updates:/)
+
+    const mixed = buildMailboxMessage([
+        {
+            sequence: 4,
+            agentId: 'sa-1',
+            taskName: 'u',
+            role: 'explorer',
+            kind: 'update',
+            runId: 'run-1',
+            text: 'halfway',
+            createdAt: 4,
+        },
+        {
+            sequence: 5,
+            agentId: 'sa-1',
+            taskName: 'q',
+            role: 'explorer',
+            kind: 'question',
+            text: 'Which API?',
+            createdAt: 5,
+        },
+    ])
+    assert.match(mixed, /Subagent question:/)
+})
+
 test('spawn results do not repeat delegated prompts', () => {
     const secretPrompt = 'Implement payment flow using token: secret-value'
     const result = buildSubagentSpawnResult({

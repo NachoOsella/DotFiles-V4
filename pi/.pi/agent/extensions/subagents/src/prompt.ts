@@ -10,7 +10,7 @@ export const SUBAGENT_SPAWN_PROMPT_SNIPPET =
 export const SUBAGENT_SPAWN_PROMPT_GUIDELINES = [COLLABORATION_POLICY]
 
 export const SUBAGENT_SPAWN_PARAMETER_DESCRIPTIONS = {
-    prompt: "Complete child handoff. Include the objective, known context and findings, owned paths, constraints, acceptance, validation, and final-report requirements. The child cannot see the parent's conversation.",
+    prompt: "Complete child handoff. Include the objective, known context and findings, starting files, owned paths, constraints, acceptance, stop condition with tool-call budget, validation, and final-report requirements. Name the files to start from and forbid walking the full repo. The child cannot see the parent's conversation.",
     name: 'Short display name',
     taskName: 'Unique task name; defaults to name',
     agentType: 'Child role: default, explorer, worker, reviewer, or tester',
@@ -42,7 +42,7 @@ export function buildSubagentSpawnResult(options: {
 }
 
 export const SUBAGENT_SEND_TOOL_DESCRIPTION = `Communicate with an existing child session.
-Use subagent_send with follow-up for answers, ordinary instructions, and queued work. Use steer only to redirect an active run immediately. Answer blocking questions here instead of taking over the child's assignment.`
+Use subagent_send with follow-up for answers, ordinary instructions, and queued work. Use steer only to redirect an active run immediately. Follow-up is queued and read only after the current run settles, so never use it to correct course mid-run. When the child is stuck inside a long tool call, interrupt it first and then send. Answer blocking questions here instead of taking over the child's assignment.`
 export const SUBAGENT_SEND_PARAMETER_DESCRIPTIONS = {
     id: 'Subagent id',
     message:
@@ -79,16 +79,22 @@ function envelopeSummary(envelope: AgentEnvelope) {
             ? 'finished'
             : envelope.kind === 'question'
               ? 'asked'
-              : envelope.kind === 'gap'
-                ? 'gap'
-                : envelope.kind
+              : envelope.kind === 'update'
+                ? 'shared an update'
+                : envelope.kind === 'gap'
+                  ? 'gap'
+                  : envelope.kind
     return `- ${envelope.agentId} ${envelope.taskName} (${envelope.role}) ${state}: ${envelope.text}`
 }
 
 export function buildMailboxMessage(events: ReadonlyArray<AgentEnvelope>) {
     const isQuestion = events.some((event) => event.kind === 'question')
+    const allUpdates =
+        events.length > 0 && events.every((event) => event.kind === 'update')
     const heading = isQuestion
         ? "Subagent question:\nA child needs a parent decision before it can continue. Answer the question through subagent_send when possible instead of taking over the child's assigned work."
-        : 'Subagent result:\nDelegated work has completed or changed state. The parent may have continued working since this child started. Reconcile this result with the current repository state and work already completed before acting on it. Do not blindly repeat or overwrite newer work.'
+        : allUpdates
+          ? 'Subagent update:\nA child shared progress while it keeps working. Read it and continue your own work when possible. Use subagent_send with steer to redirect it now, or follow-up to queue guidance for its next turn.'
+          : 'Subagent result:\nDelegated work has completed or changed state. The parent may have continued working since this child started. Reconcile this result with the current repository state and work already completed before acting on it. Do not blindly repeat or overwrite newer work.'
     return `${heading}\n${events.map(envelopeSummary).join('\n')}`
 }

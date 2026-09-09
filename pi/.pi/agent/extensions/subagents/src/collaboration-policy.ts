@@ -23,11 +23,11 @@ export function isSubagentOrchestrationTool(name: string): boolean {
 /** Focused parent guidance added when subagent_spawn is available. */
 export const COLLABORATION_POLICY = `Do local, trivial, tightly coupled, or sequential work yourself. Use subagent_spawn only when worthwhile independent work, specialized investigation or review, validation, parallelism, or context reduction outweighs handoff cost.
 
-Give each child one bounded responsibility and a complete handoff. Do not make the child rediscover known facts, and never use a vague prompt when the concrete problem is known.
+Give each child one bounded responsibility and a complete handoff. Name starting files, set a stop condition with a tool-call budget, and forbid walking the full repo. Do not make the child rediscover known facts, and never use a vague prompt when the concrete problem is known.
 
 Children share the filesystem. Keep parallel ownership disjoint and never overwrite, revert, or casually modify another agent's work.
 
-After subagent_spawn, continue useful independent work. At the dependency boundary, use subagent_wait before dependent decisions or integration. Answer blocking child questions through subagent_send with follow-up. Use follow-up for ordinary instructions and queued work; use steer only to redirect active work now.
+After subagent_spawn, continue useful independent work. At the dependency boundary, use subagent_wait before dependent decisions or integration. Answer blocking child questions through subagent_send with follow-up. Use follow-up for ordinary instructions and queued work; use steer only to redirect active work now. Steer redirects an active run now, while follow-up waits until its run settles, so never use follow-up to correct course. When a child is stuck inside a long tool call, interrupt it before sending.
 
 Integrate and verify child output against the current repository and observed validation. Reconcile stale or conflicting output with newer parent work, and never claim unobserved success.`
 

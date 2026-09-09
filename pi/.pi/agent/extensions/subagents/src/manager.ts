@@ -62,6 +62,7 @@ import type {
 import {
     BackendUnavailableError,
     ConcurrencyLimitError,
+    MAX_CHILD_UPDATES_PER_RUN,
     SendError,
     SpawnError,
 } from './domain.ts'
@@ -286,6 +287,9 @@ interface Entry {
     nextRunNumber: number
     pendingRunIds: Set<string>
     runStartedAt: number
+    /** Per-run budget for non-blocking child updates. */
+    updateRunId?: string
+    updateCount?: number
     /** Monotonic manager action used to avoid time-based wait metrics. */
     spawnActionSequence: number
     lastActionSequence: number
@@ -1037,6 +1041,31 @@ const makeManager = (config: SubagentConfig) =>
                                 text: boundedMailboxText(message),
                             })
                         },
+                        notifyParent: (message) => {
+                            const entry = entries.get(id)
+                            const runId = entry?.snapshot.currentRunId
+                            if (entry && runId) {
+                                if (entry.updateRunId !== runId) {
+                                    entry.updateRunId = runId
+                                    entry.updateCount = 0
+                                }
+                                if (
+                                    (entry.updateCount ?? 0) >=
+                                    MAX_CHILD_UPDATES_PER_RUN
+                                )
+                                    return false
+                                entry.updateCount = (entry.updateCount ?? 0) + 1
+                            }
+                            publishMailbox({
+                                agentId: id,
+                                taskName,
+                                role: roleDefinition.name,
+                                kind: 'update',
+                                ...(runId ? { runId } : {}),
+                                text: boundedMailboxText(message),
+                            })
+                            return true
+                        },
                     }
                     const scope = yield* Scope.make()
                     const session = yield* Scope.provide(
@@ -1193,9 +1222,18 @@ const makeManager = (config: SubagentConfig) =>
                                 event.kind === 'question' &&
                                 event.sequence > cursor
                         )
+                const updateEvents = () =>
+                    mailbox
+                        .peek({ agentIds: unique })
+                        .filter(
+                            (event) =>
+                                event.kind === 'update' &&
+                                event.sequence > cursor
+                        )
                 const collectResult = (
                     result: Omit<WaitResult, 'events'>,
-                    questions: ReadonlyArray<AgentEnvelope> = []
+                    questions: ReadonlyArray<AgentEnvelope> = [],
+                    updates: ReadonlyArray<AgentEnvelope> = []
                 ) => {
                     const runIds = result.completed
                         .map((id) => entries.get(id)?.snapshot.lastRun?.id)
@@ -1215,9 +1253,13 @@ const makeManager = (config: SubagentConfig) =>
                     const freshQuestions = questions.filter(
                         (event) => event.sequence > cursor
                     )
+                    const freshUpdates = updates.filter(
+                        (event) => event.sequence > cursor
+                    )
                     const sequences = [
                         ...completionEvents,
                         ...freshQuestions,
+                        ...freshUpdates,
                     ].map((event) => event.sequence)
                     const events =
                         sequences.length > 0 ? mailbox.drain({ sequences }) : []
@@ -1231,10 +1273,12 @@ const makeManager = (config: SubagentConfig) =>
                         // Queued follow-ups count as pending even after the previous
                         // run has settled and before the next RunStarted event arrives.
                         const questions = questionEvents()
-                        if (questions.length > 0)
+                        const updates = updateEvents()
+                        if (questions.length > 0 || updates.length > 0)
                             return collectResult(
                                 currentResult(false),
-                                questions
+                                questions,
+                                updates
                             )
                         const pending = pendingIds()
                         if (pending.length === 0)
@@ -1249,11 +1293,14 @@ const makeManager = (config: SubagentConfig) =>
                         : timeoutMs === 0
                           ? Effect.sync(() => {
                                 const questions = questionEvents()
+                                const updates = updateEvents()
                                 const pending = pendingIds()
-                                return questions.length > 0
+                                return questions.length > 0 ||
+                                    updates.length > 0
                                     ? collectResult(
                                           currentResult(false),
-                                          questions
+                                          questions,
+                                          updates
                                       )
                                     : collectResult(
                                           currentResult(pending.length > 0)

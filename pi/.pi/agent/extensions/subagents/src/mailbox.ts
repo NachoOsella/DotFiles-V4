@@ -1,7 +1,7 @@
 import { Effect, Result } from 'effect'
 
 export type AgentMessageKind =
-    'question' | 'result' | 'error' | 'cancelled' | 'gap'
+    'question' | 'update' | 'result' | 'error' | 'cancelled' | 'gap'
 
 export interface AgentEnvelope {
     readonly sequence: number
