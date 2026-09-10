@@ -1,478 +1,503 @@
 /** Session statistics command backed by bounded, fault-tolerant Effect pipelines. */
 
-import { resolve } from "node:path";
+import { resolve } from 'node:path'
 import type {
-  ExtensionAPI,
-  ExtensionCommandContext,
-} from "@earendil-works/pi-coding-agent";
-import { matchesKey } from "@earendil-works/pi-tui";
-import { Effect } from "effect";
-import { showStatsModal } from "./modal.ts";
-import { mergeSessionStats } from "./aggregate.ts";
-import { discoverSessionFiles } from "./discovery.ts";
+    ExtensionAPI,
+    ExtensionCommandContext,
+} from '@earendil-works/pi-coding-agent'
+import { matchesKey } from '@earendil-works/pi-tui'
+import { Effect } from 'effect'
+import { showStatsModal } from './modal.ts'
+import { mergeSessionStats } from './aggregate.ts'
+import { buildSubagentSnapshotStats } from './subagent-snapshot.ts'
+import { discoverSessionFiles } from './discovery.ts'
 import {
-  buildAllStatsOutput,
-  buildCurrentSessionOutput,
-  buildProjectStatsOutput,
-  buildProjectSummaries,
-  type DataQuality,
-} from "./output.ts";
-import { parseCurrentBranch, parseSessionFileEffect } from "./parser.ts";
+    buildAllStatsOutput,
+    buildCurrentSessionOutput,
+    buildProjectStatsOutput,
+    buildProjectSummaries,
+    type DataQuality,
+} from './output.ts'
+import { parseCurrentBranch, parseSessionFileEffect } from './parser.ts'
 import type {
-  ModelPricingResolver,
-  SessionEntryLike,
-  SessionStats,
-} from "./types.ts";
+    ModelPricingResolver,
+    SessionEntryLike,
+    SessionStats,
+} from './types.ts'
 
-const STATUS_KEY = "session-stats";
-const SUBAGENT_SESSION_PREFIX = "subagent:";
-const MAX_CONCURRENT_READS = 16;
-const pricingResolvers = new WeakMap<object, ModelPricingResolver>();
+const STATUS_KEY = 'session-stats'
+const SUBAGENT_SESSION_PREFIX = 'subagent:'
+const MAX_CONCURRENT_READS = 16
+const pricingResolvers = new WeakMap<object, ModelPricingResolver>()
 
 /** Paid catalog equivalents used to estimate the value of free endpoints. */
 const FREE_MODEL_PRICE_REFERENCES: Record<string, readonly [string, string][]> =
-  {
-    "hy3-free": [["openrouter", "tencent/hy3"]],
-    "mimo-v2-pro-free": [["opencode-go", "mimo-v2.5-pro"]],
-    "nemotron-3-ultra-free": [["nvidia", "nvidia/nemotron-3-ultra-550b-a55b"]],
-    "glm-4.7-free": [["openrouter", "z-ai/glm-4.7"]],
-    "ling-2.6-flash-free": [["openrouter", "inclusionai/ling-2.6-flash"]],
-    "trinity-large-preview-free": [
-      ["vercel-ai-gateway", "arcee-ai/trinity-large-preview"],
-    ],
-  };
+    {
+        'hy3-free': [['openrouter', 'tencent/hy3']],
+        'mimo-v2-pro-free': [['opencode-go', 'mimo-v2.5-pro']],
+        'nemotron-3-ultra-free': [
+            ['nvidia', 'nvidia/nemotron-3-ultra-550b-a55b'],
+        ],
+        'glm-4.7-free': [['openrouter', 'z-ai/glm-4.7']],
+        'ling-2.6-flash-free': [['openrouter', 'inclusionai/ling-2.6-flash']],
+        'trinity-large-preview-free': [
+            ['vercel-ai-gateway', 'arcee-ai/trinity-large-preview'],
+        ],
+    }
 
 /** Register `/stats` for current-session and aggregate usage statistics. */
 export default function sessionStatsExtension(pi: ExtensionAPI) {
-  pi.registerCommand("stats", {
-    description:
-      "Show session statistics. /stats | /stats all [project] [days]",
-    handler: async (args, ctx) => {
-      const parsed = parseCommand(args);
-      if (parsed.kind === "invalid") {
-        ctx.ui.notify(parsed.message, "warning");
-        return;
-      }
-      if (parsed.kind === "all") {
-        await showAllSessionStats(parsed.days, parsed.project, ctx);
-        return;
-      }
-      await showCurrentSessionStats(ctx);
-    },
-  });
+    pi.registerCommand('stats', {
+        description:
+            'Show session statistics. /stats | /stats all [project] [days]',
+        handler: async (args, ctx) => {
+            const parsed = parseCommand(args)
+            if (parsed.kind === 'invalid') {
+                ctx.ui.notify(parsed.message, 'warning')
+                return
+            }
+            if (parsed.kind === 'all') {
+                await showAllSessionStats(parsed.days, parsed.project, ctx)
+                return
+            }
+            await showCurrentSessionStats(ctx)
+        },
+    })
 }
 
 async function showAllSessionStats(
-  days: number | undefined,
-  project: boolean,
-  ctx: ExtensionCommandContext,
+    days: number | undefined,
+    project: boolean,
+    ctx: ExtensionCommandContext
 ): Promise<void> {
-  const program = Effect.gen(function* () {
-    const discovered = yield* Effect.tryPromise(() => discoverSessionFiles());
-    const projectSessions = project
-      ? discovered.filter(
-          (session) => session.cwd && resolve(session.cwd) === resolve(ctx.cwd),
+    const program = Effect.gen(function* () {
+        const discovered = yield* Effect.tryPromise(() =>
+            discoverSessionFiles()
         )
-      : discovered;
-    const cutoff = days ? Date.now() - days * 24 * 60 * 60 * 1000 : undefined;
-    const sessions =
-      cutoff === undefined
-        ? projectSessions
-        : projectSessions.filter(
-            (session) => session.created && session.created.getTime() >= cutoff,
-          );
-    if (sessions.length === 0) return { kind: "empty" as const };
+        const projectSessions = project
+            ? discovered.filter(
+                  (session) =>
+                      session.cwd && resolve(session.cwd) === resolve(ctx.cwd)
+              )
+            : discovered
+        const cutoff = days
+            ? Date.now() - days * 24 * 60 * 60 * 1000
+            : undefined
+        const sessions =
+            cutoff === undefined
+                ? projectSessions
+                : projectSessions.filter(
+                      (session) =>
+                          session.created && session.created.getTime() >= cutoff
+                  )
+        if (sessions.length === 0) return { kind: 'empty' as const }
 
-    yield* Effect.sync(() => {
-      if (ctx.hasUI)
-        ctx.ui.setStatus(STATUS_KEY, `Parsing ${sessions.length} sessions...`);
-    });
+        yield* Effect.sync(() => {
+            if (ctx.hasUI)
+                ctx.ui.setStatus(
+                    STATUS_KEY,
+                    `Parsing ${sessions.length} sessions...`
+                )
+        })
 
-    const pricing = createModelPricingResolver(ctx);
-    const parsed = yield* Effect.forEach(
-      sessions,
-      (session) =>
-        parseSessionFileEffect(session.path, pricing).pipe(
-          Effect.map((stats): SessionStats => {
-            const name = session.name || stats.name;
-            return {
-              ...stats,
-              ...(name ? { name } : {}),
-              project: session.cwd || undefined,
-              parentSessionPath:
-                session.parentSessionPath ?? stats.parentSessionPath,
-            };
-          }),
-          Effect.catch(() => Effect.succeed(undefined)),
-        ),
-      { concurrency: MAX_CONCURRENT_READS },
-    );
+        const pricing = createModelPricingResolver(ctx)
+        const parsed = yield* Effect.forEach(
+            sessions,
+            (session) =>
+                parseSessionFileEffect(session.path, pricing).pipe(
+                    Effect.map((stats): SessionStats => {
+                        const name = session.name || stats.name
+                        return {
+                            ...stats,
+                            ...(name ? { name } : {}),
+                            project: session.cwd || undefined,
+                            parentSessionPath:
+                                session.parentSessionPath ??
+                                stats.parentSessionPath,
+                        }
+                    }),
+                    Effect.catch(() => Effect.succeed(undefined))
+                ),
+            { concurrency: MAX_CONCURRENT_READS }
+        )
 
-    const stats = parsed.flatMap((value) => (value ? [value] : []));
-    return stats.length === 0
-      ? { kind: "unparseable" as const }
-      : {
-          kind: "success" as const,
-          stats,
-          quality: {
-            parsedSessions: stats.length,
-            discoveredSessions: sessions.length,
-          } satisfies DataQuality,
-        };
-  }).pipe(
-    Effect.ensuring(
-      Effect.sync(() => {
-        if (ctx.hasUI) ctx.ui.setStatus(STATUS_KEY, undefined);
-      }),
-    ),
-  );
+        const stats = parsed.flatMap((value) => (value ? [value] : []))
+        return stats.length === 0
+            ? { kind: 'unparseable' as const }
+            : {
+                  kind: 'success' as const,
+                  stats,
+                  quality: {
+                      parsedSessions: stats.length,
+                      discoveredSessions: sessions.length,
+                  } satisfies DataQuality,
+              }
+    }).pipe(
+        Effect.ensuring(
+            Effect.sync(() => {
+                if (ctx.hasUI) ctx.ui.setStatus(STATUS_KEY, undefined)
+            })
+        )
+    )
 
-  try {
-    const result = await Effect.runPromise(program);
-    if (result.kind === "empty") {
-      ctx.ui.notify("No sessions found.", "info");
-      return;
+    try {
+        const result = await Effect.runPromise(program)
+        if (result.kind === 'empty') {
+            ctx.ui.notify('No sessions found.', 'info')
+            return
+        }
+        if (result.kind === 'unparseable') {
+            ctx.ui.notify('No parseable sessions found.', 'warning')
+            return
+        }
+        if (project) {
+            await showStatsModal(
+                (width, theme) =>
+                    buildAllStatsOutput(
+                        result.stats,
+                        days,
+                        width,
+                        theme,
+                        true,
+                        undefined,
+                        result.quality
+                    ),
+                ctx
+            )
+            return
+        }
+
+        await showAllStatsBrowser(result.stats, days, result.quality, ctx)
+    } catch (error) {
+        ctx.ui.notify(
+            `Unable to load session statistics: ${errorMessage(error)}`,
+            'error'
+        )
     }
-    if (result.kind === "unparseable") {
-      ctx.ui.notify("No parseable sessions found.", "warning");
-      return;
-    }
-    if (project) {
-      await showStatsModal(
-        (width, theme) =>
-          buildAllStatsOutput(
-            result.stats,
-            days,
-            width,
-            theme,
-            true,
-            undefined,
-            result.quality,
-          ),
-        ctx,
-      );
-      return;
-    }
-
-    await showAllStatsBrowser(result.stats, days, result.quality, ctx);
-  } catch (error) {
-    ctx.ui.notify(
-      `Unable to load session statistics: ${errorMessage(error)}`,
-      "error",
-    );
-  }
 }
 
 async function showAllStatsBrowser(
-  sessions: readonly SessionStats[],
-  days: number | undefined,
-  quality: DataQuality,
-  ctx: ExtensionCommandContext,
+    sessions: readonly SessionStats[],
+    days: number | undefined,
+    quality: DataQuality,
+    ctx: ExtensionCommandContext
 ): Promise<void> {
-  type View = "overview" | "projects" | "detail";
-  let view: View = "overview";
-  let selectedProject = 0;
+    type View = 'overview' | 'projects' | 'detail'
+    let view: View = 'overview'
+    let selectedProject = 0
 
-  await showStatsModal(
-    (width, theme) => {
-      if (view === "overview") {
-        return buildAllStatsOutput(
-          sessions,
-          days,
-          width,
-          theme,
-          false,
-          undefined,
-          quality,
-        );
-      }
+    await showStatsModal(
+        (width, theme) => {
+            if (view === 'overview') {
+                return buildAllStatsOutput(
+                    sessions,
+                    days,
+                    width,
+                    theme,
+                    false,
+                    undefined,
+                    quality
+                )
+            }
 
-      const projects = buildProjectSummaries(sessions, days);
-      if (view === "projects") {
-        return buildProjectStatsOutput(
-          sessions,
-          days,
-          width,
-          theme,
-          selectedProject,
-          quality,
-        );
-      }
+            const projects = buildProjectSummaries(sessions, days)
+            if (view === 'projects') {
+                return buildProjectStatsOutput(
+                    sessions,
+                    days,
+                    width,
+                    theme,
+                    selectedProject,
+                    quality
+                )
+            }
 
-      const selected = projects[selectedProject];
-      return selected
-        ? buildAllStatsOutput(
-            selected.sessions,
-            days,
-            width,
-            theme,
-            true,
-            selected.project,
-            quality,
-          )
-        : "No project selected.";
-    },
-    ctx,
-    (data) => {
-      if (view === "overview") {
-        if (data.toLowerCase() === "p") {
-          view = "projects";
-          return true;
-        }
-        return false;
-      }
+            const selected = projects[selectedProject]
+            return selected
+                ? buildAllStatsOutput(
+                      selected.sessions,
+                      days,
+                      width,
+                      theme,
+                      true,
+                      selected.project,
+                      quality
+                  )
+                : 'No project selected.'
+        },
+        ctx,
+        (data) => {
+            if (view === 'overview') {
+                if (data.toLowerCase() === 'p') {
+                    view = 'projects'
+                    return true
+                }
+                return false
+            }
 
-      if (view === "projects") {
-        if (matchesKey(data, "escape")) {
-          view = "overview";
-          return true;
-        }
-        if (data === "j") {
-          selectedProject = Math.min(
-            selectedProject + 1,
-            Math.max(0, buildProjectSummaries(sessions, days).length - 1),
-          );
-          return true;
-        }
-        if (data === "k") {
-          selectedProject = Math.max(0, selectedProject - 1);
-          return true;
-        }
-        if (data === "g") {
-          selectedProject = 0;
-          return true;
-        }
-        if (data === "G") {
-          selectedProject = Math.max(
-            0,
-            buildProjectSummaries(sessions, days).length - 1,
-          );
-          return true;
-        }
-        if (matchesKey(data, "enter")) {
-          view = "detail";
-          return true;
-        }
-        return false;
-      }
+            if (view === 'projects') {
+                if (matchesKey(data, 'escape')) {
+                    view = 'overview'
+                    return true
+                }
+                if (data === 'j') {
+                    selectedProject = Math.min(
+                        selectedProject + 1,
+                        Math.max(
+                            0,
+                            buildProjectSummaries(sessions, days).length - 1
+                        )
+                    )
+                    return true
+                }
+                if (data === 'k') {
+                    selectedProject = Math.max(0, selectedProject - 1)
+                    return true
+                }
+                if (data === 'g') {
+                    selectedProject = 0
+                    return true
+                }
+                if (data === 'G') {
+                    selectedProject = Math.max(
+                        0,
+                        buildProjectSummaries(sessions, days).length - 1
+                    )
+                    return true
+                }
+                if (matchesKey(data, 'enter')) {
+                    view = 'detail'
+                    return true
+                }
+                return false
+            }
 
-      if (matchesKey(data, "escape")) {
-        view = "projects";
-        return true;
-      }
-      return false;
-    },
-  );
+            if (matchesKey(data, 'escape')) {
+                view = 'projects'
+                return true
+            }
+            return false
+        }
+    )
 }
 
 async function showCurrentSessionStats(
-  ctx: ExtensionCommandContext,
+    ctx: ExtensionCommandContext
 ): Promise<void> {
-  const currentFile = ctx.sessionManager.getSessionFile() ?? "ephemeral";
-  const pricing = createModelPricingResolver(ctx);
-  const currentStats = parseCurrentBranch(
-    ctx.sessionManager.getEntries() as SessionEntryLike[],
-    currentFile,
-    ctx.sessionManager.getSessionName() ?? undefined,
-    pricing,
-  );
-  const subagentStats = await loadCurrentSessionSubagentStats(
-    ctx,
-    currentFile,
-    pricing,
-  );
-  const stats = mergeSessionStats(
-    [currentStats, ...subagentStats],
-    currentFile,
-    currentStats.name,
-  );
+    const currentFile = ctx.sessionManager.getSessionFile() ?? 'ephemeral'
+    const pricing = createModelPricingResolver(ctx)
+    const currentStats = parseCurrentBranch(
+        ctx.sessionManager.getEntries() as SessionEntryLike[],
+        currentFile,
+        ctx.sessionManager.getSessionName() ?? undefined,
+        pricing
+    )
+    const subagentStats = await loadCurrentSessionSubagentStats(
+        ctx,
+        currentFile,
+        pricing
+    )
+    // New methodology: in-memory children report accumulated usage through
+    // the subagents snapshot persisted on this branch (never files on disk).
+    const snapshotStats = buildSubagentSnapshotStats(
+        ctx.sessionManager.getEntries() as SessionEntryLike[],
+        currentFile,
+        pricing
+    )
+    const agents = [...snapshotStats, ...subagentStats]
+    const stats = mergeSessionStats(
+        [currentStats, ...agents],
+        currentFile,
+        currentStats.name
+    )
 
-  await showStatsModal(
-    (width, theme) =>
-      buildCurrentSessionOutput(stats, width, theme, {
-        mainThread: currentStats,
-        subagents: subagentStats,
-        contextUsage:
-          typeof ctx.getContextUsage === "function"
-            ? ctx.getContextUsage()
-            : undefined,
-      }),
-    ctx,
-  );
+    await showStatsModal(
+        (width, theme) =>
+            buildCurrentSessionOutput(stats, width, theme, {
+                mainThread: currentStats,
+                subagents: agents,
+                contextUsage:
+                    typeof ctx.getContextUsage === 'function'
+                        ? ctx.getContextUsage()
+                        : undefined,
+            }),
+        ctx
+    )
 }
 
 /** Load child sessions belonging to the current Pi session. */
 async function loadCurrentSessionSubagentStats(
-  ctx: ExtensionCommandContext,
-  currentFile: string,
-  pricing: ModelPricingResolver,
+    ctx: ExtensionCommandContext,
+    currentFile: string,
+    pricing: ModelPricingResolver
 ): Promise<SessionStats[]> {
-  if (currentFile === "ephemeral") return [];
+    if (currentFile === 'ephemeral') return []
 
-  try {
-    const sessions = await discoverSessionFiles();
-    const currentPath = resolve(currentFile);
-    const currentStart = ctx.sessionManager.getHeader()?.timestamp;
-    const currentStartTime = currentStart
-      ? Date.parse(currentStart)
-      : Number.NaN;
-    const linkedPaths = new Set([currentPath]);
-    const linkedChildren = [] as typeof sessions;
-    let foundChild = true;
-    while (foundChild) {
-      foundChild = false;
-      for (const session of sessions) {
-        const sessionPath = resolve(session.path);
-        if (
-          linkedPaths.has(sessionPath) ||
-          !session.parentSessionPath ||
-          !linkedPaths.has(resolve(session.parentSessionPath))
-        ) {
-          continue;
+    try {
+        const sessions = await discoverSessionFiles()
+        const currentPath = resolve(currentFile)
+        const currentStart = ctx.sessionManager.getHeader()?.timestamp
+        const currentStartTime = currentStart
+            ? Date.parse(currentStart)
+            : Number.NaN
+        const linkedPaths = new Set([currentPath])
+        const linkedChildren = [] as typeof sessions
+        let foundChild = true
+        while (foundChild) {
+            foundChild = false
+            for (const session of sessions) {
+                const sessionPath = resolve(session.path)
+                if (
+                    linkedPaths.has(sessionPath) ||
+                    !session.parentSessionPath ||
+                    !linkedPaths.has(resolve(session.parentSessionPath))
+                ) {
+                    continue
+                }
+                linkedPaths.add(sessionPath)
+                linkedChildren.push(session)
+                foundChild = true
+            }
         }
-        linkedPaths.add(sessionPath);
-        linkedChildren.push(session);
-        foundChild = true;
-      }
-    }
 
-    // Keep compatibility with child sessions created before parent links were added.
-    const legacyChildren = sessions.filter(
-      (session) =>
-        !session.parentSessionPath &&
-        !linkedPaths.has(resolve(session.path)) &&
-        session.cwd &&
-        resolve(session.cwd) === resolve(ctx.cwd) &&
-        session.name?.startsWith(SUBAGENT_SESSION_PREFIX) &&
-        (Number.isNaN(currentStartTime) ||
-          (session.created?.getTime() ?? 0) >= currentStartTime),
-    );
-    const subagentSessions = [...linkedChildren, ...legacyChildren];
-    const parsed = await Effect.runPromise(
-      Effect.forEach(
-        subagentSessions,
-        (session) =>
-          parseSessionFileEffect(session.path, pricing).pipe(
-            Effect.map((stats) => ({
-              ...stats,
-              ...(session.name ? { name: session.name } : {}),
-              project: session.cwd || undefined,
-              parentSessionPath:
-                session.parentSessionPath ?? stats.parentSessionPath,
-            })),
-            Effect.catch(() => Effect.succeed(undefined)),
-          ),
-        { concurrency: MAX_CONCURRENT_READS },
-      ),
-    );
-    return parsed.flatMap((stats) => (stats ? [stats] : []));
-  } catch {
-    // Current-session statistics should still work if session discovery fails.
-    return [];
-  }
+        // Keep compatibility with child sessions created before parent links were added.
+        const legacyChildren = sessions.filter(
+            (session) =>
+                !session.parentSessionPath &&
+                !linkedPaths.has(resolve(session.path)) &&
+                session.cwd &&
+                resolve(session.cwd) === resolve(ctx.cwd) &&
+                session.name?.startsWith(SUBAGENT_SESSION_PREFIX) &&
+                (Number.isNaN(currentStartTime) ||
+                    (session.created?.getTime() ?? 0) >= currentStartTime)
+        )
+        const subagentSessions = [...linkedChildren, ...legacyChildren]
+        const parsed = await Effect.runPromise(
+            Effect.forEach(
+                subagentSessions,
+                (session) =>
+                    parseSessionFileEffect(session.path, pricing).pipe(
+                        Effect.map((stats) => ({
+                            ...stats,
+                            ...(session.name ? { name: session.name } : {}),
+                            project: session.cwd || undefined,
+                            parentSessionPath:
+                                session.parentSessionPath ??
+                                stats.parentSessionPath,
+                        })),
+                        Effect.catch(() => Effect.succeed(undefined))
+                    ),
+                { concurrency: MAX_CONCURRENT_READS }
+            )
+        )
+        return parsed.flatMap((stats) => (stats ? [stats] : []))
+    } catch {
+        // Current-session statistics should still work if session discovery fails.
+        return []
+    }
 }
 
 type ParsedCommand =
-  | { readonly kind: "current" }
-  | {
-      readonly kind: "all";
-      readonly days?: number;
-      readonly project: boolean;
-    }
-  | { readonly kind: "invalid"; readonly message: string };
+    | { readonly kind: 'current' }
+    | {
+          readonly kind: 'all'
+          readonly days?: number
+          readonly project: boolean
+      }
+    | { readonly kind: 'invalid'; readonly message: string }
 
 function parseCommand(args: string): ParsedCommand {
-  const parts = args.trim().split(/\s+/).filter(Boolean);
-  if (parts.length === 0) return { kind: "current" };
-  if (parts[0]?.toLowerCase() !== "all" || parts.length > 3) {
-    return {
-      kind: "invalid",
-      message: "Usage: /stats | /stats all [project] [days]",
-    };
-  }
-  if (parts.length === 1) return { kind: "all", project: false };
+    const parts = args.trim().split(/\s+/).filter(Boolean)
+    if (parts.length === 0) return { kind: 'current' }
+    if (parts[0]?.toLowerCase() !== 'all' || parts.length > 3) {
+        return {
+            kind: 'invalid',
+            message: 'Usage: /stats | /stats all [project] [days]',
+        }
+    }
+    if (parts.length === 1) return { kind: 'all', project: false }
 
-  const hasProjectFilter = parts[1]?.toLowerCase() === "project";
-  if (hasProjectFilter && parts.length === 2) {
-    return { kind: "all", project: true };
-  }
-  if (hasProjectFilter && parts.length !== 3) {
-    return {
-      kind: "invalid",
-      message: "Usage: /stats | /stats all [project] [days]",
-    };
-  }
-  if (!hasProjectFilter && parts.length === 3) {
-    return {
-      kind: "invalid",
-      message: "Usage: /stats | /stats all [project] [days]",
-    };
-  }
+    const hasProjectFilter = parts[1]?.toLowerCase() === 'project'
+    if (hasProjectFilter && parts.length === 2) {
+        return { kind: 'all', project: true }
+    }
+    if (hasProjectFilter && parts.length !== 3) {
+        return {
+            kind: 'invalid',
+            message: 'Usage: /stats | /stats all [project] [days]',
+        }
+    }
+    if (!hasProjectFilter && parts.length === 3) {
+        return {
+            kind: 'invalid',
+            message: 'Usage: /stats | /stats all [project] [days]',
+        }
+    }
 
-  const rawDays = hasProjectFilter ? parts[2] : parts[1];
-  if (!rawDays || !/^\d+$/.test(rawDays)) {
-    return { kind: "invalid", message: "Days must be a positive integer." };
-  }
-  const days = Number(rawDays);
-  if (!Number.isSafeInteger(days) || days < 1) {
-    return { kind: "invalid", message: "Days must be a positive integer." };
-  }
-  return { kind: "all", days, project: hasProjectFilter };
+    const rawDays = hasProjectFilter ? parts[2] : parts[1]
+    if (!rawDays || !/^\d+$/.test(rawDays)) {
+        return { kind: 'invalid', message: 'Days must be a positive integer.' }
+    }
+    const days = Number(rawDays)
+    if (!Number.isSafeInteger(days) || days < 1) {
+        return { kind: 'invalid', message: 'Days must be a positive integer.' }
+    }
+    return { kind: 'all', days, project: hasProjectFilter }
 }
 
 function createModelPricingResolver(
-  ctx: ExtensionCommandContext,
+    ctx: ExtensionCommandContext
 ): ModelPricingResolver {
-  const registry = ctx.modelRegistry as object;
-  const cached = pricingResolvers.get(registry);
-  if (cached) return cached;
+    const registry = ctx.modelRegistry as object
+    const cached = pricingResolvers.get(registry)
+    if (cached) return cached
 
-  const resolver: ModelPricingResolver = (provider, modelId) => {
-    const directModel = ctx.modelRegistry.find(provider, modelId);
-    if (directModel) {
-      // A zero-rate catalog entry is known free usage, not missing pricing.
-      return { ...directModel.cost, source: "catalog" };
+    const resolver: ModelPricingResolver = (provider, modelId) => {
+        const directModel = ctx.modelRegistry.find(provider, modelId)
+        if (directModel) {
+            // A zero-rate catalog entry is known free usage, not missing pricing.
+            return { ...directModel.cost, source: 'catalog' }
+        }
+        if (!modelId.endsWith('-free')) return undefined
+
+        const baseModelId = modelId.slice(0, -'-free'.length)
+        const candidates = [
+            ['opencode', baseModelId] as const,
+            ['opencode-go', baseModelId] as const,
+            ...(FREE_MODEL_PRICE_REFERENCES[modelId] ?? []),
+        ]
+        for (const [referenceProvider, referenceModelId] of candidates) {
+            const referenceModel = ctx.modelRegistry.find(
+                referenceProvider,
+                referenceModelId
+            )
+            if (referenceModel && hasBillablePricing(referenceModel.cost)) {
+                return { ...referenceModel.cost, source: 'estimated' }
+            }
+        }
+
+        // Do not present a free model's zero rate as a paid reference when no
+        // equivalent exists; the dashboard will show it as unknown instead.
+        return undefined
     }
-    if (!modelId.endsWith("-free")) return undefined;
-
-    const baseModelId = modelId.slice(0, -"-free".length);
-    const candidates = [
-      ["opencode", baseModelId] as const,
-      ["opencode-go", baseModelId] as const,
-      ...(FREE_MODEL_PRICE_REFERENCES[modelId] ?? []),
-    ];
-    for (const [referenceProvider, referenceModelId] of candidates) {
-      const referenceModel = ctx.modelRegistry.find(
-        referenceProvider,
-        referenceModelId,
-      );
-      if (referenceModel && hasBillablePricing(referenceModel.cost)) {
-        return { ...referenceModel.cost, source: "estimated" };
-      }
-    }
-
-    // Do not present a free model's zero rate as a paid reference when no
-    // equivalent exists; the dashboard will show it as unknown instead.
-    return undefined;
-  };
-  pricingResolvers.set(registry, resolver);
-  return resolver;
+    pricingResolvers.set(registry, resolver)
+    return resolver
 }
 
 function hasBillablePricing(pricing: {
-  input: number;
-  output: number;
-  cacheRead: number;
-  cacheWrite: number;
+    input: number
+    output: number
+    cacheRead: number
+    cacheWrite: number
 }): boolean {
-  return [
-    pricing.input,
-    pricing.output,
-    pricing.cacheRead,
-    pricing.cacheWrite,
-  ].some((rate) => Number.isFinite(rate) && rate > 0);
+    return [
+        pricing.input,
+        pricing.output,
+        pricing.cacheRead,
+        pricing.cacheWrite,
+    ].some((rate) => Number.isFinite(rate) && rate > 0)
 }
 
 function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+    return error instanceof Error ? error.message : String(error)
 }

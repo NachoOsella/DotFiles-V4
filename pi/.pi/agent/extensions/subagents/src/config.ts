@@ -1,170 +1,202 @@
-import { REASONING_EFFORTS, type ReasoningEffort } from './domain.ts'
-import type { AgentRoleName } from './roles.ts'
-
-export const DEFAULT_MAX_RUNNING = 8
-export const DEFAULT_MAX_TRACKED = 64
-
 /**
- * Sensible per-role defaults for extension tools.
- * Subagents are still filtered by registered + not-builtin, so missing
- * extensions are harmless. Env vars override these defaults.
+ * Behavioral port of:
+ * openai/codex@9d83c48e5c4761c4fe29995305914021dcfbe7cd
+ * codex-rs/protocol/src/config_types.rs (MultiAgentMode)
+ * core resolved V2 settings (limits, hints, wait values)
  */
-export const DEFAULT_ALLOWED_EXTENSION_TOOLS: Partial<
-    Record<AgentRoleName, ReadonlyArray<string>>
-> = {
-    // explorer: read-only investigator over local search tools
-    explorer: ['find_files', 'fff_multi_grep'],
-    // worker/default: full implementation — plan, search, run, validate
-    worker: [
-        'find_files',
-        'fff_multi_grep',
-        'todowrite',
-        'bg_start',
-        'bg_status',
-        'bg_list',
-        'bg_kill',
-    ],
-    // tester: validation — search, plan, background runs
-    tester: [
-        'find_files',
-        'fff_multi_grep',
-        'todowrite',
-        'bg_start',
-        'bg_status',
-        'bg_list',
-        'bg_kill',
-    ],
-    // reviewer: read-only review over local search tools
-    reviewer: ['find_files', 'fff_multi_grep', 'todowrite'],
-    default: [
-        'find_files',
-        'fff_multi_grep',
-        'todowrite',
-        'bg_start',
-        'bg_status',
-        'bg_list',
-        'bg_kill',
-    ],
+
+export interface CodexSubagentsConfig {
+    readonly enabled: boolean
+    readonly maxConcurrentAgents: number
+    readonly maxResidentAgents: number
+    readonly waitAgentEnabled: boolean
+    readonly minWaitTimeoutMs: number
+    readonly defaultWaitTimeoutMs: number
+    readonly maxWaitTimeoutMs: number
+    readonly rootAgentUsageHintText?: string
+    readonly subagentUsageHintText?: string
+    readonly multiAgentModeHintText?: string
+    readonly subagentDeveloperInstructions?: string
+    readonly exposeSpawnAgentModelOverrides: boolean
+    readonly hideSpawnAgentMetadata: boolean
 }
 
-export interface SubagentConfig {
-    readonly maxRunning: number
-    readonly maxTracked: number
-    readonly roleModels: Partial<Record<AgentRoleName, string>>
-    readonly roleReasoningEfforts: Partial<
-        Record<AgentRoleName, ReasoningEffort>
-    >
-    /** Explicitly trusted extension tools, never orchestration tools. */
-    readonly allowedExtensionTools?: Partial<
-        Record<AgentRoleName, ReadonlyArray<string>>
-    >
+export const DEFAULT_SUBAGENTS_CONFIG: CodexSubagentsConfig = {
+    enabled: true,
+    maxConcurrentAgents: 4,
+    maxResidentAgents: 16,
+    waitAgentEnabled: true,
+    minWaitTimeoutMs: 1_000,
+    defaultWaitTimeoutMs: 60_000,
+    maxWaitTimeoutMs: 300_000,
+    exposeSpawnAgentModelOverrides: true,
+    hideSpawnAgentMetadata: false,
 }
 
-function positiveInteger(
-    value: string | undefined,
-    fallback: number,
-    name: string
-) {
-    if (value === undefined || value.trim() === '') return fallback
-    const parsed = Number(value)
-    if (!Number.isSafeInteger(parsed) || parsed <= 0) {
-        throw new Error(`${name} must be a positive safe integer.`)
+export class ConfigValidationError extends Error {
+    constructor(message: string) {
+        super(message)
+        this.name = 'ConfigValidationError'
     }
-    return parsed
 }
 
-function model(value: string | undefined) {
-    const trimmed = value?.trim()
-    return trimmed ? trimmed : undefined
-}
+/** Decode and validate raw config (e.g. from settings.json). */
+export function decodeConfig(input: unknown): CodexSubagentsConfig {
+    const base = { ...DEFAULT_SUBAGENTS_CONFIG }
+    if (input === undefined || input === null) return base
+    if (typeof input !== 'object') {
+        throw new ConfigValidationError('subagents config must be an object')
+    }
+    const raw = input as Record<string, unknown>
+    const out: CodexSubagentsConfig = { ...base }
 
-function reasoning(value: string | undefined): ReasoningEffort | undefined {
-    const trimmed = value?.trim()
-    if (!trimmed) return undefined
-    if ((REASONING_EFFORTS as readonly string[]).includes(trimmed))
-        return trimmed as ReasoningEffort
-    throw new Error(
-        `Invalid subagent reasoning effort "${trimmed}". Expected one of ${REASONING_EFFORTS.join(', ')}.`
+    const asBool = (v: unknown, name: string): boolean => {
+        if (typeof v !== 'boolean') {
+            throw new ConfigValidationError(`${name} must be a boolean`)
+        }
+        return v
+    }
+    const asCount = (v: unknown, name: string): number => {
+        if (typeof v !== 'number' || !Number.isSafeInteger(v) || v < 1) {
+            throw new ConfigValidationError(`${name} must be an integer >= 1`)
+        }
+        return v
+    }
+    const asMs = (v: unknown, name: string): number => {
+        if (typeof v !== 'number' || !Number.isFinite(v) || v < 0) {
+            throw new ConfigValidationError(`${name} must be a finite ms >= 0`)
+        }
+        return Math.floor(v)
+    }
+    const asOptionalText = (v: unknown, name: string): string | undefined => {
+        if (v === undefined) return undefined
+        if (typeof v !== 'string') {
+            throw new ConfigValidationError(`${name} must be a string`)
+        }
+        return v
+    }
+
+    if (raw.enabled !== undefined) {
+        ;(out as { enabled: boolean }).enabled = asBool(raw.enabled, 'enabled')
+    }
+    if (raw.maxConcurrentAgents !== undefined) {
+        ;(out as { maxConcurrentAgents: number }).maxConcurrentAgents = asCount(
+            raw.maxConcurrentAgents,
+            'maxConcurrentAgents'
+        )
+    }
+    if (raw.maxResidentAgents !== undefined) {
+        ;(out as { maxResidentAgents: number }).maxResidentAgents = asCount(
+            raw.maxResidentAgents,
+            'maxResidentAgents'
+        )
+    }
+    if (raw.waitAgentEnabled !== undefined) {
+        ;(out as { waitAgentEnabled: boolean }).waitAgentEnabled = asBool(
+            raw.waitAgentEnabled,
+            'waitAgentEnabled'
+        )
+    }
+    if (raw.minWaitTimeoutMs !== undefined) {
+        ;(out as { minWaitTimeoutMs: number }).minWaitTimeoutMs = asMs(
+            raw.minWaitTimeoutMs,
+            'minWaitTimeoutMs'
+        )
+    }
+    if (raw.defaultWaitTimeoutMs !== undefined) {
+        ;(out as { defaultWaitTimeoutMs: number }).defaultWaitTimeoutMs = asMs(
+            raw.defaultWaitTimeoutMs,
+            'defaultWaitTimeoutMs'
+        )
+    }
+    if (raw.maxWaitTimeoutMs !== undefined) {
+        ;(out as { maxWaitTimeoutMs: number }).maxWaitTimeoutMs = asMs(
+            raw.maxWaitTimeoutMs,
+            'maxWaitTimeoutMs'
+        )
+    }
+    if (
+        out.minWaitTimeoutMs > out.defaultWaitTimeoutMs ||
+        out.defaultWaitTimeoutMs > out.maxWaitTimeoutMs
+    ) {
+        throw new ConfigValidationError(
+            'require minWaitTimeoutMs <= defaultWaitTimeoutMs <= maxWaitTimeoutMs'
+        )
+    }
+    const rootHint = asOptionalText(
+        raw.rootAgentUsageHintText,
+        'rootAgentUsageHintText'
     )
-}
-
-function extensionTools(value: string | undefined) {
-    const tools = value
-        ?.split(',')
-        .map((tool) => tool.trim())
-        .filter(Boolean)
-    return tools && tools.length > 0 ? [...new Set(tools)] : undefined
-}
-
-function resolveExtensionTools(
-    value: string | undefined,
-    isSet: boolean,
-    fallback: ReadonlyArray<string> | undefined
-) {
-    // Not set -> use defaults; explicitly set (even to "" ) -> respect it (undefined = no tools)
-    if (!isSet) return fallback
-    return extensionTools(value)
-}
-
-/**
- * Runtime configuration is intentionally small and environment-based. Model
- * names remain installation-specific, so the extension does not hard-code
- * model identifiers.
- */
-export function loadSubagentConfig(
-    environment: NodeJS.ProcessEnv = process.env
-): SubagentConfig {
-    return {
-        maxRunning: positiveInteger(
-            environment.PI_SUBAGENTS_MAX_RUNNING,
-            DEFAULT_MAX_RUNNING,
-            'PI_SUBAGENTS_MAX_RUNNING'
-        ),
-        maxTracked: positiveInteger(
-            environment.PI_SUBAGENTS_MAX_TRACKED,
-            DEFAULT_MAX_TRACKED,
-            'PI_SUBAGENTS_MAX_TRACKED'
-        ),
-        roleModels: {
-            explorer: model(environment.PI_SUBAGENTS_EXPLORER_MODEL),
-            tester: model(environment.PI_SUBAGENTS_TESTER_MODEL),
-            worker: model(environment.PI_SUBAGENTS_WORKER_MODEL),
-            reviewer: model(environment.PI_SUBAGENTS_REVIEWER_MODEL),
-            default: model(environment.PI_SUBAGENTS_DEFAULT_MODEL),
-        },
-        roleReasoningEfforts: {
-            explorer: reasoning(environment.PI_SUBAGENTS_EXPLORER_REASONING),
-            tester: reasoning(environment.PI_SUBAGENTS_TESTER_REASONING),
-            worker: reasoning(environment.PI_SUBAGENTS_WORKER_REASONING),
-            reviewer: reasoning(environment.PI_SUBAGENTS_REVIEWER_REASONING),
-            default: reasoning(environment.PI_SUBAGENTS_DEFAULT_REASONING),
-        },
-        allowedExtensionTools: {
-            explorer: resolveExtensionTools(
-                environment.PI_SUBAGENTS_EXPLORER_EXTENSION_TOOLS,
-                'PI_SUBAGENTS_EXPLORER_EXTENSION_TOOLS' in environment,
-                DEFAULT_ALLOWED_EXTENSION_TOOLS.explorer
-            ),
-            tester: resolveExtensionTools(
-                environment.PI_SUBAGENTS_TESTER_EXTENSION_TOOLS,
-                'PI_SUBAGENTS_TESTER_EXTENSION_TOOLS' in environment,
-                DEFAULT_ALLOWED_EXTENSION_TOOLS.tester
-            ),
-            worker: resolveExtensionTools(
-                environment.PI_SUBAGENTS_WORKER_EXTENSION_TOOLS,
-                'PI_SUBAGENTS_WORKER_EXTENSION_TOOLS' in environment,
-                DEFAULT_ALLOWED_EXTENSION_TOOLS.worker
-            ),
-            reviewer: resolveExtensionTools(
-                environment.PI_SUBAGENTS_REVIEWER_EXTENSION_TOOLS,
-                'PI_SUBAGENTS_REVIEWER_EXTENSION_TOOLS' in environment,
-                DEFAULT_ALLOWED_EXTENSION_TOOLS.reviewer
-            ),
-            default: resolveExtensionTools(
-                environment.PI_SUBAGENTS_DEFAULT_EXTENSION_TOOLS,
-                'PI_SUBAGENTS_DEFAULT_EXTENSION_TOOLS' in environment,
-                DEFAULT_ALLOWED_EXTENSION_TOOLS.default
-            ),
-        },
+    const subHint = asOptionalText(
+        raw.subagentUsageHintText,
+        'subagentUsageHintText'
+    )
+    const modeHint = asOptionalText(
+        raw.multiAgentModeHintText,
+        'multiAgentModeHintText'
+    )
+    const devInstructions = asOptionalText(
+        raw.subagentDeveloperInstructions,
+        'subagentDeveloperInstructions'
+    )
+    if (rootHint !== undefined) {
+        ;(out as { rootAgentUsageHintText?: string }).rootAgentUsageHintText =
+            rootHint
     }
+    if (subHint !== undefined) {
+        ;(out as { subagentUsageHintText?: string }).subagentUsageHintText =
+            subHint
+    }
+    if (modeHint !== undefined) {
+        ;(out as { multiAgentModeHintText?: string }).multiAgentModeHintText =
+            modeHint
+    }
+    if (devInstructions !== undefined) {
+        ;(
+            out as { subagentDeveloperInstructions?: string }
+        ).subagentDeveloperInstructions = devInstructions
+    }
+    if (raw.exposeSpawnAgentModelOverrides !== undefined) {
+        ;(
+            out as { exposeSpawnAgentModelOverrides: boolean }
+        ).exposeSpawnAgentModelOverrides = asBool(
+            raw.exposeSpawnAgentModelOverrides,
+            'exposeSpawnAgentModelOverrides'
+        )
+    }
+    if (raw.hideSpawnAgentMetadata !== undefined) {
+        ;(out as { hideSpawnAgentMetadata: boolean }).hideSpawnAgentMetadata =
+            asBool(raw.hideSpawnAgentMetadata, 'hideSpawnAgentMetadata')
+    }
+    return out
+}
+
+/** Clamp a requested wait timeout; returns the effective value + note. */
+export function clampWaitTimeout(
+    config: CodexSubagentsConfig,
+    requestedMs: number | undefined
+): { effectiveMs: number; note: string | null; rejected: string | null } {
+    const requested = requestedMs ?? config.defaultWaitTimeoutMs
+    if (!Number.isFinite(requested) || requested < 0) {
+        return {
+            effectiveMs: config.defaultWaitTimeoutMs,
+            note: null,
+            rejected: 'timeout_ms must be a finite number >= 0.',
+        }
+    }
+    if (requested > config.maxWaitTimeoutMs) {
+        return {
+            effectiveMs: config.maxWaitTimeoutMs,
+            note: null,
+            rejected: `timeout_ms exceeds maxWaitTimeoutMs (${config.maxWaitTimeoutMs}).`,
+        }
+    }
+    if (requested < config.minWaitTimeoutMs) {
+        return {
+            effectiveMs: config.minWaitTimeoutMs,
+            note: `Requested timeout below minimum; clamped to ${config.minWaitTimeoutMs}ms.`,
+            rejected: null,
+        }
+    }
+    return { effectiveMs: Math.floor(requested), note: null, rejected: null }
 }

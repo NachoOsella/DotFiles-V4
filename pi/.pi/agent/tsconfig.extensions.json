@@ -5,6 +5,7 @@
   },
   "include": [
     "extensions/pi-zen-free/**/*.ts",
+    "extensions/subagents/**/*.ts",
     "extensions/todowrite/**/*.ts"
   ]
 }

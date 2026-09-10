@@ -1,51 +1,43 @@
 /**
- * Layer composition and the async entry-point boundary.
+ * Async entry-point boundary. The manager is a plain session-scoped class
+ * (deliberate simplification; see docs/ARCHITECTURE.md); this module is
+ * the single place where Effect meets Pi's async tool contract.
  *
- * Everything inside the extension is Effect generators; this module is where
- * tool handlers (plain async functions) run those effects against one shared
- * ManagedRuntime.
+ * Typed failures and defects become thrown Errors; AbortSignal
+ * interruption throws `interruptMessage`.
  */
 
-import { Cause, Exit, Layer, ManagedRuntime, type Effect } from "effect";
-import { BackendRegistry, type SubagentBackend } from "./backend.ts";
-import { piBackend } from "./backends/pi.ts";
-import type { BackendName } from "./domain.ts";
-import { makeSubagentManagerLayer } from "./manager.ts";
-import { loadSubagentConfig, type SubagentConfig } from "./config.ts";
-
-const BackendRegistryLive = Layer.sync(BackendRegistry, () =>
-  new Map<BackendName, SubagentBackend>([[piBackend.name, piBackend]]),
-);
+import { Cause, Effect, Exit } from 'effect'
+import {
+    DEFAULT_SUBAGENTS_CONFIG,
+    type CodexSubagentsConfig,
+} from './config.ts'
+import type { PiHost } from './host.ts'
+import { SubagentManager } from './manager.ts'
 
 export function createSubagentRuntime(
-  config: SubagentConfig = loadSubagentConfig(),
+    host: PiHost,
+    config: CodexSubagentsConfig = DEFAULT_SUBAGENTS_CONFIG
 ) {
-  const appLayer = makeSubagentManagerLayer(config).pipe(
-    Layer.provide(BackendRegistryLive),
-  );
-  return ManagedRuntime.make(appLayer);
+    const manager = new SubagentManager(host, config)
+    return { manager }
 }
 
-export type SubagentRuntime = ReturnType<typeof createSubagentRuntime>;
+export type SubagentRuntime = ReturnType<typeof createSubagentRuntime>
 
-/**
- * Run an effect from an async tool handler. Typed failures and defects are
- * converted to thrown Errors (what pi's tool contract expects); interruption
- * (tool AbortSignal) throws `interruptMessage`.
- */
+/** Run an Effect from an async tool handler with Pi-friendly errors. */
 export async function runTool<A, E>(
-  runtime: SubagentRuntime,
-  effect: Effect.Effect<A, E>,
-  options: { signal?: AbortSignal; interruptMessage?: string } = {},
-) {
-  const exit = await runtime.runPromiseExit(
-    effect,
-    options.signal ? { signal: options.signal } : undefined,
-  );
-  if (Exit.isSuccess(exit)) return exit.value;
-  if (Cause.hasInterruptsOnly(exit.cause)) {
-    throw new Error(options.interruptMessage ?? "Operation was aborted.");
-  }
-  const [first] = Cause.prettyErrors(exit.cause);
-  throw new Error(first?.message ?? Cause.pretty(exit.cause));
+    effect: Effect.Effect<A, E>,
+    options: { signal?: AbortSignal; interruptMessage?: string } = {}
+): Promise<A> {
+    const exit = await Effect.runPromiseExit(
+        effect,
+        options.signal ? { signal: options.signal } : undefined
+    )
+    if (Exit.isSuccess(exit)) return exit.value
+    if (Cause.hasInterruptsOnly(exit.cause)) {
+        throw new Error(options.interruptMessage ?? 'Operation was aborted.')
+    }
+    const first = Cause.prettyErrors(exit.cause)[0]
+    throw new Error(first?.message ?? Cause.pretty(exit.cause))
 }
