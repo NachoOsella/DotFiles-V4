@@ -81,9 +81,9 @@ test('preserves single-question prepareArguments compatibility', () => {
     assert.equal(prepared.questions[0].question, 'Solo?')
 })
 
-test('non-TUI modes return unavailable without custom UI', async () => {
+test('modes without UI return unavailable', async () => {
     const tool = createTool()
-    for (const mode of ['rpc', 'json', 'print'] as const) {
+    for (const mode of ['json', 'print'] as const) {
         const { ctx, getCalls } = createCtx(mode)
         const result = await tool.execute(
             'id',
@@ -104,6 +104,57 @@ test('non-TUI modes return unavailable without custom UI', async () => {
         assert.match(result.content[0].text, /plain text/)
         assert.doesNotMatch(result.content[0].text, /dismissed/i)
     }
+})
+
+test('RPC mode asks sequentially and returns ordered answers', async () => {
+    const tool = createTool()
+    const selections = ['A2', 'Write my own answer...']
+    const titles: string[] = []
+    const ui = {
+        select: async (title: string) => {
+            titles.push(title)
+            return selections.shift()
+        },
+        input: async () => 'mine',
+    }
+    const ctx = { mode: 'rpc', hasUI: true, ui } as unknown as ExtensionContext
+    const result = await tool.execute(
+        'id',
+        validParams(),
+        undefined,
+        undefined,
+        ctx
+    )
+    const details = result.details as {
+        outcome: string
+        cancelled: boolean
+        answers: Array<Record<string, unknown>>
+    }
+    assert.deepEqual(titles, ['Question 1/2: First?', 'Question 2/2: Second?'])
+    assert.equal(details.outcome, 'answered')
+    assert.equal(details.cancelled, false)
+    assert.deepEqual(details.answers, [
+        { question: 'First?', answer: 'A2', wasCustom: false, index: 2 },
+        { question: 'Second?', answer: 'mine', wasCustom: true },
+    ])
+    assert.match(result.content[0].text, /selected option 2: A2/)
+    assert.match(result.content[0].text, /wrote their own answer: mine/)
+})
+
+test('RPC cancellation dismisses the whole questionnaire', async () => {
+    const tool = createTool()
+    const ui = { select: async () => undefined }
+    const ctx = { mode: 'rpc', hasUI: true, ui } as unknown as ExtensionContext
+    const result = await tool.execute(
+        'id',
+        validParams(),
+        undefined,
+        undefined,
+        ctx
+    )
+    const details = result.details as { outcome: string; cancelled: boolean }
+    assert.equal(details.outcome, 'dismissed')
+    assert.equal(details.cancelled, true)
 })
 
 test('pre-aborted signal returns aborted without custom UI', async () => {

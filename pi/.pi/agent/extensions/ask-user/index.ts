@@ -3,7 +3,7 @@ import { Text } from '@earendil-works/pi-tui'
 import { Cause, Effect, Exit } from 'effect'
 import { Type, type Static } from 'typebox'
 import { QuestionnaireComponent } from './component.ts'
-import type { StoredAnswer } from './state.ts'
+import { CUSTOM_OPTION_LABEL, type StoredAnswer } from './state.ts'
 import {
     ASK_USER_PARAMETER_DESCRIPTIONS,
     ASK_USER_PROMPT_GUIDELINES,
@@ -120,7 +120,7 @@ export default function askUser(pi: ExtensionAPI) {
                 }
             }
 
-            if (ctx.mode !== 'tui') {
+            if (ctx.mode !== 'tui' && !ctx.hasUI) {
                 return reply(
                     buildAskUserResultMessage({ kind: 'unavailable' }),
                     [],
@@ -132,6 +132,81 @@ export default function askUser(pi: ExtensionAPI) {
                     buildAskUserResultMessage({ kind: 'aborted' }),
                     [],
                     'aborted'
+                )
+            }
+
+            if (ctx.mode === 'rpc') {
+                const answers: Answer[] = []
+                for (const [questionIndex, question] of params.questions.entries()) {
+                    if (signal?.aborted) {
+                        return reply(
+                            buildAskUserResultMessage({ kind: 'aborted' }),
+                            [],
+                            'aborted'
+                        )
+                    }
+
+                    const displayedOptions = question.options.map((option) =>
+                        option.description
+                            ? `${option.label} — ${option.description}`
+                            : option.label
+                    )
+                    const choice = await ctx.ui.select(
+                        `Question ${questionIndex + 1}/${params.questions.length}: ${question.question}`,
+                        [...displayedOptions, CUSTOM_OPTION_LABEL],
+                        { signal }
+                    )
+                    if (choice === undefined) {
+                        const outcome = signal?.aborted ? 'aborted' : 'dismissed'
+                        return reply(
+                            buildAskUserResultMessage({ kind: outcome }),
+                            [],
+                            outcome
+                        )
+                    }
+
+                    if (choice === CUSTOM_OPTION_LABEL) {
+                        const answer = await ctx.ui.input(
+                            question.question,
+                            'Write your answer',
+                            { signal }
+                        )
+                        if (answer === undefined) {
+                            const outcome = signal?.aborted ? 'aborted' : 'dismissed'
+                            return reply(
+                                buildAskUserResultMessage({ kind: outcome }),
+                                [],
+                                outcome
+                            )
+                        }
+                        answers.push({
+                            question: question.question,
+                            answer: answer.trim(),
+                            wasCustom: true,
+                        })
+                        continue
+                    }
+
+                    const selectedIndex = displayedOptions.indexOf(choice)
+                    const selected = question.options[selectedIndex]
+                    if (!selected) {
+                        return reply(
+                            buildAskUserResultMessage({ kind: 'dismissed' }),
+                            [],
+                            'dismissed'
+                        )
+                    }
+                    answers.push({
+                        question: question.question,
+                        answer: selected.label,
+                        wasCustom: false,
+                        index: selectedIndex + 1,
+                    })
+                }
+                return reply(
+                    buildAskUserResultMessage({ kind: 'answered', answers }),
+                    answers,
+                    'answered'
                 )
             }
 
