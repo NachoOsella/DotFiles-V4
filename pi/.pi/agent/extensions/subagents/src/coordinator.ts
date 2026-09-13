@@ -84,6 +84,11 @@ export interface WaitResult {
     readonly timedOut: boolean
 }
 
+export interface AgentTurnPreview {
+    readonly role: string
+    readonly text: string
+}
+
 export interface SubagentCoordinatorOptions {
     readonly config: CodexSubagentsConfig
     readonly getRootSnapshot: () => ParentExecutionSnapshot
@@ -110,6 +115,12 @@ export class SubagentCoordinator {
     private readonly runtimes = new Map<AgentId, AgentRuntime>()
     /** Shares one cold reopen across concurrent send/follow-up callers. */
     private readonly loading = new Map<AgentId, Promise<AgentRuntime>>()
+    private readonly recentTurns = new Map<
+        AgentId,
+        readonly AgentTurnPreview[]
+    >()
+    private readonly registryMutex = new AgentMutex()
+    private readonly residencyMutex = new AgentMutex()
     private readonly mutexes = new Map<AgentId, AgentMutex>()
     private readonly listeners = new Set<(event: SubagentEvent) => void>()
     private readonly sessionBindings = new Map<string, AgentId>()
@@ -208,6 +219,14 @@ export class SubagentCoordinator {
         return this.activityFeed.get(path as string)
     }
 
+    getRecentTurns(path: AgentPath): readonly AgentTurnPreview[] {
+        const record = this.getRecordByPath(path)
+        if (!record) return []
+        const runtime = this.runtimes.get(record.id)
+        if (runtime) this.captureRecentTurns(record.id, runtime)
+        return this.recentTurns.get(record.id) ?? []
+    }
+
     bindSession(sessionId: string, path: AgentPath): void {
         const id = this.pathIndex.get(path as string)
         if (id) this.sessionBindings.set(sessionId, id)
@@ -267,11 +286,10 @@ export class SubagentCoordinator {
         if (
             fork._tag === 'All' &&
             (options.model !== undefined ||
-                options.reasoningEffort !== undefined ||
-                options.agentType !== undefined)
+                options.reasoningEffort !== undefined)
         ) {
             throw new InvalidModelOverrideError(
-                'model, reasoning_effort, and agent_type overrides are not allowed with fork_turns=all'
+                'model and reasoning_effort overrides are not allowed with fork_turns=all'
             )
         }
         if (
@@ -285,29 +303,15 @@ export class SubagentCoordinator {
         }
 
         const childPath = joinAgentPath(options.caller, options.taskName)
-        if (this.pathIndex.has(childPath as string)) {
-            throw new AgentAlreadyExistsError(childPath as string)
-        }
-        if (this.childDepth(childPath) > this.maxDepth()) {
-            throw new AgentSpawnFailedError('Agent depth limit reached.')
-        }
-        const childCount = this.records.size - 1
-        if (childCount >= this.options.config.maxAgents) {
-            throw new AgentCapacityReachedError(
-                this.options.config.maxAgents,
-                childCount
-            )
-        }
-
         const parentSnapshot = await this.snapshotFor(caller)
         const inheritsExecution = fork._tag === 'All'
         const role = resolveRole(
             this.options.config,
-            inheritsExecution ? caller.role : options.agentType
+            options.agentType ?? (inheritsExecution ? caller.role : undefined)
         )
         const thinkingOverride = parseThinkingLevel(options.reasoningEffort)
         const model = inheritsExecution
-            ? formatModel(parentSnapshot.model)
+            ? (role.model ?? formatModel(parentSnapshot.model))
             : (options.model ?? role.model ?? formatModel(parentSnapshot.model))
         const record: AgentRecord = {
             id: newAgentId(),
@@ -327,7 +331,7 @@ export class SubagentCoordinator {
                 ]),
             ],
             thinkingLevel: inheritsExecution
-                ? parentSnapshot.thinkingLevel
+                ? (role.thinkingLevel ?? parentSnapshot.thinkingLevel)
                 : (thinkingOverride ??
                   role.thinkingLevel ??
                   parentSnapshot.thinkingLevel),
@@ -338,33 +342,21 @@ export class SubagentCoordinator {
             initiatingTurnId: newTurnId() as string,
             forkKind: fork._tag,
         }
-        // This synchronous reservation is the registry mutex: no await occurs
-        // between the duplicate/depth/capacity checks and insertion.
-        this.records.set(record.id, record)
-        this.pathIndex.set(childPath as string, record.id)
-
-        try {
-            await this.evictOneIfRequired(record.id)
-            const runtime = await this.factory.create(
+        let initialization!: Promise<AgentRuntime>
+        await this.registryMutex.runExclusive(async () => {
+            this.assertSpawnReservationAvailable(childPath)
+            this.records.set(record.id, record)
+            this.pathIndex.set(childPath as string, record.id)
+            initialization = this.initializeSpawnRuntime(
                 record,
-                {
-                    ...parentSnapshot,
-                    model: parseModel(model),
-                },
+                { ...parentSnapshot, model: parseModel(model) },
                 fork
             )
-            runtime.endpoint = childEndpoint(childPath, runtime.session)
-            this.runtimes.set(record.id, runtime)
-            this.sessionBindings.set(runtime.session.sessionId, record.id)
-            this.setRecord(record.id, (previous) => ({
-                ...previous,
-                residency: 'loaded',
-                sessionId: runtime.session.sessionId,
-                sessionFile: runtime.session.sessionFile,
-                persistedSessionId: runtime.session.sessionId,
-                activeTools: runtime.session.getActiveToolNames(),
-                thinkingLevel: runtime.session.thinkingLevel,
-            }))
+            this.trackLoading(record.id, initialization)
+        })
+
+        try {
+            await initialization
             const comm = newTaskCommunication({
                 kind: 'spawn',
                 author: caller.path,
@@ -382,11 +374,15 @@ export class SubagentCoordinator {
             })
             return { path: childPath, id: record.id }
         } catch (error) {
-            const runtime = this.runtimes.get(record.id)
-            if (runtime) await runtime.dispose().catch(() => undefined)
-            this.runtimes.delete(record.id)
-            this.pathIndex.delete(childPath as string)
-            this.records.delete(record.id)
+            await this.residencyMutex.runExclusive(async () => {
+                const runtime = this.runtimes.get(record.id)
+                if (runtime) await runtime.dispose().catch(() => undefined)
+                this.runtimes.delete(record.id)
+            })
+            await this.registryMutex.runExclusive(async () => {
+                this.pathIndex.delete(childPath as string)
+                this.records.delete(record.id)
+            })
             throw error instanceof Error
                 ? error
                 : new AgentSpawnFailedError(String(error))
@@ -523,6 +519,7 @@ export class SubagentCoordinator {
 
     async shutdown(): Promise<void> {
         this.shutdownFlag = true
+        await Promise.allSettled([...this.loading.values()])
         const runtimes = [...this.runtimes.values()]
         for (const runtime of runtimes) {
             runtime.interruptRequested = true
@@ -703,6 +700,7 @@ export class SubagentCoordinator {
         runtime.phase = 'settling'
         try {
             this.captureUsage(id, runtime)
+            this.captureRecentTurns(id, runtime)
             const interrupted =
                 runtime.interruptRequested || isAbortError(error)
             if (interrupted) {
@@ -826,6 +824,11 @@ export class SubagentCoordinator {
         if (!record) return Promise.reject(new AgentNotFoundError(String(id)))
 
         const load = this.loadRuntime(id, record)
+        this.trackLoading(id, load)
+        return load
+    }
+
+    private trackLoading(id: AgentId, load: Promise<AgentRuntime>): void {
         this.loading.set(id, load)
         load.then(
             () => {
@@ -835,7 +838,6 @@ export class SubagentCoordinator {
                 if (this.loading.get(id) === load) this.loading.delete(id)
             }
         )
-        return load
     }
 
     private async loadRuntime(
@@ -847,29 +849,13 @@ export class SubagentCoordinator {
             residency: 'loading',
         }))
         try {
-            await this.evictOneIfRequired(id)
-            const runtime = await this.factory.open(record)
-            if (this.shutdownFlag) {
-                await runtime.dispose()
-                throw new Error('session is shutting down')
-            }
-            runtime.endpoint = childEndpoint(record.path, runtime.session)
-            this.runtimes.set(id, runtime)
-            this.sessionBindings.set(runtime.session.sessionId, id)
-            this.setRecord(id, (previous) => ({
-                ...previous,
-                residency: 'loaded',
-                sessionId: runtime.session.sessionId,
-                sessionFile: runtime.session.sessionFile,
-                activeTools: runtime.session.getActiveToolNames(),
-                thinkingLevel: runtime.session.thinkingLevel,
-            }))
-            this.emit({
-                _tag: 'ResidencyChanged',
-                agentId: id,
-                residency: 'loaded',
+            return await this.residencyMutex.runExclusive(async () => {
+                const existing = this.runtimes.get(id)
+                if (existing) return existing
+                await this.evictOneIfRequired(id)
+                const runtime = await this.factory.open(record)
+                return await this.registerRuntime(record, runtime)
             })
-            return runtime
         } catch (error) {
             this.setRecord(id, (previous) => ({
                 ...previous,
@@ -880,6 +866,51 @@ export class SubagentCoordinator {
                 error instanceof Error ? error.message : String(error)
             )
         }
+    }
+
+    private async initializeSpawnRuntime(
+        record: AgentRecord,
+        parentSnapshot: ParentExecutionSnapshot,
+        fork: ForkTurns
+    ): Promise<AgentRuntime> {
+        return await this.residencyMutex.runExclusive(async () => {
+            await this.evictOneIfRequired(record.id)
+            const runtime = await this.factory.create(
+                record,
+                parentSnapshot,
+                fork
+            )
+            return await this.registerRuntime(record, runtime)
+        })
+    }
+
+    private async registerRuntime(
+        record: AgentRecord,
+        runtime: AgentRuntime
+    ): Promise<AgentRuntime> {
+        if (this.shutdownFlag) {
+            await runtime.dispose()
+            throw new Error('session is shutting down')
+        }
+        runtime.endpoint = childEndpoint(record.path, runtime.session)
+        this.runtimes.set(record.id, runtime)
+        this.sessionBindings.set(runtime.session.sessionId, record.id)
+        this.setRecord(record.id, (previous) => ({
+            ...previous,
+            residency: 'loaded',
+            sessionId: runtime.session.sessionId,
+            sessionFile: runtime.session.sessionFile,
+            persistedSessionId: runtime.session.sessionId,
+            activeTools: runtime.session.getActiveToolNames(),
+            thinkingLevel: runtime.session.thinkingLevel,
+        }))
+        this.captureRecentTurns(record.id, runtime)
+        this.emit({
+            _tag: 'ResidencyChanged',
+            agentId: record.id,
+            residency: 'loaded',
+        })
+        return runtime
     }
 
     private async snapshotFor(
@@ -922,9 +953,14 @@ export class SubagentCoordinator {
             })
             .sort((left, right) => left.lastActivityAt - right.lastActivityAt)
         const victim = candidates[0]
-        if (!victim) return
+        if (!victim) {
+            throw new Error(
+                `No idle runtime can be evicted at maxLoadedAgents=${this.options.config.maxLoadedAgents}.`
+            )
+        }
         const runtime = this.runtimes.get(victim.id)
         if (!runtime) return
+        this.captureRecentTurns(victim.id, runtime)
         await runtime.dispose()
         this.runtimes.delete(victim.id)
         this.setRecord(victim.id, (previous) => ({
@@ -936,6 +972,30 @@ export class SubagentCoordinator {
             agentId: victim.id,
             residency: 'unloaded',
         })
+    }
+
+    private assertSpawnReservationAvailable(childPath: AgentPath): void {
+        if (this.pathIndex.has(childPath as string)) {
+            throw new AgentAlreadyExistsError(childPath as string)
+        }
+        if (this.childDepth(childPath) > this.maxDepth()) {
+            throw new AgentSpawnFailedError('Agent depth limit reached.')
+        }
+        const childCount = this.records.size - 1
+        if (childCount >= this.options.config.maxAgents) {
+            throw new AgentCapacityReachedError(
+                this.options.config.maxAgents,
+                childCount
+            )
+        }
+    }
+
+    private captureRecentTurns(id: AgentId, runtime: AgentRuntime): void {
+        const turns = runtime.session.messages
+            .map(toTurnPreview)
+            .filter((turn): turn is AgentTurnPreview => turn !== null)
+            .slice(-10)
+        this.recentTurns.set(id, turns)
     }
 
     private mutex(id: AgentId): AgentMutex {
@@ -981,6 +1041,48 @@ export class SubagentCoordinator {
     private maxDepth(): number {
         return this.options.config.maxDepth
     }
+}
+
+function toTurnPreview(message: unknown): AgentTurnPreview | null {
+    if (!message || typeof message !== 'object') return null
+    const candidate = message as {
+        role?: unknown
+        content?: unknown
+    }
+    if (
+        candidate.role !== 'user' &&
+        candidate.role !== 'assistant' &&
+        candidate.role !== 'custom'
+    ) {
+        return null
+    }
+    const text = extractMessageText(candidate.content)
+    if (!text) return null
+    return {
+        role: candidate.role === 'custom' ? 'message' : candidate.role,
+        text,
+    }
+}
+
+function extractMessageText(content: unknown): string {
+    if (typeof content === 'string') return normalizePreviewText(content)
+    if (!Array.isArray(content)) return ''
+    return normalizePreviewText(
+        content
+            .map((part) => {
+                if (!part || typeof part !== 'object') return ''
+                const value = part as { type?: unknown; text?: unknown }
+                return value.type === 'text' && typeof value.text === 'string'
+                    ? value.text
+                    : ''
+            })
+            .filter(Boolean)
+            .join(' ')
+    )
+}
+
+function normalizePreviewText(value: string): string {
+    return value.trim().replace(/\s+/g, ' ')
 }
 
 function safeRootSnapshot(

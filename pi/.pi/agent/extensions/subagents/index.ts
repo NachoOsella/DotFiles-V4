@@ -13,7 +13,11 @@ import {
     buildChildToolDefinitions,
     validateToolPlan,
 } from './src/extension-tools.ts'
-import { rootEndpoint } from './src/transport.ts'
+import {
+    rootEndpoint,
+    SUBAGENTS_COMMUNICATION_CUSTOM_TYPE,
+} from './src/transport.ts'
+import { renderSubagentCommunication } from './src/final-answer-renderer.ts'
 import { resolveConfiguredMode } from './src/mode.ts'
 import {
     findLatestState,
@@ -105,6 +109,11 @@ function selectSubagentsConfig(value: unknown): unknown {
 export default function subagentsExtension(pi: ExtensionAPI) {
     const config = loadConfig()
     if (!config.enabled) return
+
+    pi.registerMessageRenderer(
+        SUBAGENTS_COMMUNICATION_CUSTOM_TYPE,
+        renderSubagentCommunication
+    )
 
     let coordinator: SubagentCoordinator | undefined
     let latestCtx: ExtensionContext | undefined

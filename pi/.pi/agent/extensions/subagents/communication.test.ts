@@ -15,6 +15,7 @@ import {
 import { formatFinalAnswer } from './src/completion.ts'
 import { AgentStatus } from './src/agent-status.ts'
 import type { AgentPath } from './src/ids.ts'
+import { rootEndpoint } from './src/transport.ts'
 
 const ROOT = '/root' as AgentPath
 const CHILD = '/root/worker' as AgentPath
@@ -47,6 +48,33 @@ describe('communication envelopes', () => {
             text,
             'Message Type: NEW_TASK\nTask name: worker\nSender: /root\nPayload:\ndo it'
         )
+    })
+
+    it('shows FINAL_ANSWER deliveries in the root transcript', async () => {
+        const deliveries: Array<{
+            message: { display: boolean; content: unknown }
+            options: { triggerTurn: boolean }
+        }> = []
+        const endpoint = rootEndpoint(ROOT, (message, options) => {
+            deliveries.push({ message, options })
+        })
+        await endpoint.send(
+            finalAnswerCommunication({
+                author: CHILD,
+                recipient: ROOT,
+                payload: 'done',
+            }),
+            { triggerTurn: false }
+        )
+
+        assert.equal(deliveries[0]?.message.display, true)
+        assert.equal(deliveries[0]?.options.triggerTurn, false)
+        assert.match(String(deliveries[0]?.message.content), /FINAL_ANSWER/)
+        assert.match(
+            String(deliveries[0]?.message.content),
+            /Sender: \/root\/worker/
+        )
+        assert.match(String(deliveries[0]?.message.content), /Payload:\ndone/)
     })
 
     it('maps kinds to message types and trigger flags', () => {

@@ -29,6 +29,7 @@ function customMessage(comm: InterAgentCommunication) {
             messageType: comm.messageType,
             author: comm.author,
             recipient: comm.recipient,
+            payload: comm.payload,
             sourceCallId: comm.sourceCallId,
             initiatingTurnId: comm.initiatingTurnId,
         },
@@ -63,10 +64,18 @@ export function rootEndpoint(
     return {
         path,
         async send(comm, options) {
-            sendMessage(customMessage(comm), {
-                triggerTurn: options.triggerTurn,
-                deliverAs: options.delivery,
-            })
+            const message = customMessage(comm)
+            sendMessage(
+                {
+                    ...message,
+                    // Root completions should be visible without triggering a turn.
+                    display: comm.messageType === 'FINAL_ANSWER',
+                },
+                {
+                    triggerTurn: options.triggerTurn,
+                    deliverAs: options.delivery,
+                }
+            )
         },
     }
 }

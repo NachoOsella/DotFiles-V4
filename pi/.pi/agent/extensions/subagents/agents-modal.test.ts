@@ -113,6 +113,11 @@ test('expanded rows show record detail inside the frame', () => {
                 status: { _tag: 'Running' },
                 lastActivityAt: Date.now(),
             }) as unknown as AgentRecord,
+        getRecentTurns: (_path: AgentPath) =>
+            Array.from({ length: 12 }, (_, index) => ({
+                role: index % 2 === 0 ? 'user' : 'assistant',
+                text: `turn ${index + 1}`,
+            })).slice(-10),
     }
     const lines = buildAgentsModalLines(
         agents,
@@ -126,4 +131,8 @@ test('expanded rows show record detail inside the frame', () => {
     }
     assert.ok(lines.some((line) => line.includes('bash×3')))
     assert.ok(lines.some((line) => line.includes('test-model')))
+    assert.ok(lines.some((line) => line.includes('last 10 turns')))
+    assert.ok(lines.some((line) => line.includes('turn 3')))
+    assert.ok(lines.some((line) => line.includes('turn 12')))
+    assert.ok(!lines.some((line) => line.includes('turn 2')))
 })

@@ -17,7 +17,7 @@ export interface AgentRuntime {
     dispose(): Promise<void>
 }
 
-/** Serialize only admission decisions for one agent. */
+/** Serialize a small asynchronous critical section. */
 export class AgentMutex {
     private tail = Promise.resolve()
 

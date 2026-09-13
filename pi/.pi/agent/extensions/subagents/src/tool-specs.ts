@@ -51,13 +51,13 @@ export function buildSpawnAgentParams(config: SpawnSchemaConfig) {
         const names = Object.keys(config.roles).filter(
             (name) => name !== 'default'
         )
-        const agentType =
-            names.length === 0
-                ? Type.String()
-                : names.length === 1
-                  ? Type.Literal(names[0]!)
-                  : Type.Union(names.map((name) => Type.Literal(name)))
-        properties.agent_type = Type.Optional(agentType)
+        if (names.length > 0) {
+            const agentType =
+                names.length === 1
+                    ? Type.Literal(names[0]!)
+                    : Type.Union(names.map((name) => Type.Literal(name)))
+            properties.agent_type = Type.Optional(agentType)
+        }
     }
     if (config.exposeSpawnAgentModelOverrides) {
         properties.model = Type.Optional(

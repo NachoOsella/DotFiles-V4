@@ -63,39 +63,39 @@ test('AgentSession owns custom-message persistence and triggered turns', async (
         })
         let streamCalls = 0
         const streamedContexts: Context[] = []
+        let finishStream!: () => void
         session.agent.streamFunction = (_model, context) => {
             streamCalls += 1
             streamedContexts.push(context)
             const stream = createAssistantMessageEventStream()
-            queueMicrotask(() =>
-                stream.push({
-                    type: 'done',
-                    reason: 'stop',
-                    message: {
-                        role: 'assistant',
-                        content: [{ type: 'text', text: 'done' }],
-                        api: MODEL.api,
-                        provider: MODEL.provider,
-                        model: MODEL.id,
-                        usage: {
-                            input: 1,
-                            output: 1,
-                            cacheRead: 0,
-                            cacheWrite: 0,
-                            totalTokens: 2,
-                            cost: {
-                                input: 0,
-                                output: 0,
-                                cacheRead: 0,
-                                cacheWrite: 0,
-                                total: 0,
-                            },
-                        },
-                        stopReason: 'stop',
-                        timestamp: Date.now(),
+            const message = {
+                role: 'assistant' as const,
+                content: [{ type: 'text' as const, text: 'done' }],
+                api: MODEL.api,
+                provider: MODEL.provider,
+                model: MODEL.id,
+                usage: {
+                    input: 1,
+                    output: 1,
+                    cacheRead: 0,
+                    cacheWrite: 0,
+                    totalTokens: 2,
+                    cost: {
+                        input: 0,
+                        output: 0,
+                        cacheRead: 0,
+                        cacheWrite: 0,
+                        total: 0,
                     },
-                })
+                },
+                stopReason: 'stop' as const,
+                timestamp: Date.now(),
+            }
+            queueMicrotask(() =>
+                stream.push({ type: 'start', partial: message })
             )
+            finishStream = () =>
+                stream.push({ type: 'done', reason: 'stop', message })
             return stream
         }
 
@@ -115,7 +115,7 @@ test('AgentSession owns custom-message persistence and triggered turns', async (
             1
         )
 
-        await session.sendCustomMessage(
+        const run = session.sendCustomMessage(
             {
                 customType: 'subagents-v3:communication',
                 content: 'run',
@@ -124,7 +124,35 @@ test('AgentSession owns custom-message persistence and triggered turns', async (
             },
             { triggerTurn: true }
         )
+        await new Promise((resolve) => setImmediate(resolve))
         assert.equal(streamCalls, 1)
+        assert.equal(session.isStreaming, true)
+
+        await session.sendCustomMessage(
+            {
+                customType: 'subagents-v3:communication',
+                content: 'during-stream',
+                display: false,
+                details: { triggerTurn: false },
+            },
+            { triggerTurn: false }
+        )
+        assert.equal(
+            session.messages.filter((message) => message.role === 'custom')
+                .length,
+            2,
+            'queue-only input must remain deferred while streaming'
+        )
+        assert.equal(
+            sessionManager
+                .getEntries()
+                .filter((entry) => entry.type === 'custom_message').length,
+            2,
+            'deferred input must not enter the session log mid-turn'
+        )
+
+        finishStream()
+        await run
         assert.match(JSON.stringify(streamedContexts[0]?.messages), /queued/)
         assert.ok(
             session.messages.some(
@@ -151,7 +179,7 @@ test('AgentSession owns custom-message persistence and triggered turns', async (
                         entry.type === 'custom_message' &&
                         entry.customType === 'subagents-v3:communication'
                 ).length,
-            2
+            3
         )
     } finally {
         await rm(root, { recursive: true, force: true })

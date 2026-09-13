@@ -15,7 +15,11 @@ import {
 } from '@earendil-works/pi-tui'
 import type { AgentRecord } from './agent-record.ts'
 import type { AgentPath } from './ids.ts'
-import type { ListedAgent, SubagentCoordinator } from './coordinator.ts'
+import type {
+    AgentTurnPreview,
+    ListedAgent,
+    SubagentCoordinator,
+} from './coordinator.ts'
 import { agentDepth, shortAgentName } from './widget.ts'
 
 const PREVIEW_CHARS = 120
@@ -30,6 +34,7 @@ export interface ModalState {
 /** Minimal reader so the frame stays pure and testable. */
 export interface AgentRecordReader {
     getRecordByPath(path: AgentPath): AgentRecord | undefined
+    getRecentTurns?(path: AgentPath): readonly AgentTurnPreview[]
 }
 
 /** Open the subagents inspector. No-op with a notice outside TUI. */
@@ -230,7 +235,8 @@ export function buildAgentsModalLines(
                 agent,
                 agents,
                 reader,
-                state.detailed
+                state.detailed,
+                state.expanded.has(agent.path as string)
             )) {
                 lines.push(row(theme.fg('dim', `  ${detail}`)))
             }
@@ -274,7 +280,8 @@ function agentDetailRows(
     agent: ListedAgent,
     all: readonly ListedAgent[],
     reader: AgentRecordReader,
-    detailed: boolean
+    detailed: boolean,
+    showTurns: boolean
 ): string[] {
     const rows: string[] = []
     const record = reader.getRecordByPath(agent.path)
@@ -310,6 +317,17 @@ function agentDetailRows(
     if (record) {
         const age = relativeTime(record.lastActivityAt)
         if (age) rows.push(`active ${age}`)
+    }
+    if (showTurns) {
+        const turns = reader.getRecentTurns?.(agent.path) ?? []
+        if (turns.length > 0) rows.push('last 10 turns')
+        for (const turn of turns) {
+            const text =
+                turn.text.length > PREVIEW_CHARS
+                    ? `${turn.text.slice(0, PREVIEW_CHARS)}…`
+                    : turn.text
+            rows.push(`${turn.role}: ${text}`)
+        }
     }
     return rows
 }

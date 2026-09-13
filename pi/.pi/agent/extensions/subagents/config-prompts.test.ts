@@ -141,6 +141,15 @@ describe('tool plan', () => {
         assert.ok('fork_turns' in schema.properties)
     })
 
+    it('omits agent_type when no custom roles are valid', () => {
+        const schema = buildSpawnAgentParams({
+            exposeSpawnAgentModelOverrides: false,
+            hideSpawnAgentMetadata: false,
+            roles: {},
+        }) as { properties: Record<string, unknown> }
+        assert.ok(!('agent_type' in schema.properties))
+    })
+
     it('exposes the exact six-tool family and no V1 names', () => {
         assert.deepEqual(plannedV2Tools({ waitAgentEnabled: true }), [
             'spawn_agent',
