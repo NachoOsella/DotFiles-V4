@@ -19,6 +19,11 @@ type Model = NonNullable<
 >[number]
 type AssistantMessage = Extract<Message, { type: 'assistant' }>
 
+const money = new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency: 'USD',
+})
+
 function isAssistant(message: Message): message is AssistantMessage {
     return message.type === 'assistant'
 }
@@ -76,6 +81,7 @@ function resolveUsage(ctx: TuiContext, sessionID: string) {
 function ContextProgress(props: { sessionID: string }) {
     const ctx = usePlugin()
     const usage = createMemo(() => resolveUsage(ctx, props.sessionID))
+    const cost = createMemo(() => ctx.data.session.cost(props.sessionID))
     const tone = createMemo(() => {
         const percent = usage().percent ?? 0
         if (percent >= CRITICAL_THRESHOLD) {
@@ -88,16 +94,21 @@ function ContextProgress(props: { sessionID: string }) {
     })
 
     return (
-        <Show when={usage().used > 0}>
+        <Show when={usage().used > 0 || cost() > 0}>
             <box flexDirection="column">
                 <text fg={ctx.theme.text.default}>Context</text>
-                <text fg={ctx.theme.text.subdued}>
-                    {detailLine(usage().used, usage().total)}
-                </text>
+                <Show when={usage().used > 0}>
+                    <text fg={ctx.theme.text.subdued}>
+                        {detailLine(usage().used, usage().total)}
+                    </text>
+                </Show>
                 <Show when={usage().percent !== undefined}>
                     <text fg={tone()}>
                         {`${buildBar(usage().percent!, BAR_WIDTH)} ${usage().percent}%`}
                     </text>
+                </Show>
+                <Show when={cost() > 0}>
+                    <text fg={ctx.theme.text.subdued}>{money.format(cost())} spent</text>
                 </Show>
             </box>
         </Show>
