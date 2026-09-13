@@ -6,21 +6,21 @@ same host protocol. The behavioral reference is recorded in
 
 | Invariant | V3 implementation | Verification | Status |
 | --- | --- | --- | --- |
-| Spawn is asynchronous | `coordinator.ts` admits a run without awaiting it | code path; native-session E2E pending | partial |
-| One `NEW_TASK` per spawn | `transport.ts` submits one custom message | native-session E2E pending | partial |
-| Queue-only message | `sendCustomMessage({ triggerTurn: false })` | native-session E2E pending | partial |
-| Running follow-up reaches the next boundary | `deliverAs: "steer"` | native-session E2E pending | partial |
-| Idle follow-up starts a run | native `triggerTurn: true` | native-session E2E pending | partial |
+| Spawn is asynchronous | `coordinator.ts` admits a run without awaiting it | `coordinator-v3.test.ts` | exact |
+| One `NEW_TASK` per spawn | `transport.ts` submits one custom message | `coordinator-v3.test.ts` | exact |
+| Queue-only message | `sendCustomMessage({ triggerTurn: false })` | `native-session.test.ts` | exact |
+| Running follow-up reaches the next boundary | `deliverAs: "steer"` | coordinator and native-session tests | exact |
+| Idle follow-up starts a run | native `triggerTurn: true` | `coordinator-v3.test.ts` | exact |
 | No private mailbox | `WaitHub` stores sequence numbers only | `v3-primitives.test.ts` | exact |
-| No private scheduler | `AgentSession.sendCustomMessage` owns execution | code path; native-session E2E pending | partial |
-| Direct-parent final answer | `deliverCompletion()` resolves `parentPath` | code path; native-session E2E pending | partial |
-| Final answer does not trigger parent | final endpoint uses `triggerTurn: false` | transport test pending | partial |
+| No private scheduler | `AgentSession.sendCustomMessage` owns execution | `native-session.test.ts` | exact |
+| Direct-parent final answer | `deliverCompletion()` resolves `parentPath` | `coordinator-v3.test.ts` | exact |
+| Final answer does not trigger parent | final endpoint uses `triggerTurn: false` | `coordinator-v3.test.ts` | exact |
 | Structured full fork | `ForkProjector` copies `AgentMessage` values | `v3-primitives.test.ts` | exact |
 | Tool chatter excluded from forks | projector filters tool calls/results | `v3-primitives.test.ts` | exact |
 | `fork_turns=N` counts logical turns | projector groups input/final pairs | `v3-primitives.test.ts` | close |
-| Child session file reopens | nested persistent `SessionManager` | `v3-primitives.test.ts` | exact |
-| Child AgentSession cold resume | `SessionFactory.open()` restores the runtime | kiwi marker E2E pending | partial |
-| Agent count differs from run capacity | registry reservation plus `ExecutionLimiter` | limiter test; coordinator stress pending | partial |
+| Child session file reopens | nested persistent `SessionManager` | `v3-primitives.test.ts` and `native-session.test.ts` | exact |
+| Child AgentSession cold resume | `SessionFactory.open()` restores the runtime | factory-level kiwi E2E still pending | partial |
+| Agent count differs from run capacity | registry reservation plus `ExecutionLimiter` | limiter and coordinator tests | close |
 | Wait does not return payload | `WaitHub` has no content store | `v3-primitives.test.ts` | exact |
 | Typed `agent_message` protocol | Pi custom message conversion | no Pi primitive | host gap |
 | Thread switching without replacing root | Pi has no attach/switch primitive | no safe implementation | missing |

@@ -37,6 +37,10 @@ Children run in persistent independent Pi sessions, report back with one bounded
 `fork_turns=none` or a bounded N; full-history forks inherit the caller's model,
 thinking level, and role.
 
+Optional extension settings can be placed under `subagents` in `settings.json`,
+or supplied as JSON through `SUBAGENTS_CONFIG` / `SUBAGENTS_CONFIG_PATH`.
+Configured `roles` are exposed as `agent_type` choices in the spawn schema.
+
 ## Develop
 
 ```bash

@@ -43,7 +43,10 @@ import { resolveRole } from './roles.ts'
 import { AgentMutex, type AgentRuntime } from './agent-runtime.ts'
 import { ExecutionLimiter } from './execution-limiter.ts'
 import { childEndpoint, type CommunicationEndpoint } from './transport.ts'
-import { SessionFactory } from './session-factory.ts'
+import {
+    SessionFactory,
+    type SubagentSessionFactory,
+} from './session-factory.ts'
 import { WaitHub } from './wait-hub.ts'
 import { clampV3WaitTimeout, type CodexSubagentsConfig } from './config.ts'
 import type { SubagentEvent } from './events.ts'
@@ -89,6 +92,7 @@ export interface SubagentCoordinatorOptions {
     readonly rootSessionDir: () => string
     readonly getModelRegistry: () => import('@earendil-works/pi-coding-agent').ModelRegistry
     readonly buildTools: (caller: AgentPath) => readonly unknown[]
+    readonly sessionFactory?: SubagentSessionFactory
 }
 
 const WAIT_COMPLETED = 'Wait completed.'
@@ -104,13 +108,15 @@ export class SubagentCoordinator {
     private readonly records = new Map<AgentId, AgentRecord>()
     private readonly pathIndex = new Map<string, AgentId>()
     private readonly runtimes = new Map<AgentId, AgentRuntime>()
+    /** Shares one cold reopen across concurrent send/follow-up callers. */
+    private readonly loading = new Map<AgentId, Promise<AgentRuntime>>()
     private readonly mutexes = new Map<AgentId, AgentMutex>()
     private readonly listeners = new Set<(event: SubagentEvent) => void>()
     private readonly sessionBindings = new Map<string, AgentId>()
     private readonly waitHub = new WaitHub()
     private readonly activityFeed = new ActivityFeed()
     private readonly limiter: ExecutionLimiter
-    private readonly factory: SessionFactory
+    private readonly factory: SubagentSessionFactory
     private readonly rootId: AgentId
     private shutdownFlag = false
 
@@ -144,28 +150,30 @@ export class SubagentCoordinator {
         this.records.set(this.rootId, root)
         this.pathIndex.set(ROOT_PATH as string, this.rootId)
 
-        this.factory = new SessionFactory({
-            rootSessionId: options.rootSessionId,
-            rootSessionDir: options.rootSessionDir,
-            getModelRegistry: options.getModelRegistry,
-            buildTools: options.buildTools,
-            config: options.config,
-            onActivity: (path, summary) => {
-                const record = this.getRecordByPath(path)
-                if (!record) return
-                this.touch(record.id)
-                this.activityFeed.push(
-                    path as string,
-                    summary === 'thinking' ? 'thinking' : 'tool',
-                    summary
-                )
-                this.emit({
-                    _tag: 'ToolActivity',
-                    agentId: record.id,
-                    summary,
-                })
-            },
-        })
+        this.factory =
+            options.sessionFactory ??
+            new SessionFactory({
+                rootSessionId: options.rootSessionId,
+                rootSessionDir: options.rootSessionDir,
+                getModelRegistry: options.getModelRegistry,
+                buildTools: options.buildTools,
+                config: options.config,
+                onActivity: (path, summary) => {
+                    const record = this.getRecordByPath(path)
+                    if (!record) return
+                    this.touch(record.id)
+                    this.activityFeed.push(
+                        path as string,
+                        summary === 'thinking' ? 'thinking' : 'tool',
+                        summary
+                    )
+                    this.emit({
+                        _tag: 'ToolActivity',
+                        agentId: record.id,
+                        summary,
+                    })
+                },
+            })
     }
 
     onEvent(listener: (event: SubagentEvent) => void): () => void {
@@ -433,14 +441,18 @@ export class SubagentCoordinator {
             sourceCallId: args.callId,
         })
         await this.mutex(target.id).runExclusive(async () => {
-            if (runtime.session.isStreaming || runtime.currentRun) {
+            if (runtime.phase === 'running' && runtime.session.isStreaming) {
                 await runtime.endpoint!.send(comm, {
                     triggerTurn: true,
                     delivery: 'steer',
                 })
-            } else {
-                await this.startRun(target.id, comm)
+                this.waitHub.notifySteer(target.path as string)
+                return
             }
+            if (runtime.currentRun) {
+                await runtime.currentRun.catch(() => undefined)
+            }
+            await this.startRun(target.id, comm)
         })
         this.touch(target.id)
         this.emit({
@@ -523,6 +535,7 @@ export class SubagentCoordinator {
         )
         await Promise.all(runtimes.map((runtime) => runtime.dispose()))
         this.runtimes.clear()
+        this.loading.clear()
         this.waitHub.clear()
         this.activityFeed.clear()
     }
@@ -551,6 +564,7 @@ export class SubagentCoordinator {
                     createdAt: record.createdAt,
                     lastActivityAt: record.lastActivityAt,
                     runSequence: record.runSequence ?? 0,
+                    lastDeliveredRunSequence: record.lastDeliveredRunSequence,
                     lastResult: record.lastResult,
                     legacyUnresumable: record.legacyUnresumable,
                     usage: record.usage,
@@ -622,6 +636,7 @@ export class SubagentCoordinator {
                 createdAt: persisted.createdAt,
                 lastActivityAt: persisted.lastActivityAt,
                 runSequence: persisted.runSequence,
+                lastDeliveredRunSequence: persisted.lastDeliveredRunSequence,
                 lastResult: persisted.lastResult,
                 legacyUnresumable: persisted.legacyUnresumable,
                 usage: persisted.usage,
@@ -638,20 +653,35 @@ export class SubagentCoordinator {
         const record = this.records.get(id)
         const runtime = this.runtimes.get(id)
         if (!record || !runtime) throw new AgentNotFoundError(String(id))
-        if (runtime.currentRun || runtime.session.isStreaming) return
+        if (
+            runtime.currentRun ||
+            runtime.phase !== 'idle' ||
+            runtime.session.isStreaming
+        )
+            return
         const permit = this.limiter.tryAcquire()
         runtime.runSequence += 1
         runtime.activePermitSequence = permit.sequence
         runtime.interruptRequested = false
+        runtime.phase = 'running'
         this.setRecord(id, (previous) => ({
             ...previous,
             status: AgentStatus.running(),
             runSequence: runtime.runSequence,
         }))
         const sequence = runtime.runSequence
-        const runPromise = runtime.endpoint!.send(comm, {
-            triggerTurn: true,
-        })
+        let runPromise: Promise<void>
+        try {
+            runPromise = runtime.endpoint!.send(comm, {
+                triggerTurn: true,
+            })
+        } catch (error) {
+            permit.release()
+            runtime.activePermitSequence = undefined
+            runtime.phase = 'idle'
+            runtime.interruptRequested = false
+            throw error
+        }
         const tracked = runPromise
             .then(() => this.settleRun(id, sequence, undefined, permit))
             .catch((error) => this.settleRun(id, sequence, error, permit))
@@ -670,46 +700,52 @@ export class SubagentCoordinator {
             permit.release()
             return
         }
-        this.captureUsage(id, runtime)
-        const interrupted = runtime.interruptRequested || isAbortError(error)
-        if (interrupted) {
-            this.setRecord(id, (previous) => ({
-                ...previous,
-                status: AgentStatus.interrupted(),
-            }))
-        } else if (error) {
-            const message =
-                error instanceof Error ? error.message : String(error)
-            const status = AgentStatus.errored(message)
-            this.setRecord(id, (previous) => ({ ...previous, status }))
-            await this.safeDeliverCompletion(record, sequence, status)
-        } else {
-            const status = AgentStatus.completed(
-                runtime.session.getLastAssistantText() ?? null
-            )
-            this.setRecord(id, (previous) => ({
-                ...previous,
-                status,
-                lastResult:
-                    status._tag === 'Completed'
-                        ? (status.message ?? undefined)
-                        : undefined,
-                activeTools: runtime.session.getActiveToolNames(),
-                thinkingLevel: runtime.session.thinkingLevel,
-            }))
-            await this.safeDeliverCompletion(record, sequence, status)
+        runtime.phase = 'settling'
+        try {
+            this.captureUsage(id, runtime)
+            const interrupted =
+                runtime.interruptRequested || isAbortError(error)
+            if (interrupted) {
+                this.setRecord(id, (previous) => ({
+                    ...previous,
+                    status: AgentStatus.interrupted(),
+                }))
+            } else if (error) {
+                const message =
+                    error instanceof Error ? error.message : String(error)
+                const status = AgentStatus.errored(message)
+                this.setRecord(id, (previous) => ({ ...previous, status }))
+                await this.safeDeliverCompletion(record, sequence, status)
+            } else {
+                const status = AgentStatus.completed(
+                    runtime.session.getLastAssistantText() ?? null
+                )
+                this.setRecord(id, (previous) => ({
+                    ...previous,
+                    status,
+                    lastResult:
+                        status._tag === 'Completed'
+                            ? (status.message ?? undefined)
+                            : undefined,
+                    activeTools: runtime.session.getActiveToolNames(),
+                    thinkingLevel: runtime.session.thinkingLevel,
+                }))
+                await this.safeDeliverCompletion(record, sequence, status)
+            }
+        } finally {
+            permit.release()
+            runtime.activePermitSequence = undefined
+            runtime.currentRun = undefined
+            runtime.phase = 'idle'
+            runtime.interruptRequested = false
+            runtime.lastTouched = Date.now()
+            this.emit({
+                _tag: 'ActivityCompleted',
+                agentId: id,
+                agentPath: record.path,
+                parentTurnId: record.initiatingTurnId as never,
+            })
         }
-        permit.release()
-        runtime.activePermitSequence = undefined
-        runtime.currentRun = undefined
-        runtime.interruptRequested = false
-        runtime.lastTouched = Date.now()
-        this.emit({
-            _tag: 'ActivityCompleted',
-            agentId: id,
-            agentPath: record.path,
-            parentTurnId: record.initiatingTurnId as never,
-        })
     }
 
     private captureUsage(id: AgentId, runtime: AgentRuntime): void {
@@ -781,11 +817,31 @@ export class SubagentCoordinator {
         return runtime.endpoint!
     }
 
-    private async ensureLoaded(id: AgentId): Promise<AgentRuntime> {
+    private ensureLoaded(id: AgentId): Promise<AgentRuntime> {
         const existing = this.runtimes.get(id)
-        if (existing) return existing
+        if (existing) return Promise.resolve(existing)
+        const pending = this.loading.get(id)
+        if (pending) return pending
         const record = this.records.get(id)
-        if (!record) throw new AgentNotFoundError(String(id))
+        if (!record) return Promise.reject(new AgentNotFoundError(String(id)))
+
+        const load = this.loadRuntime(id, record)
+        this.loading.set(id, load)
+        load.then(
+            () => {
+                if (this.loading.get(id) === load) this.loading.delete(id)
+            },
+            () => {
+                if (this.loading.get(id) === load) this.loading.delete(id)
+            }
+        )
+        return load
+    }
+
+    private async loadRuntime(
+        id: AgentId,
+        record: AgentRecord
+    ): Promise<AgentRuntime> {
         this.setRecord(id, (previous) => ({
             ...previous,
             residency: 'loading',
@@ -793,6 +849,10 @@ export class SubagentCoordinator {
         try {
             await this.evictOneIfRequired(id)
             const runtime = await this.factory.open(record)
+            if (this.shutdownFlag) {
+                await runtime.dispose()
+                throw new Error('session is shutting down')
+            }
             runtime.endpoint = childEndpoint(record.path, runtime.session)
             this.runtimes.set(id, runtime)
             this.sessionBindings.set(runtime.session.sessionId, id)

@@ -1,11 +1,14 @@
 import type { AgentSession } from '@earendil-works/pi-coding-agent'
 import type { AgentPath } from './ids.ts'
 
+export type AgentRunPhase = 'idle' | 'running' | 'settling'
+
 export interface AgentRuntime {
     readonly path: AgentPath
     readonly session: AgentSession
     readonly sessionFile?: string
     runSequence: number
+    phase: AgentRunPhase
     currentRun?: Promise<void>
     activePermitSequence?: number
     interruptRequested: boolean
@@ -36,6 +39,7 @@ export class AgentMutex {
 export function makeAgentRuntime(args: {
     path: AgentPath
     session: AgentSession
+    runSequence?: number
     onActivity?: (summary: string) => void
 }): AgentRuntime {
     const unsubscribe = args.session.subscribe((event) => {
@@ -50,7 +54,8 @@ export function makeAgentRuntime(args: {
         path: args.path,
         session: args.session,
         sessionFile: args.session.sessionFile,
-        runSequence: 0,
+        runSequence: args.runSequence ?? 0,
+        phase: 'idle',
         currentRun: undefined,
         activePermitSequence: undefined,
         interruptRequested: false,

@@ -1,6 +1,6 @@
 /**
  * Behavioral port of:
- * openai/codex@9d83c48e5c4761c4fe29995305914021dcfbe7cd
+ * openai/codex@a592c38c16cdd7623dacc9168926ebccedfb67d3
  * codex-rs/core/src/tools/handlers/multi_agents_v2/spawn.rs (fork parsing)
  * codex-rs/core/src/agent_communication.rs (kind/context)
  * codex-rs/protocol/src/protocol.rs (InterAgentCommunication)

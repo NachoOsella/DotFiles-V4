@@ -2,7 +2,7 @@
  * Source provenance for the Codex MultiAgentV2 behavioral port.
  *
  * Behavioral port of:
- * openai/codex@9d83c48e5c4761c4fe29995305914021dcfbe7cd
+ * openai/codex@a592c38c16cdd7623dacc9168926ebccedfb67d3
  * feature: MultiAgentV2
  *
  * Keep observable behavior aligned with the upstream implementation.
@@ -12,7 +12,7 @@
 
 export const CODEX_SOURCE_BASELINE = {
     repository: 'openai/codex',
-    revision: '9d83c48e5c4761c4fe29995305914021dcfbe7cd',
+    revision: 'a592c38c16cdd7623dacc9168926ebccedfb67d3',
     feature: 'MultiAgentV2',
 } as const
 

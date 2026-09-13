@@ -12,7 +12,11 @@ import {
     rootRoleInstructions,
     subagentRoleInstructions,
 } from './src/prompts.ts'
-import { assertNoForbiddenTools, plannedV2Tools } from './src/tool-specs.ts'
+import {
+    assertNoForbiddenTools,
+    buildSpawnAgentParams,
+    plannedV2Tools,
+} from './src/tool-specs.ts'
 
 describe('config', () => {
     it('decodes defaults and validates wait ordering', () => {
@@ -125,6 +129,18 @@ describe('prompts', () => {
 })
 
 describe('tool plan', () => {
+    it('builds spawn metadata from resolved config', () => {
+        const schema = buildSpawnAgentParams({
+            exposeSpawnAgentModelOverrides: false,
+            hideSpawnAgentMetadata: true,
+            roles: { reviewer: {} },
+        }) as { properties: Record<string, unknown> }
+        assert.ok(!('agent_type' in schema.properties))
+        assert.ok(!('model' in schema.properties))
+        assert.ok(!('reasoning_effort' in schema.properties))
+        assert.ok('fork_turns' in schema.properties)
+    })
+
     it('exposes the exact six-tool family and no V1 names', () => {
         assert.deepEqual(plannedV2Tools({ waitAgentEnabled: true }), [
             'spawn_agent',

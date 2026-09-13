@@ -13,7 +13,7 @@ import {
     InterruptAgentParams,
     ListAgentsParams,
     SendMessageParams,
-    SpawnAgentParams,
+    buildSpawnAgentParams,
     TOOL_FOLLOWUP_TASK,
     TOOL_INTERRUPT_AGENT,
     TOOL_LIST_AGENTS,
@@ -161,6 +161,7 @@ interface PiToolDefinition {
 /** Root tool definitions for pi.registerTool (caller from session). */
 export function buildRootToolDefinitions(manager: SubagentCoordinator) {
     const handlers = buildToolHandlers(manager)
+    const spawnAgentParams = buildSpawnAgentParams(manager.getConfig())
     const resolveCaller = (ctx: ToolContextLike) => callerOf(manager, ctx)
 
     const renderCall =
@@ -184,7 +185,7 @@ export function buildRootToolDefinitions(manager: SubagentCoordinator) {
             label: 'Spawn Agent',
             description:
                 'Create a subagent for one bounded task. Returns the canonical task path.',
-            parameters: SpawnAgentParams,
+            parameters: spawnAgentParams,
             async execute(
                 toolCallId: string,
                 params: {
@@ -305,12 +306,13 @@ export function buildChildToolDefinitions(
     caller: AgentPath
 ) {
     const handlers = buildToolHandlers(manager)
+    const spawnAgentParams = buildSpawnAgentParams(manager.getConfig())
     return [
         {
             name: TOOL_SPAWN_AGENT,
             label: 'Spawn Agent',
             description: 'Create a nested subagent for one bounded task.',
-            parameters: SpawnAgentParams,
+            parameters: spawnAgentParams,
             async execute(
                 toolCallId: string,
                 params: {

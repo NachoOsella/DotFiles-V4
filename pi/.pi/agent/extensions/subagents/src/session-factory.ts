@@ -24,6 +24,15 @@ import { makeAgentRuntime, type AgentRuntime } from './agent-runtime.ts'
 
 export const SUBAGENT_META_CUSTOM_TYPE = 'subagents-v3-agent-meta'
 
+export interface SubagentSessionFactory {
+    create(
+        record: AgentRecord,
+        parent: ParentExecutionSnapshot,
+        fork: ForkTurns
+    ): Promise<AgentRuntime>
+    open(record: AgentRecord): Promise<AgentRuntime>
+}
+
 interface SessionFactoryOptions {
     readonly rootSessionId: () => string
     readonly rootSessionDir: () => string
@@ -33,7 +42,7 @@ interface SessionFactoryOptions {
     readonly config: CodexSubagentsConfig
 }
 
-export class SessionFactory {
+export class SessionFactory implements SubagentSessionFactory {
     private readonly options: SessionFactoryOptions
 
     constructor(options: SessionFactoryOptions) {
@@ -131,6 +140,7 @@ export class SessionFactory {
         return makeAgentRuntime({
             path: record.path,
             session,
+            runSequence: record.runSequence ?? 0,
             onActivity: (summary) =>
                 this.options.onActivity?.(record.path, summary),
         })

@@ -19,6 +19,7 @@ export interface PersistedSubagentV2 {
     readonly createdAt: number
     readonly lastActivityAt: number
     readonly runSequence: number
+    readonly lastDeliveredRunSequence?: number
     readonly lastResult?: string
     readonly legacyUnresumable?: boolean
     readonly usage?: AgentUsageTotals

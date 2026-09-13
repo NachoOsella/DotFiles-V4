@@ -4,7 +4,7 @@
     "hideThinkingBlock": false,
     "quietStartup": true,
     "enableSkillCommands": true,
-    "extensions": ["!extensions/subagents/**"],
+    "extensions": ["extensions/subagents/**"],
     "steeringMode": "one-at-a-time",
     "terminal": {
         "showTerminalProgress": false,

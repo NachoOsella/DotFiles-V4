@@ -1,9 +1,12 @@
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import type {
     ExtensionAPI,
     ExtensionContext,
 } from '@earendil-works/pi-coding-agent'
+import { getAgentDir } from '@earendil-works/pi-coding-agent'
 import { showAgentsModal } from './src/agents-modal.ts'
-import { DEFAULT_SUBAGENTS_CONFIG } from './src/config.ts'
+import { decodeConfig, DEFAULT_SUBAGENTS_CONFIG } from './src/config.ts'
 import { SubagentCoordinator } from './src/coordinator.ts'
 import {
     buildRootToolDefinitions,
@@ -30,7 +33,7 @@ const TOGGLE_WIDGET_SHORTCUT = 'alt+s'
 const ROOT_PATH = '/root' as AgentPath
 
 function loadConfig(): typeof DEFAULT_SUBAGENTS_CONFIG {
-    const config = { ...DEFAULT_SUBAGENTS_CONFIG }
+    const config = decodeConfig(readConfiguredConfig())
     const maxConcurrent = process.env.SUBAGENTS_MAX_CONCURRENT
     if (maxConcurrent !== undefined) {
         const value = Number.parseInt(maxConcurrent, 10)
@@ -68,6 +71,35 @@ function loadConfig(): typeof DEFAULT_SUBAGENTS_CONFIG {
         ;(config as { enabled: boolean }).enabled = false
     }
     return config
+}
+
+function readConfiguredConfig(): unknown {
+    const configured = process.env.SUBAGENTS_CONFIG
+    if (configured !== undefined) {
+        try {
+            return JSON.parse(configured)
+        } catch {
+            return undefined
+        }
+    }
+    try {
+        const configPath = process.env.SUBAGENTS_CONFIG_PATH
+        const settings = JSON.parse(
+            readFileSync(
+                configPath ?? join(getAgentDir(), 'settings.json'),
+                'utf8'
+            )
+        ) as unknown
+        return configPath ? settings : selectSubagentsConfig(settings)
+    } catch {
+        return undefined
+    }
+}
+
+function selectSubagentsConfig(value: unknown): unknown {
+    if (typeof value !== 'object' || value === null) return undefined
+    const record = value as Record<string, unknown>
+    return record.subagents ?? record.subagentsConfig
 }
 
 export default function subagentsExtension(pi: ExtensionAPI) {
@@ -212,7 +244,7 @@ export default function subagentsExtension(pi: ExtensionAPI) {
         return { systemPrompt: `${event.systemPrompt}\n\n${fragment}` }
     })
 
-    pi.on('session_shutdown', (_event, ctx) => {
+    pi.on('session_shutdown', async (_event, ctx) => {
         const manager = coordinator
         const sessionId = ctx.sessionManager.getSessionId()
         coordinator = undefined
@@ -221,17 +253,17 @@ export default function subagentsExtension(pi: ExtensionAPI) {
             clearSubagentsWidget(ctx)
             return
         }
-        void (async () => {
-            try {
-                pi.appendEntry(
-                    SUBAGENTS_STATE_CUSTOM_TYPE,
-                    manager.serialize(sessionId)
-                )
-            } finally {
-                clearSubagentsWidget(ctx)
-                await manager.shutdown()
-            }
-        })()
+        try {
+            pi.appendEntry(
+                SUBAGENTS_STATE_CUSTOM_TYPE,
+                manager.serialize(sessionId)
+            )
+        } catch {
+            // Persistence is best effort during session transitions.
+        } finally {
+            clearSubagentsWidget(ctx)
+            await manager.shutdown()
+        }
     })
 
     async function persistLive(): Promise<void> {

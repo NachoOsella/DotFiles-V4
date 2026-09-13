@@ -1,11 +1,10 @@
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { Agent } from '@earendil-works/pi-agent-core'
-import type { Model } from '@earendil-works/pi-ai'
+import type { Context, Model } from '@earendil-works/pi-ai'
 import { createAssistantMessageEventStream } from '@earendil-works/pi-ai'
 import {
-    AgentSession,
+    createAgentSession,
     DefaultResourceLoader,
     SessionManager,
     SettingsManager,
@@ -46,63 +45,59 @@ test('AgentSession owns custom-message persistence and triggered turns', async (
         })
         await loader.reload()
 
-        let streamCalls = 0
-        const agent = new Agent({
-            initialState: {
-                model: MODEL,
-                thinkingLevel: 'medium',
-                systemPrompt: 'test',
-            },
-            streamFn: () => {
-                streamCalls += 1
-                const stream = createAssistantMessageEventStream()
-                queueMicrotask(() =>
-                    stream.push({
-                        type: 'done',
-                        reason: 'stop',
-                        message: {
-                            role: 'assistant',
-                            content: [{ type: 'text', text: 'done' }],
-                            api: MODEL.api,
-                            provider: MODEL.provider,
-                            model: MODEL.id,
-                            usage: {
-                                input: 1,
-                                output: 1,
-                                cacheRead: 0,
-                                cacheWrite: 0,
-                                totalTokens: 2,
-                                cost: {
-                                    input: 0,
-                                    output: 0,
-                                    cacheRead: 0,
-                                    cacheWrite: 0,
-                                    total: 0,
-                                },
-                            },
-                            stopReason: 'stop',
-                            timestamp: Date.now(),
-                        },
-                    })
-                )
-                return stream
-            },
-        })
         const modelRuntime = {
             getAuth: async () => ({ auth: { apiKey: 'test' } }),
             hasConfiguredAuth: () => true,
             checkAuth: async () => undefined,
             isUsingOAuth: () => false,
         } as unknown as ModelRuntime
-        const session = new AgentSession({
-            agent,
+        const { session } = await createAgentSession({
+            model: MODEL,
+            thinkingLevel: 'medium',
             sessionManager,
             settingsManager,
             cwd: '/repo',
             resourceLoader: loader,
             modelRuntime,
-            initialActiveToolNames: [],
+            tools: [],
         })
+        let streamCalls = 0
+        const streamedContexts: Context[] = []
+        session.agent.streamFunction = (_model, context) => {
+            streamCalls += 1
+            streamedContexts.push(context)
+            const stream = createAssistantMessageEventStream()
+            queueMicrotask(() =>
+                stream.push({
+                    type: 'done',
+                    reason: 'stop',
+                    message: {
+                        role: 'assistant',
+                        content: [{ type: 'text', text: 'done' }],
+                        api: MODEL.api,
+                        provider: MODEL.provider,
+                        model: MODEL.id,
+                        usage: {
+                            input: 1,
+                            output: 1,
+                            cacheRead: 0,
+                            cacheWrite: 0,
+                            totalTokens: 2,
+                            cost: {
+                                input: 0,
+                                output: 0,
+                                cacheRead: 0,
+                                cacheWrite: 0,
+                                total: 0,
+                            },
+                        },
+                        stopReason: 'stop',
+                        timestamp: Date.now(),
+                    },
+                })
+            )
+            return stream
+        }
 
         await session.sendCustomMessage(
             {
@@ -130,6 +125,7 @@ test('AgentSession owns custom-message persistence and triggered turns', async (
             { triggerTurn: true }
         )
         assert.equal(streamCalls, 1)
+        assert.match(JSON.stringify(streamedContexts[0]?.messages), /queued/)
         assert.ok(
             session.messages.some(
                 (message) =>
