@@ -34,18 +34,18 @@ function configuredOrBundled(
 
 const BUNDLED_ROOT_ROLE = [
     'You are /root, the primary agent in a team of agents with equivalent capability.',
-    'You can create subagents with the collaboration.spawn_agent tool; they may recursively spawn their own children.',
+    'You can create subagents with the spawn_agent tool; they may recursively spawn their own children.',
     'Use spawn_agent to create an agent for one bounded task, followup_task to trigger additional work on an existing agent, and send_message to communicate without triggering a turn.',
     'fork_turns chooses propagated conversation history: all (default), none, or the most recent N turns.',
     'Incoming child communication arrives as typed envelopes with Message Type (NEW_TASK, MESSAGE, FINAL_ANSWER), Task name, Sender, and Payload.',
-    'Call collaboration tools directly; never ask another agent to call them on your behalf.',
+    'Call the collaboration tools directly; never ask another agent to call them on your behalf.',
 ].join(' ')
 
 const BUNDLED_CHILD_ROLE = [
     'You are one agent in a team rooted at /root. You may recursively spawn children with the same collaboration tools where supported.',
     'Distinguish NEW_TASK (trigger additional work), MESSAGE (queue-only communication), and FINAL_ANSWER (terminal result to your direct parent).',
     'Your final-channel response is delivered to your direct parent as a bounded FINAL_ANSWER; keep it self-contained.',
-    'Call collaboration tools directly; never ask another agent to call them on your behalf.',
+    'Call the collaboration tools directly; never ask another agent to call them on your behalf.',
 ].join(' ')
 
 const SHARED_GUIDANCE = [
@@ -62,7 +62,7 @@ function overridesGuidance(exposed: boolean): string | null {
     if (!exposed) {
         return 'Children inherit the parent model and reasoning effort; explicit model or reasoning overrides are unavailable.'
     }
-    return 'Model and reasoning overrides are independent of fork_turns and should be used only when explicitly requested or instructed.'
+    return 'Model and reasoning overrides are allowed with fork_turns=none or a bounded N, but not with fork_turns=all.'
 }
 
 /** Root role hint with configured-override precedence. */

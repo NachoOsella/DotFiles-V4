@@ -7,6 +7,7 @@
  * session handles here; those live in the runtime store.
  */
 
+import type { ThinkingLevel } from '@earendil-works/pi-agent-core'
 import type { SessionToolCallCount } from './host.ts'
 import type { AgentId, AgentPath } from './ids.ts'
 import type { AgentResidency, AgentStatus } from './agent-status.ts'
@@ -69,6 +70,16 @@ export interface AgentRecord {
     readonly createdAt: number
     readonly lastActivityAt: number
     readonly persistedSessionId?: string
+    readonly sessionId?: string
+    readonly sessionFile?: string
+    readonly rootSessionId?: string
+    readonly cwd?: string
+    readonly activeTools?: readonly string[]
+    readonly thinkingLevel?: ThinkingLevel
+    readonly runSequence?: number
+    readonly lastDeliveredRunSequence?: number
+    readonly legacyUnresumable?: boolean
+    readonly lastResult?: string
     readonly initiatingTurnId?: string
     /** Fork policy snapshot for reload/diagnostics. */
     readonly forkKind?: string
@@ -85,6 +96,16 @@ export interface AgentRecordInit {
     readonly model: string
     readonly reasoningEffort?: string
     readonly persistedSessionId?: string
+    readonly sessionId?: string
+    readonly sessionFile?: string
+    readonly rootSessionId?: string
+    readonly cwd?: string
+    readonly activeTools?: readonly string[]
+    readonly thinkingLevel?: ThinkingLevel
+    readonly runSequence?: number
+    readonly lastDeliveredRunSequence?: number
+    readonly legacyUnresumable?: boolean
+    readonly lastResult?: string
     readonly initiatingTurnId?: string
     readonly forkKind?: string
 }

@@ -1,13 +1,13 @@
 /**
  * Collaboration tool adapters. Shared by the root extension registration
  * and by child SDK sessions (recursive spawn). No orchestration lives
- * here; every handler delegates to SubagentManager.
+ * here; every handler delegates to SubagentCoordinator.
  */
 
 import { Text } from '@earendil-works/pi-tui'
 import type { AgentPath } from './ids.ts'
 import type { ToolCallId } from './ids.ts'
-import type { SubagentManager } from './manager.ts'
+import type { SubagentCoordinator } from './coordinator.ts'
 import {
     FollowupTaskParams,
     InterruptAgentParams,
@@ -28,48 +28,8 @@ import {
 export interface ToolContextLike {
     readonly sessionManager: {
         getSessionId: () => string
-        getBranch: () => readonly unknown[]
     }
     readonly cwd: string
-}
-
-/** Extract readable text from a session branch for fork_turns. */
-export function extractBranchText(branch: readonly unknown[]): string[] {
-    const out: string[] = []
-    for (const entry of branch) {
-        if (typeof entry !== 'object' || entry === null) continue
-        const record = entry as Record<string, unknown>
-        const message = record.message as
-            { role?: unknown; content?: unknown } | undefined
-        // Support both session-manager entries ({type:"message",message})
-        // and agent-state messages ({role,content}) in one pass.
-        const candidate =
-            message ??
-            (record.role !== undefined
-                ? (record as unknown as { role?: unknown; content?: unknown })
-                : undefined)
-        if (!candidate || candidate.role === 'toolResult') continue
-        const content = candidate.content
-        if (typeof content === 'string' && content.trim()) {
-            out.push(content)
-            continue
-        }
-        if (Array.isArray(content)) {
-            const text = content
-                .filter(
-                    (b): b is { type: 'text'; text: string } =>
-                        typeof b === 'object' &&
-                        b !== null &&
-                        (b as { type?: string }).type === 'text' &&
-                        typeof (b as { text?: unknown }).text === 'string'
-                )
-                .map((b) => b.text)
-                .join('\n')
-                .trim()
-            if (text) out.push(text)
-        }
-    }
-    return out
 }
 
 function textResult(text: string, details?: unknown) {
@@ -80,7 +40,7 @@ function textResult(text: string, details?: unknown) {
 }
 
 function callerOf(
-    manager: SubagentManager,
+    manager: SubagentCoordinator,
     ctx: ToolContextLike | undefined,
     fixedCaller?: AgentPath
 ): AgentPath {
@@ -93,16 +53,7 @@ function callerOf(
     }
 }
 
-function parentHistoryOf(ctx: ToolContextLike | undefined): string[] {
-    try {
-        if (!ctx) return []
-        return extractBranchText(ctx.sessionManager.getBranch())
-    } catch {
-        return []
-    }
-}
-
-export function buildToolHandlers(manager: SubagentManager) {
+export function buildToolHandlers(manager: SubagentCoordinator) {
     return {
         async spawn(
             caller: AgentPath,
@@ -114,7 +65,7 @@ export function buildToolHandlers(manager: SubagentManager) {
                 reasoning_effort?: string
                 fork_turns?: string
             },
-            ctx: ToolContextLike | undefined,
+            _ctx: ToolContextLike | undefined,
             toolCallId: string
         ) {
             const result = await manager.spawn({
@@ -125,7 +76,6 @@ export function buildToolHandlers(manager: SubagentManager) {
                 agentType: params.agent_type,
                 model: params.model,
                 reasoningEffort: params.reasoning_effort,
-                parentHistory: parentHistoryOf(ctx),
                 callId: toolCallId as ToolCallId,
             })
             return textResult(`Spawned ${result.path}.`, {
@@ -209,7 +159,7 @@ interface PiToolDefinition {
 }
 
 /** Root tool definitions for pi.registerTool (caller from session). */
-export function buildRootToolDefinitions(manager: SubagentManager) {
+export function buildRootToolDefinitions(manager: SubagentCoordinator) {
     const handlers = buildToolHandlers(manager)
     const resolveCaller = (ctx: ToolContextLike) => callerOf(manager, ctx)
 
@@ -296,7 +246,7 @@ export function buildRootToolDefinitions(manager: SubagentManager) {
             name: TOOL_WAIT_AGENT,
             label: 'Wait Agent',
             description:
-                'Wait for mailbox activity. Returns a status string, never child output.',
+                'Wait for agent activity. Returns a status string, never child output.',
             parameters: WaitAgentParams,
             async execute(
                 _toolCallId: string,
@@ -351,7 +301,7 @@ export function buildRootToolDefinitions(manager: SubagentManager) {
 
 /** Child SDK tools with a fixed caller (recursive spawn support). */
 export function buildChildToolDefinitions(
-    manager: SubagentManager,
+    manager: SubagentCoordinator,
     caller: AgentPath
 ) {
     const handlers = buildToolHandlers(manager)
@@ -404,7 +354,7 @@ export function buildChildToolDefinitions(
         {
             name: TOOL_WAIT_AGENT,
             label: 'Wait Agent',
-            description: 'Wait for mailbox activity.',
+            description: 'Wait for agent activity.',
             parameters: WaitAgentParams,
             async execute(
                 _toolCallId: string,

@@ -14,6 +14,8 @@ export type MultiAgentMode =
     | { readonly _tag: 'Proactive' }
     | { readonly _tag: 'Custom'; readonly hint: string }
 
+import type { CodexSubagentsConfig } from './config.ts'
+
 export interface ModeResolutionInput {
     /** True when the host exposes a verified Ultra/high-reasoning equivalent. */
     readonly ultraReasoning: boolean
@@ -27,6 +29,26 @@ export function resolveMode(input: ModeResolutionInput): MultiAgentMode {
     }
     if (input.ultraReasoning) return { _tag: 'Proactive' }
     return { _tag: 'ExplicitRequestOnly' }
+}
+
+/** Resolve the configured mode against the caller's current thinking level. */
+export function resolveConfiguredMode(
+    config: CodexSubagentsConfig,
+    thinkingLevel: string
+): MultiAgentMode {
+    if (config.multiAgentModeHintText !== undefined) {
+        return resolveMode({
+            ultraReasoning: false,
+            customModeHint: config.multiAgentModeHintText,
+        })
+    }
+    if (config.mode === 'explicit') return { _tag: 'ExplicitRequestOnly' }
+    if (config.mode === 'proactive') return { _tag: 'Proactive' }
+    return resolveMode({
+        ultraReasoning:
+            thinkingLevel === config.proactiveAt ||
+            (config.proactiveAt === 'max' && thinkingLevel === 'max'),
+    })
 }
 
 /** Developer fragment for the resolved mode (null when suppressed). */

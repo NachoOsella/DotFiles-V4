@@ -1,32 +1,28 @@
 {
-  "lastChangelogVersion": "0.85.1",
-  "theme": "gruvbox-material-dark-hard",
-  "hideThinkingBlock": false,
-  "quietStartup": true,
-  "enableSkillCommands": true,
-  "extensions": [
-    "!extensions/pi-zen-free/**"
-  ],
-  "steeringMode": "one-at-a-time",
-  "terminal": {
-    "showTerminalProgress": false,
-    "showImages": true
-  },
-  "showCacheMissNotices": true,
-  "defaultProjectTrust": "always",
-  "tuiMode": "fullscreen",
-  "markdown": {
-    "mermaid": "streaming"
-  },
-  "fullscreenScrollbar": "always",
-  "packages": [
-    "git:https://github.com/ShpetimA/pi-fff.git"
-  ],
-  "modelThinkingLevels": {
-    "openai-codex/gpt-5.6-terra": "high"
-  },
-  "defaultProvider": "openai-codex",
-  "defaultModel": "gpt-5.6-luna",
-  "defaultThinkingLevel": "xhigh",
-  "followUpMode": "one-at-a-time"
+    "lastChangelogVersion": "0.85.1",
+    "theme": "gruvbox-material-dark-hard",
+    "hideThinkingBlock": false,
+    "quietStartup": true,
+    "enableSkillCommands": true,
+    "extensions": ["!extensions/subagents/**"],
+    "steeringMode": "one-at-a-time",
+    "terminal": {
+        "showTerminalProgress": false,
+        "showImages": true
+    },
+    "showCacheMissNotices": true,
+    "defaultProjectTrust": "always",
+    "tuiMode": "fullscreen",
+    "markdown": {
+        "mermaid": "streaming"
+    },
+    "fullscreenScrollbar": "always",
+    "packages": ["git:https://github.com/ShpetimA/pi-fff.git"],
+    "modelThinkingLevels": {
+        "openai-codex/gpt-5.6-terra": "high"
+    },
+    "defaultProvider": "openai-codex",
+    "defaultModel": "gpt-5.6-luna",
+    "defaultThinkingLevel": "xhigh",
+    "followUpMode": "one-at-a-time"
 }

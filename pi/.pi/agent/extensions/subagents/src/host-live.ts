@@ -234,7 +234,7 @@ export function createPiHostLive(args: {
             )
             const sessionManager = SessionManager.inMemory(cwd)
             const childTools = buildChildToolDefinitions(
-                args.manager(),
+                args.manager() as never,
                 options.agentPath
             )
             // Children load the full extension set (fff, todowrite, ...) so

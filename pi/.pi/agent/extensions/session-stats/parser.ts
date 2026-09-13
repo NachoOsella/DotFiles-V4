@@ -1,6 +1,9 @@
 import { readFile, stat } from 'node:fs/promises'
 import { Data, Effect } from 'effect'
-import { SUBAGENTS_STATE_CUSTOM_TYPE } from '../subagents/src/persistence.ts'
+import {
+    LEGACY_SUBAGENTS_STATE_CUSTOM_TYPE,
+    SUBAGENTS_STATE_CUSTOM_TYPE,
+} from '../subagents/src/persistence.ts'
 import { mergeSessionStats } from './aggregate.ts'
 import { finalizeTotalTokens } from './format.ts'
 import { calculateUsageCost, combinePricingSources } from './pricing.ts'
@@ -165,7 +168,8 @@ function parseSessionText(
             }
         } else if (
             entry.type === 'custom' &&
-            entry.customType === SUBAGENTS_STATE_CUSTOM_TYPE
+            (entry.customType === SUBAGENTS_STATE_CUSTOM_TYPE ||
+                entry.customType === LEGACY_SUBAGENTS_STATE_CUSTOM_TYPE)
         ) {
             // Latest snapshot wins; in-memory children never touch disk, so
             // their usage only exists inside the parent file.

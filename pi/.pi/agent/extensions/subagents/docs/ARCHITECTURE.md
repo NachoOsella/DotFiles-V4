@@ -1,102 +1,86 @@
 # Architecture
 
-## Behavioral invariants (code review checklist)
+V3 treats Pi as the runtime for every agent. The extension owns the team graph,
+admission control, communication routing, and UI activity; `AgentSession` owns
+queues, ordering, lifecycle, and conversation persistence.
+
+## Invariants
 
 ```text
-Agent identity != loaded session.
-Completed != destroyed.
+Agent identity != loaded AgentSession.
+Conversation state belongs to Pi SessionManager.
+There is no extension mailbox and no extension turn scheduler.
+spawn_agent submits exactly one NEW_TASK custom message.
+send_message never starts an idle turn.
+followup_task steers a running session and starts an idle session.
+FINAL_ANSWER goes only to the direct parent with triggerTurn=false.
+wait_agent synchronizes only; it never consumes or returns message content.
 Interrupted != destroyed.
-Parent turn lifetime != child agent lifetime.
-send_message != followup_task.
-wait_agent != result retrieval.
-UI child output != parent model context.
-Active execution capacity != logical agent count.
-Residency capacity != execution capacity.
-No spawn queue.
-No V2 close_agent.
-No V2 resume_agent.
-No automatic child transcript forwarding.
-No recursive cancellation when a parent turn merely ends.
-All agents share the same working tree.
-A terminal child result goes to its direct parent as FINAL_ANSWER.
+Completed != destroyed.
+Forks copy structured AgentMessage values, never a text baseline prompt.
+A child inherits the caller's active tools, cwd, skills, and context files.
+Agent-count capacity != execution capacity.
+Execution capacity applies to every child run, including follow-ups.
+Nested agents share one coordinator and one execution limiter.
+UI activity never enters a parent model context.
 ```
 
-## Layout
+## Runtime shape
 
 ```text
-extensions/subagents/
-  index.ts                 Pi registration only (tools, widget, lifecycle)
-  src/
-    provenance.ts          Codex SHA + Effect version pin
-    ids.ts                 branded AgentId/AgentPath/TurnId/ToolCallId/CommunicationId
-    agent-path.ts          canonical /root paths, segments, relative resolution
-    agent-status.ts        PendingInit/Running/Interrupted/Completed/Errored/Shutdown/NotFound
-    status-reducer.ts      pure event-to-status reducer (+ terminal-error precedence)
-    communication.ts       NEW_TASK/MESSAGE/FINAL_ANSWER + fork_turns parser + envelopes
-    completion.ts          terminal status -> bounded FINAL_ANSWER payload
-    errors.ts              tagged errors (capacity, not-found, overrides, ...)
-    events.ts              SubagentEvent (domain plane; UI/model planes separate)
-    config.ts              CodexSubagentsConfig decode + wait clamping
-    mode.ts                explicit-only / proactive / custom resolution
-    prompts.ts             original behavioral-equivalent role prompts + assembler
-    tool-specs.ts          six TypeBox schemas + forbidden V1 names
-    agent-record.ts        logical record (no live handles)
-    host.ts                PiHost semantic interface + fork-history helper
-    fake-host.ts           deterministic test double (pause/gate/fail)
-    manager.ts             AgentControl: registry + mailbox + capacity + turns
-    runtime.ts             async Effect boundary (Cause -> Error)
-    extension-tools.ts     six tool adapters (root + child SDK variants)
-    host-live.ts           SDK adapter (only file importing Pi session APIs)
-    ownership-policy.ts    parent-owned child restrictions
-    persistence.ts         CustomEntry snapshot scan
-    projection.ts          pure TUI reducer + bounded activity ring
-    widget.ts              compact setWidget adapter
+Pi root AgentSession
+       │ extension tools
+       ▼
+SubagentCoordinator
+  Agent registry
+  Execution limiter
+  Wait hub
+  Snapshot persistence
+  Session factory
+  Communication endpoints
+       │
+       ├── /root/reviewer -> AgentRuntime -> AgentSession
+       └── /root/tests    -> AgentRuntime -> AgentSession
 ```
 
-## Scope hierarchy
+`AgentRecord` is plain persisted identity metadata. `AgentRuntime` is a loaded
+session plus run bookkeeping and is disposable. The coordinator admits one
+operation at a time per agent with `AgentMutex`; it never creates a second
+queue or waits for a child from inside the spawning tool call.
+
+## Communication
+
+All communications use a hidden Pi custom message with
+`customType: "subagents-v3:communication"` and a structured `details` value.
+The LLM sees the bounded Codex-style envelope. A child endpoint calls
+`AgentSession.sendCustomMessage`; the root endpoint calls
+`ExtensionAPI.sendMessage`. This keeps root and child delivery on Pi's native
+queue implementation.
+
+Pi has no typed inter-agent `agent_message` channel. Custom messages therefore
+become user messages when converted for an LLM request. This is an explicit
+host gap, not an emulated protocol claim.
+
+## Persistence and forks
+
+Persistent children live below:
 
 ```text
-Extension instance
-  SubagentManager (one per root session)
-    /root logical record
-    /root/child-a AgentRecord + RuntimeEntry (child scope: session + AbortController)
-      active turn promise (background; never awaited by the spawning tool call)
-    /root/child-b ...
+<root-session-dir>/.subagents/<root-session-id>/<child-session>.jsonl
 ```
 
-There is intentionally no parent-turn-fiber -> child-fiber link:
-`spawn` starts the turn as an unawaited background promise, so parent
-cancellation (tool AbortSignal) never propagates to children. Session
-shutdown aborts every turn and closes every SDK session.
+The root session stores only the V3 graph snapshot. Child transcripts remain in
+their own Pi session files. Restoring the root restores unloaded identities;
+`SessionManager.open()` is called only when a target is used again.
 
-## Simplifications vs the full plan (documented, not accidental)
+`ForkProjector` reads `SessionManager.buildContextEntries()`, filters tool
+chatter and subagent communications, preserves compaction/branch summaries,
+and copies structured user/final-assistant messages. `fork_turns=N` counts
+logical turns, not raw entries.
 
-- **Plain manager instead of ten Effect services.** Registry, mailbox,
-  capacity, runtime store, residency, and communication live in one
-  `SubagentManager` class with synchronous atomic sections (JS is
-  single-threaded; reserve check+insert has no await between). Effect is
-  used at the async boundary (`runtime.ts`) and proven by
-  `effect-smoke.test.ts`. The module split above preserves the plan's
-  file responsibilities so services can be extracted later without
-  changing behavior.
-- **Event listeners instead of PubSub.** `manager.onEvent` is a
-  synchronous listener set; mailbox state remains authoritative and
-  `wait_agent` re-checks after subscribing (lost-wakeup protection).
-- **No Schema dependency.** Config uses explicit decoders to avoid
-  Effect beta API churn.
-- **Child history seeding.** `fork_turns=all/N` copies parent branch
-  text into one baseline prompt rather than a native fork primitive
-  (Pi SDK exposes no session fork for SDK sessions).
-- **Usage reporting.** Child sessions are memory-only, so token usage
-  never reaches session files. The manager folds per-session cumulative
-  readings into per-agent deltas (`captureUsage` on turn end, eviction,
-  and shutdown) and persists totals in the `subagents-v2-state`
-  snapshot. session-stats reads that snapshot; in-flight turns are not
-  yet reflected.
-- **Child tool surface.** Children load the full extension set (fff,
-  todowrite, background-terminals, ...) minus the subagents extension
-  itself, honoring settings disables. Our own entry is stripped by path
-  (`filterSubagentsExtension`) so no second manager boots. The SDK only
-  activates the base four plus leaves customs inactive, so host-live
-  activates every registered tool (this also enables recursion).
-  `SUBAGENTS_MINIMAL_CHILD_TOOLS=1` restores the extension-free child.
+## Remaining legacy code
+
+`manager.ts`, `host.ts`, and `host-live.ts` remain temporarily for the old unit
+test adapter while V3 integration coverage is built. They are not imported by
+`index.ts` and are scheduled for removal after the native-session integration
+suite replaces those tests.

@@ -1,6 +1,6 @@
 /**
  * Interactive `/agents` modal: tree overview with per-agent drill-down.
- * Thin UI layer over SubagentManager.list + getRecordByPath; no
+ * Thin UI layer over SubagentCoordinator.list + getRecordByPath; no
  * orchestration lives here. Compact by default, `t` toggles density.
  */
 
@@ -15,7 +15,7 @@ import {
 } from '@earendil-works/pi-tui'
 import type { AgentRecord } from './agent-record.ts'
 import type { AgentPath } from './ids.ts'
-import type { ListedAgent, SubagentManager } from './manager.ts'
+import type { ListedAgent, SubagentCoordinator } from './coordinator.ts'
 import { agentDepth, shortAgentName } from './widget.ts'
 
 const PREVIEW_CHARS = 120
@@ -34,7 +34,7 @@ export interface AgentRecordReader {
 
 /** Open the subagents inspector. No-op with a notice outside TUI. */
 export async function showAgentsModal(
-    manager: SubagentManager,
+    manager: SubagentCoordinator,
     ctx: ExtensionCommandContext
 ): Promise<void> {
     const agents = manager.list('/root' as AgentPath)

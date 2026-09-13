@@ -7,7 +7,8 @@
 import type { ExtensionContext, Theme } from '@earendil-works/pi-coding-agent'
 import { truncateToWidth, visibleWidth } from '@earendil-works/pi-tui'
 import type { AgentPath } from './ids.ts'
-import type { ListedAgent, SubagentManager } from './manager.ts'
+import type { ListedAgent } from './coordinator.ts'
+import type { SubagentCoordinator } from './coordinator.ts'
 
 const WIDGET_KEY = 'subagents'
 const MAX_VISIBLE_AGENTS = 5
@@ -273,7 +274,7 @@ function descendantIndicator(
 
 export function refreshSubagentsWidget(
     ctx: ExtensionContext,
-    manager: SubagentManager
+    manager: SubagentCoordinator
 ): void {
     if (ctx.mode !== 'tui' || !ctx.hasUI) {
         try {
@@ -284,7 +285,8 @@ export function refreshSubagentsWidget(
         return
     }
     const agents = manager.list('/root' as AgentPath)
-    if (agents.length === 0) {
+    const activeAgents = agents.filter((agent) => agent.status === 'Running')
+    if (activeAgents.length === 0) {
         try {
             ctx.ui.setWidget(WIDGET_KEY, undefined)
         } catch {

@@ -1,8 +1,12 @@
 /**
  * New-methodology subagent usage for session-stats.
  *
- * Subagent children run in memory-only SDK sessions that never touch disk,
- * so file discovery cannot see them. The subagents extension instead records
+ * Subagent children are independent Pi sessions. The subagents extension
+ * records logical child metadata in a root snapshot while child transcripts
+ * remain in their own session files. Older snapshots may still contain
+ * accumulated usage from the V2 runtime.
+ *
+ * The subagents extension formerly recorded
  * per-agent accumulated usage in its `subagents-v2-state` snapshot (a plain
  * CustomEntry persisted on the parent branch). This module reads the latest
  * snapshot and converts each agent with usage into SessionStats that merge
@@ -15,8 +19,8 @@
 import {
     findLatestState,
     isPersistedState,
+    type PersistedState,
 } from '../subagents/src/persistence.ts'
-import type { PersistedMultiAgentState } from '../subagents/src/manager.ts'
 import { finalizeTotalTokens } from './format.ts'
 import { calculateUsageCost, combinePricingSources } from './pricing.ts'
 import type {
@@ -85,7 +89,7 @@ export function buildStatsFromSnapshotData(
 }
 
 function snapshotAgents(
-    snapshot: PersistedMultiAgentState
+    snapshot: PersistedState
 ): Array<Record<string, unknown>> {
     const agents: Array<Record<string, unknown>> = []
     for (const agent of snapshot.agents) {

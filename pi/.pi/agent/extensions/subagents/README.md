@@ -18,8 +18,8 @@ interrupt_agent(target="/root/check_tests")
 list_agents(path_prefix="/root")
 ```
 
-Children run in independent sessions, report back with one bounded
-`FINAL_ANSWER`, and never leak transcripts into the parent context.
+Children run in persistent independent Pi sessions, report back with one bounded
+`FINAL_ANSWER`, and never leak transcripts into the parent model context.
 
 ## Configure (environment)
 
@@ -27,13 +27,15 @@ Children run in independent sessions, report back with one bounded
 |---|---|
 | `SUBAGENTS_DISABLED=1` | Register no tools |
 | `SUBAGENTS_DISABLE_WAIT=1` | Hide `wait_agent` |
-| `SUBAGENTS_MAX_CONCURRENT=N` | Active child-turn slots (default 4) |
-| `SUBAGENTS_MINIMAL_CHILD_TOOLS=1` | Children get base tools only, no extensions |
+| `SUBAGENTS_MAX_CONCURRENT=N` | Active child-run slots (default 4) |
+| `SUBAGENTS_MAX_AGENTS=N` | Logical child identities (default 6) |
+| `SUBAGENTS_MAX_LOADED=N` | Loaded child sessions (default 16) |
+| `SUBAGENTS_MAX_DEPTH=N` | Nested agent depth (default 1) |
 
 `model` uses `provider/model-id`. `reasoning_effort` accepts `off`, `minimal`,
-`low`, `medium`, `high`, `xhigh`, or `max`. Both overrides work with every
-`fork_turns` mode. Without an override, the child uses its inherited or default
-model configuration.
+`low`, `medium`, `high`, `xhigh`, or `max`. Overrides are valid with
+`fork_turns=none` or a bounded N; full-history forks inherit the caller's model,
+thinking level, and role.
 
 ## Develop
 
