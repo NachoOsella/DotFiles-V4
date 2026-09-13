@@ -4,29 +4,31 @@ This document is a test-backed matrix, not a claim that Pi and Codex expose the
 same host protocol. The behavioral reference is recorded in
 `CODEX_SOURCE_MANIFEST.md`.
 
-| Invariant | V3 implementation | Verification | Status |
-| --- | --- | --- | --- |
-| Spawn is asynchronous | `coordinator.ts` admits a run without awaiting it | `coordinator-v3.test.ts` | exact |
-| One `NEW_TASK` per spawn | `transport.ts` submits one custom message | `coordinator-v3.test.ts` | exact |
-| Queue-only message | Pi 0.85.1 defers insertion while streaming | `native-session.test.ts` | exact |
-| Running follow-up reaches the next boundary | `deliverAs: "steer"` | coordinator and native-session tests | exact |
-| Idle follow-up starts a run | native `triggerTurn: true` | `coordinator-v3.test.ts` | exact |
-| No private mailbox | `WaitHub` stores sequence numbers only | `v3-primitives.test.ts` | exact |
-| No private scheduler | `AgentSession.sendCustomMessage` owns execution | `native-session.test.ts` | exact |
-| Direct-parent final answer | `deliverCompletion()` resolves `parentPath` | `coordinator-v3.test.ts` | exact |
-| Final answer does not trigger parent | final endpoint uses `triggerTurn: false` | `coordinator-v3.test.ts` | exact |
-| Structured full fork | `ForkProjector` copies `AgentMessage` values | `v3-primitives.test.ts` | exact |
-| Tool chatter excluded from forks | projector filters tool calls/results | `v3-primitives.test.ts` | exact |
-| `fork_turns=N` counts logical turns | projector groups input/final pairs | `v3-primitives.test.ts` | close |
-| Child session file reopens | nested persistent `SessionManager` | `v3-primitives.test.ts` and `native-session.test.ts` | exact |
-| Child AgentSession cold resume | `SessionFactory.open()` restores the runtime | factory-level kiwi E2E still pending | partial |
-| Parent-authoritative cold reload | Direct child session reopen only | Pi has no equivalent parent authority object | host gap |
-| Environment and execution policy inheritance | Child resource loading only | Pi exposes no Codex-equivalent permission/policy bundle | host gap |
-| Agent count differs from run capacity | registry reservation plus `ExecutionLimiter` | limiter and coordinator tests | close |
-| Wait does not return payload | `WaitHub` has no content store | `v3-primitives.test.ts` | exact |
-| Typed `agent_message` protocol | Pi custom message conversion | no Pi primitive | host gap |
-| Thread switching without replacing root | Pi has no attach/switch primitive | no safe implementation | missing |
-| Codex reasoning channel parity | Pi custom messages become user context | no Pi primitive | host gap |
+| Invariant                                    | V3 implementation                                                                                  | Verification                                            | Status                 |
+| -------------------------------------------- | -------------------------------------------------------------------------------------------------- | ------------------------------------------------------- | ---------------------- |
+| Spawn is asynchronous                        | `coordinator.ts` admits a run without awaiting it                                                  | `coordinator-v3.test.ts`                                | exact                  |
+| One `NEW_TASK` per spawn                     | `transport.ts` submits one custom message                                                          | `coordinator-v3.test.ts`                                | exact                  |
+| Queue-only message                           | Pi 0.85.1 defers insertion while streaming                                                         | `native-session.test.ts`                                | exact                  |
+| Running follow-up reaches the next boundary  | `deliverAs: "steer"`                                                                               | coordinator and native-session tests                    | exact                  |
+| Idle follow-up starts a run                  | native `triggerTurn: true`                                                                         | `coordinator-v3.test.ts`                                | exact                  |
+| No private mailbox                           | `WaitHub` stores sequence numbers only                                                             | `v3-primitives.test.ts`                                 | exact                  |
+| No private scheduler                         | `AgentSession.sendCustomMessage` owns execution                                                    | `native-session.test.ts`                                | exact                  |
+| Direct-parent final answer                   | `deliverCompletion()` resolves `parentPath`                                                        | `coordinator-v3.test.ts`                                | exact                  |
+| Final answer does not trigger parent         | final endpoint uses `triggerTurn: false`                                                           | `coordinator-v3.test.ts`                                | exact                  |
+| Structured full fork                         | `ForkProjector` copies `AgentMessage` values                                                       | `v3-primitives.test.ts`                                 | exact                  |
+| Tool chatter excluded from forks             | projector filters tool calls/results                                                               | `v3-primitives.test.ts`                                 | exact                  |
+| `fork_turns=N` counts logical turns          | projector groups input/final pairs                                                                 | `v3-primitives.test.ts`                                 | close                  |
+| Child session file reopens                   | nested persistent `SessionManager`                                                                 | `v3-primitives.test.ts` and `native-session.test.ts`    | exact                  |
+| Child AgentSession cold resume               | `SessionFactory.open()` restores the runtime                                                       | factory-level kiwi E2E still pending                    | partial                |
+| Parent-authoritative cold reload             | Direct child session reopen only                                                                   | Pi has no equivalent parent authority object            | host gap               |
+| Environment and execution policy inheritance | Child resource loading only                                                                        | Pi exposes no Codex-equivalent permission/policy bundle | host gap               |
+| Agent count differs from run capacity        | registry reservation plus `ExecutionLimiter`                                                       | limiter and coordinator tests                           | close                  |
+| V2 ignores configured max depth              | Pi deliberately enforces `maxDepth` as a safety limit; direct children have nesting depth 0        | coordinator and prompt tests                            | intentional divergence |
+| Durable nested completion delivery           | Failed `FINAL_ANSWER` deliveries remain in the child record outbox and retry when the parent loads | `coordinator-v3.test.ts`                                | Pi adaptation          |
+| Wait does not return payload                 | `WaitHub` has no content store                                                                     | `v3-primitives.test.ts`                                 | exact                  |
+| Typed `agent_message` protocol               | Pi custom message conversion                                                                       | no Pi primitive                                         | host gap               |
+| Thread switching without replacing root      | Pi has no attach/switch primitive                                                                  | no safe implementation                                  | missing                |
+| Codex reasoning channel parity               | Pi custom messages become user context                                                             | no Pi primitive                                         | host gap               |
 
 ## Explicit host gaps
 

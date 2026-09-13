@@ -48,9 +48,10 @@ export function buildSpawnAgentParams(config: SpawnSchemaConfig) {
         ),
     }
     if (!config.hideSpawnAgentMetadata) {
-        const names = Object.keys(config.roles).filter(
+        const customNames = Object.keys(config.roles).filter(
             (name) => name !== 'default'
         )
+        const names = customNames.length > 0 ? ['default', ...customNames] : []
         if (names.length > 0) {
             const agentType =
                 names.length === 1

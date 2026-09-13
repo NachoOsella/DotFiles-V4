@@ -20,7 +20,11 @@ import type { CodexSubagentsConfig } from './config.ts'
 import { assembleChildPrompt } from './prompts.ts'
 import { resolveRole } from './roles.ts'
 import { resolveConfiguredMode } from './mode.ts'
-import { makeAgentRuntime, type AgentRuntime } from './agent-runtime.ts'
+import {
+    makeAgentRuntime,
+    type AgentRuntime,
+    type LiveActivity,
+} from './agent-runtime.ts'
 
 export const SUBAGENT_META_CUSTOM_TYPE = 'subagents-v3-agent-meta'
 
@@ -38,7 +42,10 @@ interface SessionFactoryOptions {
     readonly rootSessionDir: () => string
     readonly getModelRegistry: () => ModelRegistry
     readonly buildTools: (path: AgentRecord['path']) => readonly unknown[]
-    readonly onActivity?: (path: AgentRecord['path'], summary: string) => void
+    readonly onActivity?: (
+        path: AgentRecord['path'],
+        activity: LiveActivity
+    ) => void
     readonly config: CodexSubagentsConfig
 }
 
@@ -121,9 +128,12 @@ export class SessionFactory implements SubagentSessionFactory {
     ): Promise<AgentRuntime> {
         const model = resolveModel(this.options.getModelRegistry(), state.model)
         const customTools = this.options.buildTools(record.path) as never[]
-        // Register every collaboration tool so role changes can select it,
-        // but activate only the names inherited from the caller snapshot.
-        const tools = unique([...state.activeTools])
+        // Agents at the nesting limit must not receive a tool they cannot use.
+        const tools = unique([...state.activeTools]).filter(
+            (tool) =>
+                tool !== 'spawn_agent' ||
+                nestingDepth(record.path) < this.options.config.maxDepth
+        )
         const resourceLoader = await this.createResourceLoader(
             state.cwd,
             record
@@ -141,8 +151,8 @@ export class SessionFactory implements SubagentSessionFactory {
             path: record.path,
             session,
             runSequence: record.runSequence ?? 0,
-            onActivity: (summary) =>
-                this.options.onActivity?.(record.path, summary),
+            onActivity: (activity) =>
+                this.options.onActivity?.(record.path, activity),
         })
     }
 
@@ -159,6 +169,7 @@ export class SessionFactory implements SubagentSessionFactory {
                     record.thinkingLevel ?? 'medium'
                 ),
                 activeSlotCount: this.options.config.maxConcurrentExecutions,
+                currentDepth: nestingDepth(record.path),
             }),
             `Your agent path is ${record.path}. Your direct parent is ${record.parentPath ?? '/root'}.`,
             record.role
@@ -213,6 +224,10 @@ function resolveModel(registry: ModelRegistry, identity: ModelIdentity) {
 
 function unique(values: readonly string[]): string[] {
     return [...new Set(values)]
+}
+
+function nestingDepth(path: AgentRecord['path']): number {
+    return path.split('/').filter(Boolean).length - 2
 }
 
 function isSubagentsExtensionPath(path: string): boolean {

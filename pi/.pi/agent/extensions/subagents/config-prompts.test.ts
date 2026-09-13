@@ -5,7 +5,11 @@ import {
     decodeConfig,
     DEFAULT_SUBAGENTS_CONFIG,
 } from './src/config.ts'
-import { modeInstructions, resolveMode } from './src/mode.ts'
+import {
+    modeInstructions,
+    resolveConfiguredMode,
+    resolveMode,
+} from './src/mode.ts'
 import {
     assembleChildPrompt,
     assembleRootPrompt,
@@ -66,6 +70,13 @@ describe('mode', () => {
             resolveMode({ ultraReasoning: false, customModeHint: 'custom' }),
             { _tag: 'Custom', hint: 'custom' }
         )
+        assert.deepEqual(
+            resolveConfiguredMode(
+                { ...DEFAULT_SUBAGENTS_CONFIG, proactiveAt: 'high' },
+                'xhigh'
+            ),
+            { _tag: 'Proactive' }
+        )
         // Empty custom hint suppresses the fragment.
         assert.equal(modeInstructions({ _tag: 'Custom', hint: '  ' }), null)
         assert.ok(
@@ -93,13 +104,21 @@ describe('prompts', () => {
             'fork_turns',
             'FINAL_ANSWER',
             'same filesystem',
-            '4 slot',
+            '4 child-agent run',
         ]) {
             assert.ok(root.includes(clause), `root prompt misses: ${clause}`)
         }
         const child = assembleChildPrompt(input)
         assert.ok(child.includes('FINAL_ANSWER'))
         assert.ok(!child.includes('/root, the primary'))
+        assert.match(child, /depth limit/)
+
+        const nestedChild = assembleChildPrompt({
+            ...input,
+            config: { ...DEFAULT_SUBAGENTS_CONFIG, maxDepth: 2 },
+            currentDepth: 0,
+        })
+        assert.match(nestedChild, /may spawn nested agents/)
     })
 
     it('honors configured overrides including empty suppression', () => {
@@ -139,6 +158,22 @@ describe('tool plan', () => {
         assert.ok(!('model' in schema.properties))
         assert.ok(!('reasoning_effort' in schema.properties))
         assert.ok('fork_turns' in schema.properties)
+    })
+
+    it('includes default when custom agent types are exposed', () => {
+        const schema = buildSpawnAgentParams({
+            exposeSpawnAgentModelOverrides: false,
+            hideSpawnAgentMetadata: false,
+            roles: { reviewer: {} },
+        }) as {
+            properties: {
+                agent_type: { anyOf: Array<{ const: string }> }
+            }
+        }
+        assert.deepEqual(
+            schema.properties.agent_type.anyOf.map((entry) => entry.const),
+            ['default', 'reviewer']
+        )
     })
 
     it('omits agent_type when no custom roles are valid', () => {

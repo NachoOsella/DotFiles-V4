@@ -1,5 +1,5 @@
 import type { ThinkingLevel } from '@earendil-works/pi-agent-core'
-import type { AgentUsageTotals } from './agent-record.ts'
+import type { AgentUsageTotals, PendingCompletion } from './agent-record.ts'
 import type { ModelIdentity } from './parent-snapshot.ts'
 
 export interface PersistedSubagentV2 {
@@ -20,6 +20,7 @@ export interface PersistedSubagentV2 {
     readonly lastActivityAt: number
     readonly runSequence: number
     readonly lastDeliveredRunSequence?: number
+    readonly pendingCompletions?: readonly PendingCompletion[]
     readonly lastResult?: string
     readonly legacyUnresumable?: boolean
     readonly usage?: AgentUsageTotals

@@ -11,7 +11,11 @@ import {
 import { AgentStatus, type AgentResidency } from './agent-status.ts'
 import { ActivityFeed } from './activity-feed.ts'
 import type { ThinkingLevel } from '@earendil-works/pi-agent-core'
-import type { AgentRecord, AgentUsageTotals } from './agent-record.ts'
+import type {
+    AgentRecord,
+    AgentUsageTotals,
+    PendingCompletion,
+} from './agent-record.ts'
 import {
     assertNonEmptyMessage,
     finalAnswerCommunication,
@@ -19,6 +23,7 @@ import {
     plainMessageCommunication,
     parseForkTurns,
     type ForkTurns,
+    type InterAgentCommunication,
 } from './communication.ts'
 import { formatFinalAnswer } from './completion.ts'
 import {
@@ -169,19 +174,33 @@ export class SubagentCoordinator {
                 getModelRegistry: options.getModelRegistry,
                 buildTools: options.buildTools,
                 config: options.config,
-                onActivity: (path, summary) => {
+                onActivity: (path, activity) => {
                     const record = this.getRecordByPath(path)
                     if (!record) return
                     this.touch(record.id)
-                    this.activityFeed.push(
-                        path as string,
-                        summary === 'thinking' ? 'thinking' : 'tool',
-                        summary
-                    )
+                    if (activity.action === 'commit') {
+                        this.activityFeed.commitLive(path as string)
+                    } else if (
+                        activity.action === 'update' &&
+                        (activity.kind === 'thinking' ||
+                            activity.kind === 'message')
+                    ) {
+                        this.activityFeed.updateLive(
+                            path as string,
+                            activity.kind,
+                            activity.summary ?? ''
+                        )
+                    } else if (activity.kind && activity.summary) {
+                        this.activityFeed.push(
+                            path as string,
+                            activity.kind,
+                            activity.summary
+                        )
+                    }
                     this.emit({
                         _tag: 'ToolActivity',
                         agentId: record.id,
-                        summary,
+                        summary: activity.summary ?? activity.action,
                     })
                 },
             })
@@ -397,7 +416,7 @@ export class SubagentCoordinator {
     }): Promise<void> {
         assertNonEmptyMessage(args.message)
         const target = this.resolve(args.caller, args.target)
-        const runtime = await this.ensureLoaded(target.id)
+        const endpoint = await this.endpointFor(target.id)
         const comm = plainMessageCommunication({
             author: args.caller,
             recipient: target.path,
@@ -405,7 +424,7 @@ export class SubagentCoordinator {
             sourceCallId: args.callId,
         })
         await this.mutex(target.id).runExclusive(async () => {
-            await runtime.endpoint!.send(comm, { triggerTurn: false })
+            await endpoint.send(comm, { triggerTurn: false })
         })
         this.touch(target.id)
         this.waitHub.notifyMailbox(target.path as string)
@@ -562,6 +581,7 @@ export class SubagentCoordinator {
                     lastActivityAt: record.lastActivityAt,
                     runSequence: record.runSequence ?? 0,
                     lastDeliveredRunSequence: record.lastDeliveredRunSequence,
+                    pendingCompletions: record.pendingCompletions,
                     lastResult: record.lastResult,
                     legacyUnresumable: record.legacyUnresumable,
                     usage: record.usage,
@@ -634,6 +654,7 @@ export class SubagentCoordinator {
                 lastActivityAt: persisted.lastActivityAt,
                 runSequence: persisted.runSequence,
                 lastDeliveredRunSequence: persisted.lastDeliveredRunSequence,
+                pendingCompletions: persisted.pendingCompletions,
                 lastResult: persisted.lastResult,
                 legacyUnresumable: persisted.legacyUnresumable,
                 usage: persisted.usage,
@@ -713,6 +734,7 @@ export class SubagentCoordinator {
                     error instanceof Error ? error.message : String(error)
                 const status = AgentStatus.errored(message)
                 this.setRecord(id, (previous) => ({ ...previous, status }))
+                this.activityFeed.push(record.path, 'final', message)
                 await this.safeDeliverCompletion(record, sequence, status)
             } else {
                 const status = AgentStatus.completed(
@@ -728,6 +750,9 @@ export class SubagentCoordinator {
                     activeTools: runtime.session.getActiveToolNames(),
                     thinkingLevel: runtime.session.thinkingLevel,
                 }))
+                if (status._tag === 'Completed' && status.message) {
+                    this.activityFeed.push(record.path, 'final', status.message)
+                }
                 await this.safeDeliverCompletion(record, sequence, status)
             }
         } finally {
@@ -774,18 +799,6 @@ export class SubagentCoordinator {
         sequence: number,
         status: AgentRecord['status']
     ): Promise<void> {
-        try {
-            await this.deliverCompletion(record, sequence, status)
-        } catch {
-            // A parent may be shutting down; the child run still settles.
-        }
-    }
-
-    private async deliverCompletion(
-        record: AgentRecord,
-        sequence: number,
-        status: AgentRecord['status']
-    ): Promise<void> {
         if (
             record.lastDeliveredRunSequence !== undefined &&
             record.lastDeliveredRunSequence >= sequence
@@ -793,20 +806,81 @@ export class SubagentCoordinator {
             return
         const payload = formatFinalAnswer(status)
         if (payload === null || !record.parentPath) return
-        const parent = this.getRecordByPath(record.parentPath)
-        if (!parent) return
-        const comm = finalAnswerCommunication({
+        const communication = finalAnswerCommunication({
             author: record.path,
             recipient: record.parentPath,
             payload,
         })
+        try {
+            await this.deliverCompletion(record.id, sequence, communication)
+        } catch {
+            this.queuePendingCompletion(record.id, sequence, communication)
+        }
+    }
+
+    private async deliverCompletion(
+        childId: AgentId,
+        sequence: number,
+        communication: InterAgentCommunication
+    ): Promise<void> {
+        const parent = this.getRecordByPath(communication.recipient)
+        if (!parent) throw new AgentNotFoundError(communication.recipient)
         const endpoint = await this.endpointFor(parent.id)
-        await endpoint.send(comm, { triggerTurn: false })
-        this.setRecord(record.id, (previous) => ({
+        await endpoint.send(communication, { triggerTurn: false })
+        this.setRecord(childId, (previous) => ({
             ...previous,
             lastDeliveredRunSequence: sequence,
+            pendingCompletions: (previous.pendingCompletions ?? []).filter(
+                (pending) => pending.runSequence !== sequence
+            ),
         }))
         this.waitHub.notifyMailbox(parent.path as string)
+    }
+
+    private queuePendingCompletion(
+        childId: AgentId,
+        sequence: number,
+        communication: InterAgentCommunication
+    ): void {
+        const pending: PendingCompletion = {
+            communicationId: communication.id,
+            runSequence: sequence,
+            author: communication.author,
+            recipient: communication.recipient,
+            payload: communication.payload,
+        }
+        this.setRecord(childId, (previous) => ({
+            ...previous,
+            pendingCompletions: [
+                ...(previous.pendingCompletions ?? []).filter(
+                    (item) => item.runSequence !== sequence
+                ),
+                pending,
+            ],
+        }))
+    }
+
+    async retryPendingCompletions(recipient: AgentPath): Promise<void> {
+        const pending = [...this.records.values()].flatMap((record) =>
+            (record.pendingCompletions ?? [])
+                .filter((item) => item.recipient === recipient)
+                .map((item) => ({ childId: record.id, item }))
+        )
+        for (const { childId, item } of pending) {
+            try {
+                await this.deliverCompletion(childId, item.runSequence, {
+                    id: item.communicationId,
+                    kind: 'result',
+                    messageType: 'FINAL_ANSWER',
+                    author: item.author,
+                    recipient: item.recipient,
+                    payload: item.payload,
+                    triggerTurn: false,
+                })
+            } catch {
+                // Keep the durable outbox entry for the next load or root start.
+            }
+        }
     }
 
     private async endpointFor(id: AgentId): Promise<CommunicationEndpoint> {
@@ -905,6 +979,7 @@ export class SubagentCoordinator {
             thinkingLevel: runtime.session.thinkingLevel,
         }))
         this.captureRecentTurns(record.id, runtime)
+        await this.retryPendingCompletions(record.path)
         this.emit({
             _tag: 'ResidencyChanged',
             agentId: record.id,

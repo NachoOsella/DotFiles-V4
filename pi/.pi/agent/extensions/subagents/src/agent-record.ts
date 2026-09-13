@@ -9,8 +9,16 @@
 
 import type { ThinkingLevel } from '@earendil-works/pi-agent-core'
 import type { SessionToolCallCount } from './host.ts'
-import type { AgentId, AgentPath } from './ids.ts'
+import type { AgentId, AgentPath, CommunicationId } from './ids.ts'
 import type { AgentResidency, AgentStatus } from './agent-status.ts'
+
+export interface PendingCompletion {
+    readonly communicationId: CommunicationId
+    readonly runSequence: number
+    readonly author: AgentPath
+    readonly recipient: AgentPath
+    readonly payload: string
+}
 
 /** Accumulated usage totals for one logical agent (plain data). */
 export interface AgentUsageTotals {
@@ -78,6 +86,7 @@ export interface AgentRecord {
     readonly thinkingLevel?: ThinkingLevel
     readonly runSequence?: number
     readonly lastDeliveredRunSequence?: number
+    readonly pendingCompletions?: readonly PendingCompletion[]
     readonly legacyUnresumable?: boolean
     readonly lastResult?: string
     readonly initiatingTurnId?: string
@@ -104,6 +113,7 @@ export interface AgentRecordInit {
     readonly thinkingLevel?: ThinkingLevel
     readonly runSequence?: number
     readonly lastDeliveredRunSequence?: number
+    readonly pendingCompletions?: readonly PendingCompletion[]
     readonly legacyUnresumable?: boolean
     readonly lastResult?: string
     readonly initiatingTurnId?: string

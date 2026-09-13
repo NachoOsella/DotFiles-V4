@@ -45,10 +45,35 @@ export function resolveConfiguredMode(
     if (config.mode === 'explicit') return { _tag: 'ExplicitRequestOnly' }
     if (config.mode === 'proactive') return { _tag: 'Proactive' }
     return resolveMode({
-        ultraReasoning:
-            thinkingLevel === config.proactiveAt ||
-            (config.proactiveAt === 'max' && thinkingLevel === 'max'),
+        ultraReasoning: isAtLeastThinkingLevel(
+            thinkingLevel,
+            config.proactiveAt
+        ),
     })
+}
+
+const THINKING_LEVELS = [
+    'off',
+    'minimal',
+    'low',
+    'medium',
+    'high',
+    'xhigh',
+    'max',
+] as const
+
+function isAtLeastThinkingLevel(current: string, threshold: string): boolean {
+    const currentIndex = THINKING_LEVELS.indexOf(
+        current as (typeof THINKING_LEVELS)[number]
+    )
+    const thresholdIndex = THINKING_LEVELS.indexOf(
+        threshold as (typeof THINKING_LEVELS)[number]
+    )
+    return (
+        currentIndex >= 0 &&
+        thresholdIndex >= 0 &&
+        currentIndex >= thresholdIndex
+    )
 }
 
 /** Developer fragment for the resolved mode (null when suppressed). */
@@ -63,9 +88,10 @@ export function modeInstructions(mode: MultiAgentMode): string | null {
             ].join(' ')
         case 'Proactive':
             return [
-                'You may delegate proactively when parallel subagent work saves',
-                'meaningful time or improves quality. Prefer one bounded task per',
-                'agent and avoid duplicating work already assigned.',
+                'You may delegate proactively.',
+                'Use subagents for independent work that can run in parallel, such as reviewing separate modules, comparing alternatives, or running focused investigations.',
+                'Do not delegate work that needs only one or two local tool calls, depends on constant access to the root conversation, or cannot proceed independently.',
+                'Give each agent one bounded task with explicit file ownership when edits are allowed, and ask for conclusions and verification results rather than work diaries.',
             ].join(' ')
         case 'Custom':
             if (mode.hint.trim() === '') return null

@@ -16,8 +16,10 @@ import { modeInstructions, type MultiAgentMode } from './mode.ts'
 export interface PromptAssemblyInput {
     readonly config: CodexSubagentsConfig
     readonly mode: MultiAgentMode
-    /** Active execution slots shared across the tree, including self. */
+    /** Maximum child runs executing concurrently across the tree. */
     readonly activeSlotCount: number
+    /** Nesting depth where direct children of /root have depth zero. */
+    readonly currentDepth?: number
 }
 
 function configuredOrBundled(
@@ -34,16 +36,15 @@ function configuredOrBundled(
 
 const BUNDLED_ROOT_ROLE = [
     'You are /root, the primary agent in a team of agents with equivalent capability.',
-    'You can create subagents with the spawn_agent tool; they may recursively spawn their own children.',
-    'Use spawn_agent to create an agent for one bounded task, followup_task to trigger additional work on an existing agent, and send_message to communicate without triggering a turn.',
+    'Use spawn_agent to create an agent for one bounded task, followup_task to trigger additional work on an existing agent, and send_message to deliver context without starting a turn.',
     'fork_turns chooses propagated conversation history: all (default), none, or the most recent N turns.',
     'Incoming child communication arrives as typed envelopes with Message Type (NEW_TASK, MESSAGE, FINAL_ANSWER), Task name, Sender, and Payload.',
     'Call the collaboration tools directly; never ask another agent to call them on your behalf.',
 ].join(' ')
 
 const BUNDLED_CHILD_ROLE = [
-    'You are one agent in a team rooted at /root. You may recursively spawn children with the same collaboration tools where supported.',
-    'Distinguish NEW_TASK (trigger additional work), MESSAGE (queue-only communication), and FINAL_ANSWER (terminal result to your direct parent).',
+    'You are one agent in a team rooted at /root.',
+    'Distinguish NEW_TASK (trigger additional work), MESSAGE (deliver context without starting a turn), and FINAL_ANSWER (terminal result to your direct parent).',
     'Your final-channel response is delivered to your direct parent as a bounded FINAL_ANSWER; keep it self-contained.',
     'Call the collaboration tools directly; never ask another agent to call them on your behalf.',
 ].join(' ')
@@ -79,6 +80,13 @@ export function subagentRoleInstructions(
     return configuredOrBundled(config.subagentUsageHintText, BUNDLED_CHILD_ROLE)
 }
 
+function recursionGuidance(maxDepth: number, currentDepth: number): string {
+    if (currentDepth >= maxDepth) {
+        return 'You are at the configured agent depth limit and cannot spawn another agent.'
+    }
+    return 'You may spawn nested agents while the target child remains within the configured depth limit.'
+}
+
 /** Assemble the full developer context for the root agent. */
 export function assembleRootPrompt(input: PromptAssemblyInput): string {
     const parts: string[] = []
@@ -88,7 +96,10 @@ export function assembleRootPrompt(input: PromptAssemblyInput): string {
     const wait = waitGuidance(input.config.waitAgentEnabled)
     if (wait) parts.push(wait)
     parts.push(
-        `Active agent concurrency: ${input.activeSlotCount} slot(s) available including this agent.`
+        recursionGuidance(input.config.maxDepth, input.currentDepth ?? -1)
+    )
+    parts.push(
+        `Up to ${input.activeSlotCount} child-agent run(s) may execute concurrently across the tree, excluding /root.`
     )
     const overrides = overridesGuidance(
         input.config.exposeSpawnAgentModelOverrides
@@ -116,7 +127,10 @@ export function assembleChildPrompt(input: PromptAssemblyInput): string {
     const wait = waitGuidance(input.config.waitAgentEnabled)
     if (wait) parts.push(wait)
     parts.push(
-        `Active agent concurrency: ${input.activeSlotCount} slot(s) available including this agent.`
+        recursionGuidance(input.config.maxDepth, input.currentDepth ?? 1)
+    )
+    parts.push(
+        `Up to ${input.activeSlotCount} child-agent run(s) may execute concurrently across the tree, excluding /root.`
     )
     const dev = input.config.subagentDeveloperInstructions
     if (dev !== undefined && dev.trim() !== '') parts.push(dev)

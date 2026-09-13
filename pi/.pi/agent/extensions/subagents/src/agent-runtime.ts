@@ -1,7 +1,14 @@
 import type { AgentSession } from '@earendil-works/pi-coding-agent'
+import type { ActivityKind } from './activity-feed.ts'
 import type { AgentPath } from './ids.ts'
 
 export type AgentRunPhase = 'idle' | 'running' | 'settling'
+
+export interface LiveActivity {
+    readonly action: 'push' | 'update' | 'commit'
+    readonly kind?: ActivityKind
+    readonly summary?: string
+}
 
 export interface AgentRuntime {
     readonly path: AgentPath
@@ -40,13 +47,43 @@ export function makeAgentRuntime(args: {
     path: AgentPath
     session: AgentSession
     runSequence?: number
-    onActivity?: (summary: string) => void
+    onActivity?: (activity: LiveActivity) => void
 }): AgentRuntime {
     const unsubscribe = args.session.subscribe((event) => {
+        if (event.type === 'message_update') {
+            const content = extractAssistantContent(event.message)
+            args.onActivity?.({
+                action: 'update',
+                kind: 'thinking',
+                summary: content.thinking,
+            })
+            args.onActivity?.({
+                action: 'update',
+                kind: 'message',
+                summary: content.text,
+            })
+            return
+        }
+        if (event.type === 'message_end') {
+            args.onActivity?.({ action: 'commit' })
+            return
+        }
         if (event.type === 'tool_execution_start') {
-            args.onActivity?.(`tool ${event.toolName}`)
-        } else if (event.type === 'message_update') {
-            args.onActivity?.('thinking')
+            args.onActivity?.({ action: 'commit' })
+            args.onActivity?.({
+                action: 'push',
+                kind: 'tool',
+                summary:
+                    `${event.toolName} ${formatToolMetadata(event.args)}`.trim(),
+            })
+            return
+        }
+        if (event.type === 'tool_execution_end') {
+            args.onActivity?.({
+                action: 'push',
+                kind: 'tool_result',
+                summary: `${event.toolName} ${event.isError ? 'failed' : 'completed'}`,
+            })
         }
     })
 
@@ -69,4 +106,44 @@ export function makeAgentRuntime(args: {
             }
         },
     }
+}
+
+function extractAssistantContent(message: unknown): {
+    thinking: string
+    text: string
+} {
+    if (!message || typeof message !== 'object')
+        return { thinking: '', text: '' }
+    const content = (message as { content?: unknown }).content
+    if (!Array.isArray(content)) return { thinking: '', text: '' }
+    const thinking: string[] = []
+    const text: string[] = []
+    for (const part of content) {
+        if (!part || typeof part !== 'object') continue
+        const item = part as {
+            type?: unknown
+            thinking?: unknown
+            text?: unknown
+        }
+        if (item.type === 'thinking' && typeof item.thinking === 'string') {
+            thinking.push(item.thinking)
+        } else if (item.type === 'text' && typeof item.text === 'string') {
+            text.push(item.text)
+        }
+    }
+    return { thinking: thinking.join('\n'), text: text.join('\n') }
+}
+
+function formatToolMetadata(args: unknown): string {
+    if (!args || typeof args !== 'object') return ''
+    const record = args as Record<string, unknown>
+    const preferred = ['path', 'command', 'query', 'target', 'task_name']
+    for (const key of preferred) {
+        const value = record[key]
+        if (typeof value === 'string' && value.trim()) {
+            const compact = value.trim().replace(/\s+/g, ' ')
+            return `${key}=${JSON.stringify(compact.slice(0, 180))}`
+        }
+    }
+    return ''
 }

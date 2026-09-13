@@ -25,15 +25,8 @@ import {
 } from './src/persistence.ts'
 import { assembleRootPrompt } from './src/prompts.ts'
 import type { AgentPath } from './src/ids.ts'
-import {
-    clearSubagentsWidget,
-    refreshSubagentsWidget,
-    setSubagentsWidgetDetail,
-    toggleWidgetCollapsed,
-} from './src/widget.ts'
 import type { ParentExecutionSnapshot } from './src/parent-snapshot.ts'
 
-const TOGGLE_WIDGET_SHORTCUT = 'alt+s'
 const ROOT_PATH = '/root' as AgentPath
 
 function loadConfig(): typeof DEFAULT_SUBAGENTS_CONFIG {
@@ -155,8 +148,6 @@ export default function subagentsExtension(pi: ExtensionAPI) {
                     buildChildToolDefinitions(getCoordinator(), caller),
             })
             coordinator.onEvent((event) => {
-                const ctx = latestCtx
-                if (ctx) refreshSubagentsWidget(ctx, getCoordinator())
                 if (
                     event._tag === 'ActivityCompleted' ||
                     event._tag === 'ActivityInterrupted'
@@ -173,35 +164,9 @@ export default function subagentsExtension(pi: ExtensionAPI) {
         if (toolNames.includes(tool.name)) pi.registerTool(tool as never)
     }
 
-    pi.registerShortcut(TOGGLE_WIDGET_SHORTCUT, {
-        description: 'Collapse or expand the subagents widget',
-        handler: async (ctx) => {
-            const nowCollapsed = toggleWidgetCollapsed()
-            refreshSubagentsWidget(ctx, getCoordinator())
-            if (ctx.hasUI) {
-                ctx.ui.notify(
-                    nowCollapsed
-                        ? 'Agents widget: compact.'
-                        : 'Agents widget: expanded.',
-                    'info'
-                )
-            }
-        },
-    })
-
     pi.registerCommand('agents', {
         description: 'Inspect subagents',
-        handler: async (args, ctx) => {
-            const mode = args.trim().toLowerCase()
-            if (mode === 'compact' || mode === 'detailed') {
-                setSubagentsWidgetDetail(mode === 'detailed')
-                refreshSubagentsWidget(ctx, getCoordinator())
-                return
-            }
-            if (mode !== '') {
-                ctx.ui.notify('Usage: /agents [compact|detailed]', 'warning')
-                return
-            }
+        handler: async (_args, ctx) => {
             await showAgentsModal(getCoordinator(), ctx)
         },
     })
@@ -214,12 +179,11 @@ export default function subagentsExtension(pi: ExtensionAPI) {
             const persisted = findLatestState(ctx.sessionManager.getBranch())
             if (persisted) manager.restore(persisted)
         }
-        refreshSubagentsWidget(ctx, manager)
+        void manager.retryPendingCompletions(ROOT_PATH)
     })
 
     pi.on('session_tree', (_event, ctx) => {
         latestCtx = ctx
-        refreshSubagentsWidget(ctx, getCoordinator())
     })
 
     pi.on('input', (_event, ctx) => {
@@ -234,12 +198,10 @@ export default function subagentsExtension(pi: ExtensionAPI) {
     pi.on('agent_settled', (_event, ctx) => {
         latestCtx = ctx
         void persistLive()
-        refreshSubagentsWidget(ctx, getCoordinator())
     })
 
     pi.on('tool_result', (_event, ctx) => {
         latestCtx = ctx
-        refreshSubagentsWidget(ctx, getCoordinator())
     })
 
     pi.on('before_agent_start', (event, ctx) => {
@@ -258,10 +220,7 @@ export default function subagentsExtension(pi: ExtensionAPI) {
         const sessionId = ctx.sessionManager.getSessionId()
         coordinator = undefined
         latestCtx = undefined
-        if (!manager) {
-            clearSubagentsWidget(ctx)
-            return
-        }
+        if (!manager) return
         try {
             pi.appendEntry(
                 SUBAGENTS_STATE_CUSTOM_TYPE,
@@ -270,7 +229,6 @@ export default function subagentsExtension(pi: ExtensionAPI) {
         } catch {
             // Persistence is best effort during session transitions.
         } finally {
-            clearSubagentsWidget(ctx)
             await manager.shutdown()
         }
     })

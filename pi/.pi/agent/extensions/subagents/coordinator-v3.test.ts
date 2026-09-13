@@ -404,6 +404,27 @@ test('full-history fork accepts agent_type and applies role execution config', a
     await harness.coordinator.shutdown()
 })
 
+test('child send_message to root uses the root endpoint without opening a session', async () => {
+    const harness = createHarness()
+    await harness.coordinator.spawn({
+        caller: ROOT_PATH,
+        taskName: 'a',
+        message: 'start',
+    })
+
+    await harness.coordinator.sendMessage({
+        caller: '/root/a' as AgentPath,
+        target: '/root',
+        message: 'progress',
+    })
+
+    assert.equal(harness.opens.count, 0)
+    assert.equal(harness.rootMessages.at(-1)?.kind, 'message')
+    assert.equal(harness.rootMessages.at(-1)?.payload, 'progress')
+    harness.sessions.get('/root/a')?.finishRun()
+    await harness.coordinator.shutdown()
+})
+
 test('concurrent unloaded operations share one AgentSession load', async () => {
     const gate = new Deferred<void>()
     const harness = createHarness({ openGate: gate })
@@ -489,6 +510,59 @@ test('followup wakes a child blocked in wait_agent', async () => {
         timedOut: false,
     })
     session.finishRun()
+    await harness.coordinator.shutdown()
+})
+
+test('failed nested completion delivery remains queued until the parent reloads', async () => {
+    const harness = createHarness({ maxLoadedAgents: 2 })
+    await harness.coordinator.spawn({
+        caller: ROOT_PATH,
+        taskName: 'parent',
+        message: 'parent task',
+    })
+    await harness.coordinator.spawn({
+        caller: '/root/parent' as AgentPath,
+        taskName: 'worker',
+        message: 'worker task',
+    })
+    harness.sessions.get('/root/parent')?.finishRun()
+    await new Promise((resolve) => setImmediate(resolve))
+
+    await harness.coordinator.spawn({
+        caller: ROOT_PATH,
+        taskName: 'other',
+        message: 'other task',
+    })
+    harness.sessions.get('/root/parent/worker')?.finishRun()
+    await new Promise((resolve) => setImmediate(resolve))
+
+    const worker = harness.coordinator.getRecordByPath(
+        '/root/parent/worker' as AgentPath
+    )!
+    assert.equal(worker.pendingCompletions?.length, 1)
+
+    harness.sessions.get('/root/other')?.finishRun()
+    await new Promise((resolve) => setImmediate(resolve))
+    await harness.coordinator.followup({
+        caller: ROOT_PATH,
+        target: '/root/parent',
+        message: 'resume parent',
+    })
+
+    const reloadedParent = harness.sessions.get('/root/parent')!
+    assert.ok(
+        reloadedParent.customMessages.some((delivery) => {
+            const message = (delivery as { message?: { content?: unknown } })
+                .message
+            return String(message?.content).includes('FINAL_ANSWER')
+        })
+    )
+    assert.equal(
+        harness.coordinator.getRecordByPath('/root/parent/worker' as AgentPath)
+            ?.pendingCompletions?.length,
+        0
+    )
+    reloadedParent.finishRun()
     await harness.coordinator.shutdown()
 })
 

@@ -24,14 +24,14 @@ Children run in persistent independent Pi sessions, report back with one bounded
 
 ## Configure (environment)
 
-| Variable | Effect |
-|---|---|
-| `SUBAGENTS_DISABLED=1` | Register no tools |
-| `SUBAGENTS_DISABLE_WAIT=1` | Hide `wait_agent` |
-| `SUBAGENTS_MAX_CONCURRENT=N` | Active child-run slots (default 4) |
-| `SUBAGENTS_MAX_AGENTS=N` | Logical child identities (default 6) |
-| `SUBAGENTS_MAX_LOADED=N` | Loaded child sessions (default 16) |
-| `SUBAGENTS_MAX_DEPTH=N` | Nested agent depth (default 1) |
+| Variable                     | Effect                                                                                                                                   |
+| ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `SUBAGENTS_DISABLED=1`       | Register no tools                                                                                                                        |
+| `SUBAGENTS_DISABLE_WAIT=1`   | Hide `wait_agent`                                                                                                                        |
+| `SUBAGENTS_MAX_CONCURRENT=N` | Active child-run slots (default 4)                                                                                                       |
+| `SUBAGENTS_MAX_AGENTS=N`     | Logical child identities (default 6)                                                                                                     |
+| `SUBAGENTS_MAX_LOADED=N`     | Loaded child sessions (default 16)                                                                                                       |
+| `SUBAGENTS_MAX_DEPTH=N`      | Allowed nesting after a direct child; direct children are depth 0 (default 1). This is a Pi safety limit that Codex V2 does not enforce. |
 
 `model` uses `provider/model-id`. `reasoning_effort` accepts `off`, `minimal`,
 `low`, `medium`, `high`, `xhigh`, or `max`. Overrides are valid with

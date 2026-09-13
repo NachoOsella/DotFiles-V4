@@ -5,7 +5,14 @@ import { visibleWidth } from '@earendil-works/pi-tui'
 import type { AgentRecord } from './src/agent-record.ts'
 import type { AgentPath } from './src/ids.ts'
 import type { ListedAgent } from './src/manager.ts'
-import { buildAgentsModalLines, type ModalState } from './src/agents-modal.ts'
+import {
+    buildAgentsDashboardLines,
+    buildAgentsModalLines,
+    collapseRedundant,
+    type DashboardState,
+    type ModalState,
+} from './src/agents-modal.ts'
+import type { ActivityEntry } from './src/activity-feed.ts'
 
 const stubTheme = {
     fg: (_token: string, text: string) => text,
@@ -32,6 +39,101 @@ function state(overrides: Partial<ModalState> = {}): ModalState {
 const emptyReader = {
     getRecordByPath: (_path: AgentPath): AgentRecord | undefined => undefined,
 }
+
+const dashboardReader = {
+    ...emptyReader,
+    getActivity: (_path: AgentPath) => [
+        {
+            id: 1,
+            at: Date.now(),
+            kind: 'tool' as const,
+            summary: 'read path="src/index.ts"',
+        },
+    ],
+}
+
+test('full-screen dashboard fills wide and narrow terminal dimensions', () => {
+    const dashboardState: DashboardState = {
+        selected: 0,
+        focus: 'agents',
+        scroll: 0,
+        followTail: true,
+        narrowPanel: 'agents',
+        hiddenKinds: new Set(),
+        seenByPath: new Map(),
+    }
+    for (const [width, height] of [
+        [120, 32],
+        [70, 20],
+    ] as const) {
+        const lines = buildAgentsDashboardLines(
+            [listedAgent()],
+            dashboardReader,
+            dashboardState,
+            width,
+            height,
+            stubTheme
+        )
+        assert.equal(lines.length, height)
+        assert.ok(lines.every((line) => visibleWidth(line) === width))
+    }
+})
+
+test('timeline merges tool completion and drops message shadowed by final', () => {
+    const at = Date.now()
+    const entry = (
+        id: number,
+        kind: ActivityEntry['kind'],
+        summary: string
+    ): ActivityEntry => ({ id, at, kind, summary })
+    const collapsed = collapseRedundant([
+        entry(1, 'tool', 'write path="/tmp/x"'),
+        entry(2, 'tool_result', 'write completed'),
+        entry(3, 'message', 'done'),
+        entry(4, 'final', 'done'),
+        entry(5, 'tool_result', 'grep failed'),
+    ])
+    assert.equal(collapsed.length, 3)
+    assert.equal(collapsed[0]?.kind, 'tool')
+    assert.ok(collapsed[0]?.doneAt !== undefined)
+    assert.equal(collapsed[1]?.kind, 'final')
+    assert.equal(collapsed[2]?.kind, 'tool_result')
+})
+
+test('dashboard wraps long stories instead of truncating every line', () => {
+    const reader = {
+        ...emptyReader,
+        getActivity: (_path: AgentPath) => [
+            {
+                id: 1,
+                at: Date.now(),
+                kind: 'final' as const,
+                summary:
+                    'El farero encendía la luz cada noche aunque hacía años que ningún barco pasaba por aquella costa.',
+            },
+        ],
+    }
+    const lines = buildAgentsDashboardLines(
+        [listedAgent()],
+        reader,
+        {
+            selected: 0,
+            focus: 'activity',
+            scroll: 0,
+            followTail: true,
+            narrowPanel: 'activity',
+            hiddenKinds: new Set(),
+            seenByPath: new Map(),
+        },
+        100,
+        20,
+        stubTheme
+    )
+    const body = lines.join('\n')
+    assert.ok(body.includes('FINAL'))
+    assert.ok(body.includes('aquella costa.'))
+    assert.ok(!body.includes('…'))
+})
 
 test('every modal line spans the full width (no terminal ghosting)', () => {
     const agents = [

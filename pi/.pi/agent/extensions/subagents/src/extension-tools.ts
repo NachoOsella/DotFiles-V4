@@ -32,9 +32,14 @@ export interface ToolContextLike {
     readonly cwd: string
 }
 
-function textResult(text: string, details?: unknown) {
+function structuredResult(details: unknown) {
     return {
-        content: [{ type: 'text' as const, text }],
+        content: [
+            {
+                type: 'text' as const,
+                text: JSON.stringify(details),
+            },
+        ],
         details,
     }
 }
@@ -78,9 +83,7 @@ export function buildToolHandlers(manager: SubagentCoordinator) {
                 reasoningEffort: params.reasoning_effort,
                 callId: toolCallId as ToolCallId,
             })
-            return textResult(`Spawned ${result.path}.`, {
-                task_name: result.path,
-            })
+            return structuredResult({ task_name: result.path })
         },
         async send(
             caller: AgentPath,
@@ -93,7 +96,7 @@ export function buildToolHandlers(manager: SubagentCoordinator) {
                 message: params.message,
                 callId: toolCallId as ToolCallId,
             })
-            return textResult('Message queued.', { delivered: true })
+            return structuredResult({ delivered: true })
         },
         async followup(
             caller: AgentPath,
@@ -106,14 +109,17 @@ export function buildToolHandlers(manager: SubagentCoordinator) {
                 message: params.message,
                 callId: toolCallId as ToolCallId,
             })
-            return textResult('Follow-up queued.', { delivered: true })
+            return structuredResult({ delivered: true })
         },
         async wait(caller: AgentPath, params: { timeout_ms?: number }) {
             const result = await manager.wait({
                 caller,
                 timeoutMs: params.timeout_ms,
             })
-            return textResult(result.message, { timed_out: result.timedOut })
+            return structuredResult({
+                message: result.message,
+                timed_out: result.timedOut,
+            })
         },
         async interrupt(
             caller: AgentPath,
@@ -125,19 +131,22 @@ export function buildToolHandlers(manager: SubagentCoordinator) {
                 target: params.target,
                 callId: toolCallId as ToolCallId,
             })
-            return textResult(`Target status: ${status._tag}.`, {
-                status: status._tag,
-            })
+            return structuredResult({ status: status._tag })
         },
         list(caller: AgentPath, params: { path_prefix?: string }) {
             const agents = manager.list(caller, params.path_prefix)
-            if (agents.length === 0)
-                return textResult('No subagents.', { agents: [] })
-            const lines = agents.map(
-                (a) =>
-                    `${a.status === 'Running' ? '●' : a.status === 'Completed' ? '✓' : a.status === 'Errored' ? '!' : '○'} ${a.path} ${a.status} ${a.residency}`
-            )
-            return textResult(lines.join('\n'), { agents })
+            return structuredResult({
+                agents: agents.map((agent) => ({
+                    agent_name: agent.path,
+                    agent_status: agent.status,
+                    residency: agent.residency,
+                    role: agent.role,
+                    model: agent.model,
+                    parent_path: agent.parentPath,
+                    has_pending_mail: agent.hasPendingMail,
+                    running: agent.running,
+                })),
+            })
         },
     }
 }
@@ -213,7 +222,7 @@ export function buildRootToolDefinitions(manager: SubagentCoordinator) {
             name: TOOL_SEND_MESSAGE,
             label: 'Send Message',
             description:
-                'Queue a message to an agent without triggering a turn.',
+                'Deliver context to an agent without starting a turn. Use followup_task when the agent must act on it.',
             parameters: SendMessageParams,
             async execute(
                 toolCallId: string,
@@ -331,7 +340,7 @@ export function buildChildToolDefinitions(
             name: TOOL_SEND_MESSAGE,
             label: 'Send Message',
             description:
-                'Queue a message to an agent without triggering a turn.',
+                'Deliver context to an agent without starting a turn. Use followup_task when the agent must act on it.',
             parameters: SendMessageParams,
             async execute(
                 toolCallId: string,
