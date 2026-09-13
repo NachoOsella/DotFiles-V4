@@ -1,0 +1,25 @@
+{
+    "name": "opencode-context-progress",
+    "version": "1.0.0",
+    "private": true,
+    "description": "Compact terminal-native context usage bar for the OpenCode TUI sidebar",
+    "type": "module",
+    "exports": {
+        ".": "./src/index.ts",
+        "./tui": "./src/tui.tsx"
+    },
+    "scripts": {
+        "check": "tsc --noEmit"
+    },
+    "dependencies": {
+        "@opencode/plugin": "2.0.2"
+    },
+    "devDependencies": {
+        "@opencode/theme": "2.0.2",
+        "@opentui/core": "0.5.10",
+        "@opentui/solid": "0.5.10",
+        "@types/node": "^22.0.0",
+        "solid-js": "1.9.12",
+        "typescript": "^5.0.0"
+    }
+}
