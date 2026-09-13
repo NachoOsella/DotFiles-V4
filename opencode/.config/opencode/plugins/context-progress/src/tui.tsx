@@ -31,6 +31,10 @@ function resolveUsage(ctx: TuiContext, sessionID: string) {
         const boundaryIndex = boundary
             ? messages.findIndex((message) => message.id === boundary)
             : -1
+        if (boundary && boundaryIndex < 0) {
+            return { used: 0, total: 0, percent: undefined }
+        }
+
         const end = boundaryIndex >= 0 ? boundaryIndex : messages.length
         let compactionIndex = -1
         for (let index = end - 1; index >= 0; index--) {
@@ -65,7 +69,7 @@ function resolveUsage(ctx: TuiContext, sessionID: string) {
 
         return { used, total, percent: usagePercent(used, total) }
     } catch {
-        return { used: 0, total: 0, percent: 0 }
+        return { used: 0, total: 0, percent: undefined }
     }
 }
 
@@ -73,7 +77,7 @@ function ContextProgress(props: { sessionID: string }) {
     const ctx = usePlugin()
     const usage = createMemo(() => resolveUsage(ctx, props.sessionID))
     const tone = createMemo(() => {
-        const percent = usage().percent
+        const percent = usage().percent ?? 0
         if (percent >= CRITICAL_THRESHOLD) {
             return ctx.theme.text.feedback.error.default
         }
@@ -90,9 +94,11 @@ function ContextProgress(props: { sessionID: string }) {
                 <text fg={ctx.theme.text.subdued}>
                     {detailLine(usage().used, usage().total)}
                 </text>
-                <text fg={tone()}>
-                    {`${buildBar(usage().percent, BAR_WIDTH)} ${usage().percent}%`}
-                </text>
+                <Show when={usage().percent !== undefined}>
+                    <text fg={tone()}>
+                        {`${buildBar(usage().percent!, BAR_WIDTH)} ${usage().percent}%`}
+                    </text>
+                </Show>
             </box>
         </Show>
     )

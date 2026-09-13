@@ -41,9 +41,9 @@ export function totalUsage(tokens: TokenUsageLike | null | undefined): number {
     )
 }
 
-export function usagePercent(used: number, total: number): number {
-    if (!Number.isFinite(used) || !Number.isFinite(total)) return 0
-    if (total <= 0 || used <= 0) return 0
+export function usagePercent(used: number, total: number): number | undefined {
+    if (!Number.isFinite(used) || !Number.isFinite(total)) return undefined
+    if (total <= 0 || used <= 0) return undefined
     return clampPercent((used / total) * 100)
 }
 
