@@ -26,11 +26,11 @@
     padding = 16
     horizontal_padding = 16
     frame_width = 2
-    frame_color = "#d5c4a1"
+    frame_color = "#504945"
     separator_color = frame
     separator_height = 1
 
-    format = "<span weight='bold' foreground='#ebdbb2'>%s</span>\n<span foreground='#a89984'>%b</span>"
+    format = "<span weight='bold' foreground='#d4be98'>%s</span>\n<span foreground='#a89984'>%b</span>"
 
     icon_theme = Papirus-Dark
     enable_recursive_icon_lookup = true
@@ -42,16 +42,16 @@
 
 [urgency_low]
     background = "#1d2021"
-    foreground = "#ebdbb2"
+    foreground = "#d4be98"
     timeout = 5
 
 [urgency_normal]
     background = "#1d2021"
-    foreground = "#ebdbb2"
+    foreground = "#d4be98"
     timeout = 20
 
 [urgency_critical]
     background = "#1d2021"
-    foreground = "#fb4934"
-    frame_color = "#fb4934"
+    foreground = "#ea6962"
+    frame_color = "#ea6962"
     timeout = 0

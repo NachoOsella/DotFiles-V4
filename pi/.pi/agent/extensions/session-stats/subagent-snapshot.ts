@@ -52,6 +52,26 @@ export function buildSubagentSnapshotStats(
     return buildStatsFromSnapshotData(snapshot, file, pricing)
 }
 
+/** Wall-clock age of the latest snapshot in ms, if present. */
+export function getSubagentSnapshotAge(
+    entries: readonly unknown[]
+): number | undefined {
+    const snapshot = findLatestState(entries)
+    const persistedAt =
+        snapshot &&
+        typeof (snapshot as { persistedAt?: unknown }).persistedAt === 'number'
+            ? ((snapshot as { persistedAt: number }).persistedAt as number)
+            : undefined
+    if (
+        persistedAt === undefined ||
+        !Number.isFinite(persistedAt) ||
+        persistedAt <= 0
+    ) {
+        return undefined
+    }
+    return Math.max(0, Date.now() - persistedAt)
+}
+
 /** Build per-agent stats from one snapshot object (pure, testable). */
 export function buildStatsFromSnapshotData(
     data: unknown,

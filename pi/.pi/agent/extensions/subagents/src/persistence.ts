@@ -20,6 +20,16 @@ export function isPersistedState(
     )
 }
 
+/** Wall-clock ms when a snapshot was written, if present. */
+export function snapshotAge(
+    snapshot: PersistedMultiAgentState
+): number | undefined {
+    return typeof snapshot.persistedAt === 'number' &&
+        Number.isFinite(snapshot.persistedAt)
+        ? snapshot.persistedAt
+        : undefined
+}
+
 /** Find the latest persisted snapshot on a session branch. */
 export function findLatestState(
     branch: readonly unknown[]

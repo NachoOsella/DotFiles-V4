@@ -9,7 +9,10 @@ import { matchesKey } from '@earendil-works/pi-tui'
 import { Effect } from 'effect'
 import { showStatsModal } from './modal.ts'
 import { mergeSessionStats } from './aggregate.ts'
-import { buildSubagentSnapshotStats } from './subagent-snapshot.ts'
+import {
+    buildSubagentSnapshotStats,
+    getSubagentSnapshotAge,
+} from './subagent-snapshot.ts'
 import { discoverSessionFiles } from './discovery.ts'
 import {
     buildAllStatsOutput,
@@ -26,7 +29,6 @@ import type {
 } from './types.ts'
 
 const STATUS_KEY = 'session-stats'
-const SUBAGENT_SESSION_PREFIX = 'subagent:'
 const MAX_CONCURRENT_READS = 16
 const pricingResolvers = new WeakMap<object, ModelPricingResolver>()
 
@@ -286,25 +288,18 @@ async function showCurrentSessionStats(
 ): Promise<void> {
     const currentFile = ctx.sessionManager.getSessionFile() ?? 'ephemeral'
     const pricing = createModelPricingResolver(ctx)
+    const entries = ctx.sessionManager.getEntries() as SessionEntryLike[]
     const currentStats = parseCurrentBranch(
-        ctx.sessionManager.getEntries() as SessionEntryLike[],
+        entries,
         currentFile,
         ctx.sessionManager.getSessionName() ?? undefined,
         pricing
     )
-    const subagentStats = await loadCurrentSessionSubagentStats(
-        ctx,
-        currentFile,
-        pricing
-    )
-    // New methodology: in-memory children report accumulated usage through
-    // the subagents snapshot persisted on this branch (never files on disk).
-    const snapshotStats = buildSubagentSnapshotStats(
-        ctx.sessionManager.getEntries() as SessionEntryLike[],
-        currentFile,
-        pricing
-    )
-    const agents = [...snapshotStats, ...subagentStats]
+    // Snapshot-only methodology: in-memory children report accumulated
+    // usage through the subagents snapshot persisted on this branch (never
+    // files on disk). No file discovery here by design.
+    const agents = buildSubagentSnapshotStats(entries, currentFile, pricing)
+    const snapshotAgeMs = getSubagentSnapshotAge(entries)
     const stats = mergeSessionStats(
         [currentStats, ...agents],
         currentFile,
@@ -316,6 +311,7 @@ async function showCurrentSessionStats(
             buildCurrentSessionOutput(stats, width, theme, {
                 mainThread: currentStats,
                 subagents: agents,
+                snapshotAgeMs,
                 contextUsage:
                     typeof ctx.getContextUsage === 'function'
                         ? ctx.getContextUsage()
@@ -323,78 +319,6 @@ async function showCurrentSessionStats(
             }),
         ctx
     )
-}
-
-/** Load child sessions belonging to the current Pi session. */
-async function loadCurrentSessionSubagentStats(
-    ctx: ExtensionCommandContext,
-    currentFile: string,
-    pricing: ModelPricingResolver
-): Promise<SessionStats[]> {
-    if (currentFile === 'ephemeral') return []
-
-    try {
-        const sessions = await discoverSessionFiles()
-        const currentPath = resolve(currentFile)
-        const currentStart = ctx.sessionManager.getHeader()?.timestamp
-        const currentStartTime = currentStart
-            ? Date.parse(currentStart)
-            : Number.NaN
-        const linkedPaths = new Set([currentPath])
-        const linkedChildren = [] as typeof sessions
-        let foundChild = true
-        while (foundChild) {
-            foundChild = false
-            for (const session of sessions) {
-                const sessionPath = resolve(session.path)
-                if (
-                    linkedPaths.has(sessionPath) ||
-                    !session.parentSessionPath ||
-                    !linkedPaths.has(resolve(session.parentSessionPath))
-                ) {
-                    continue
-                }
-                linkedPaths.add(sessionPath)
-                linkedChildren.push(session)
-                foundChild = true
-            }
-        }
-
-        // Keep compatibility with child sessions created before parent links were added.
-        const legacyChildren = sessions.filter(
-            (session) =>
-                !session.parentSessionPath &&
-                !linkedPaths.has(resolve(session.path)) &&
-                session.cwd &&
-                resolve(session.cwd) === resolve(ctx.cwd) &&
-                session.name?.startsWith(SUBAGENT_SESSION_PREFIX) &&
-                (Number.isNaN(currentStartTime) ||
-                    (session.created?.getTime() ?? 0) >= currentStartTime)
-        )
-        const subagentSessions = [...linkedChildren, ...legacyChildren]
-        const parsed = await Effect.runPromise(
-            Effect.forEach(
-                subagentSessions,
-                (session) =>
-                    parseSessionFileEffect(session.path, pricing).pipe(
-                        Effect.map((stats) => ({
-                            ...stats,
-                            ...(session.name ? { name: session.name } : {}),
-                            project: session.cwd || undefined,
-                            parentSessionPath:
-                                session.parentSessionPath ??
-                                stats.parentSessionPath,
-                        })),
-                        Effect.catch(() => Effect.succeed(undefined))
-                    ),
-                { concurrency: MAX_CONCURRENT_READS }
-            )
-        )
-        return parsed.flatMap((stats) => (stats ? [stats] : []))
-    } catch {
-        // Current-session statistics should still work if session discovery fails.
-        return []
-    }
 }
 
 type ParsedCommand =

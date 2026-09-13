@@ -400,6 +400,8 @@ function buildProjectRow(
 export interface CurrentSessionBreakdown {
     mainThread: SessionStats
     subagents: readonly SessionStats[]
+    /** Age of the subagents snapshot in ms (staleness indicator). */
+    snapshotAgeMs?: number
     contextUsage?: CurrentContextUsage
 }
 
@@ -617,6 +619,9 @@ export function buildCurrentSessionOutput(
             ? `${formatNumber(conversationMessages)} messages`
             : '',
         toolCalls > 0 ? `${formatNumber(toolCalls)} tool calls` : '',
+        breakdown?.snapshotAgeMs !== undefined && subagents.length > 0
+            ? `snapshot ${formatSnapshotAge(breakdown.snapshotAgeMs)}`
+            : '',
     ]
         .filter(Boolean)
         .join('  ·  ')
@@ -840,6 +845,16 @@ function formatContextUsage(
 
 function estimatedCostLabel(cost: number): string {
     return cost > 0 ? '~' + fmtCost(cost) : '$0'
+}
+
+function formatSnapshotAge(ageMs: number): string {
+    if (!Number.isFinite(ageMs) || ageMs < 0) return 'unknown age'
+    if (ageMs < 2000) return 'live'
+    const seconds = Math.floor(ageMs / 1000)
+    if (seconds < 60) return `${seconds}s ago`
+    const minutes = Math.floor(seconds / 60)
+    if (minutes < 60) return `${minutes}m ago`
+    return `${Math.floor(minutes / 60)}h ago`
 }
 
 function formatDataQuality(

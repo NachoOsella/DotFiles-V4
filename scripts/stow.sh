@@ -48,6 +48,7 @@ PACKAGES=(
 	"systemd-user"
 	"pi"
 	"pcmanfm-qt"
+	"opencode"
 )
 
 banner() {

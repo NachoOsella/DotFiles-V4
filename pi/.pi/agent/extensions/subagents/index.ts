@@ -9,6 +9,7 @@ import type {
     ExtensionAPI,
     ExtensionContext,
 } from '@earendil-works/pi-coding-agent'
+import { showAgentsModal } from './src/agents-modal.ts'
 import { renderCommunicationText } from './src/communication.ts'
 import { DEFAULT_SUBAGENTS_CONFIG } from './src/config.ts'
 import {
@@ -23,7 +24,14 @@ import {
     SUBAGENTS_STATE_CUSTOM_TYPE,
 } from './src/persistence.ts'
 import { assembleRootPrompt } from './src/prompts.ts'
-import { clearSubagentsWidget, refreshSubagentsWidget } from './src/widget.ts'
+import {
+    clearSubagentsWidget,
+    refreshSubagentsWidget,
+    setSubagentsWidgetDetail,
+    toggleWidgetCollapsed,
+} from './src/widget.ts'
+
+const TOGGLE_WIDGET_SHORTCUT = 'alt+s'
 
 function loadConfig(): typeof DEFAULT_SUBAGENTS_CONFIG {
     const config = { ...DEFAULT_SUBAGENTS_CONFIG }
@@ -79,8 +87,22 @@ export default function subagentsExtension(pi: ExtensionAPI) {
                 },
             })
             manager = new SubagentManager(host, config)
-            manager.onEvent(() => {
-                if (latestCtx) refreshSubagentsWidget(latestCtx, manager!)
+            manager.onEvent((event) => {
+                if (latestCtx && manager) {
+                    try {
+                        refreshSubagentsWidget(latestCtx, manager)
+                    } catch {
+                        // Best-effort widget only.
+                    }
+                }
+                // Snapshot-only methodology: persist right after every
+                // child turn settles so /stats never lags wait_agent.
+                if (
+                    event._tag === 'ActivityCompleted' ||
+                    event._tag === 'ActivityInterrupted'
+                ) {
+                    void persistLive()
+                }
             })
         }
         return manager
@@ -93,6 +115,40 @@ export default function subagentsExtension(pi: ExtensionAPI) {
     for (const tool of definitions) {
         pi.registerTool(tool as never)
     }
+
+    pi.registerShortcut(TOGGLE_WIDGET_SHORTCUT, {
+        description: 'Collapse or expand the subagents widget',
+        handler: async (ctx) => {
+            const nowCollapsed = toggleWidgetCollapsed()
+            refreshSubagentsWidget(ctx, getManager())
+            if (ctx.hasUI) {
+                ctx.ui.notify(
+                    nowCollapsed
+                        ? 'Agents widget: compact.'
+                        : 'Agents widget: expanded.',
+                    'info'
+                )
+            }
+        },
+    })
+
+    pi.registerCommand('agents', {
+        description: 'Inspect subagents. /agents [compact|detailed]',
+        handler: async (args, ctx) => {
+            const mode = args.trim().toLowerCase()
+            if (mode === 'compact' || mode === 'detailed') {
+                setSubagentsWidgetDetail(mode === 'detailed')
+                refreshSubagentsWidget(ctx, getManager())
+                ctx.ui.notify(`Agents widget: ${mode}.`, 'info')
+                return
+            }
+            if (mode !== '') {
+                ctx.ui.notify('Usage: /agents [compact|detailed]', 'warning')
+                return
+            }
+            await showAgentsModal(getManager(), ctx)
+        },
+    })
 
     pi.on('session_start', (event, ctx) => {
         void event
@@ -113,12 +169,41 @@ export default function subagentsExtension(pi: ExtensionAPI) {
         refreshSubagentsWidget(ctx, getManager())
     })
 
-    pi.on('session_shutdown', (_event, ctx) => {
-        clearSubagentsWidget(ctx)
+    pi.on('session_shutdown', (event, ctx) => {
+        void event
         const mgr = manager
         manager = undefined
         latestCtx = undefined
-        if (mgr) void mgr.shutdown()
+        if (!mgr) {
+            try {
+                clearSubagentsWidget(ctx)
+            } catch {
+                // Best-effort teardown.
+            }
+            return
+        }
+        // Final snapshot must include the last delta: flush usage, persist,
+        // then close live sessions.
+        void (async () => {
+            try {
+                await mgr.flushUsage()
+                try {
+                    pi.appendEntry(
+                        SUBAGENTS_STATE_CUSTOM_TYPE,
+                        mgr.serialize(ctx.sessionManager.getSessionId())
+                    )
+                } catch {
+                    // Persistence is best-effort.
+                }
+            } finally {
+                try {
+                    clearSubagentsWidget(ctx)
+                } catch {
+                    // Best-effort teardown.
+                }
+                await mgr.shutdown()
+            }
+        })()
     })
 
     // Steering wakes wait_agent with "interrupted by new input".
@@ -172,6 +257,27 @@ export default function subagentsExtension(pi: ExtensionAPI) {
     const persist = (ctx: ExtensionContext) => {
         const mgr = manager
         if (!mgr) return
+        try {
+            pi.appendEntry(
+                SUBAGENTS_STATE_CUSTOM_TYPE,
+                mgr.serialize(ctx.sessionManager.getSessionId())
+            )
+        } catch {
+            // Persistence is best-effort.
+        }
+    }
+    // Live flush used by subagent lifecycle events: capture usage first so
+    // the snapshot never lags a settled child turn (snapshot-only /stats).
+    // Function declaration (hoisted) so getManager() can reference it.
+    async function persistLive() {
+        const ctx = latestCtx
+        const mgr = manager
+        if (!ctx || !mgr) return
+        try {
+            await mgr.flushUsage()
+        } catch {
+            // Fall through with last known totals.
+        }
         try {
             pi.appendEntry(
                 SUBAGENTS_STATE_CUSTOM_TYPE,

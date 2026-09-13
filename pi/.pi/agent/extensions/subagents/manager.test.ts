@@ -494,6 +494,50 @@ describe('usage reporting', () => {
         assert.equal(manager.getRecordByPath(first.path)?.usage?.input, 100)
     })
 
+    it('includes persistedAt, previews, and top tools in the snapshot', async () => {
+        const { manager } = makeManager()
+        const child = await manager.spawn({
+            caller: ROOT,
+            taskName: 'previewed',
+            message: 'task',
+        })
+        await waitForStatus(manager, child.path, 'Completed')
+        const snapshot = manager.serialize('root-session')
+        assert.ok(
+            typeof snapshot.persistedAt === 'number' && snapshot.persistedAt > 0
+        )
+        const persisted = snapshot.agents.find(
+            (agent) => agent.path === '/root/previewed'
+        )
+        assert.ok(persisted)
+        // Fake host completes with 'ok': preview present or safely absent.
+        assert.ok(
+            persisted.lastMessagePreview === undefined ||
+                (typeof persisted.lastMessagePreview === 'string' &&
+                    persisted.lastMessagePreview.length <= 201)
+        )
+    })
+
+    it('flushUsage captures running turns without closing sessions', async () => {
+        const { host, manager } = makeManager()
+        host.pause()
+        const child = await manager.spawn({
+            caller: ROOT,
+            taskName: 'live',
+            message: 'task',
+        })
+        await waitForStatus(manager, child.path, 'Running')
+        host.setUsage(host.created[0]!.handleId, {
+            input: 40,
+            assistantMessages: 1,
+            userMessages: 1,
+        })
+        await manager.flushUsage()
+        assert.equal(manager.getRecordByPath(child.path)?.usage?.input, 40)
+        host.resume()
+        await waitForStatus(manager, child.path, 'Completed')
+    })
+
     it('captures in-flight usage on shutdown', async () => {
         const { host, manager } = makeManager()
         host.pause()

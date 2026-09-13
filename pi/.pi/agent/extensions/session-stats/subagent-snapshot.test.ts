@@ -7,6 +7,7 @@ import { parseSessionFile } from './parser.ts'
 import {
     buildStatsFromSnapshotData,
     buildSubagentSnapshotStats,
+    getSubagentSnapshotAge,
 } from './subagent-snapshot.ts'
 import type { ModelPricingResolver } from './types.ts'
 
@@ -204,4 +205,40 @@ test('parser folds snapshot usage into persisted file totals', async () => {
     } finally {
         await rm(dir, { recursive: true, force: true })
     }
+})
+
+test('running and nested agents with usage are included', () => {
+    const entries = [
+        snapshotEntry([
+            agent('/root/worker', usage(), { statusTag: 'Running' }),
+            agent('/root/worker/nested', usage({ input: 20, output: 10 }), {
+                statusTag: 'Running',
+            }),
+        ]),
+    ]
+    const stats = buildSubagentSnapshotStats(entries, FILE)
+    assert.equal(stats.length, 2)
+    assert.ok(stats.some((s) => s.name === '/root/worker'))
+    assert.ok(stats.some((s) => s.name === '/root/worker/nested'))
+})
+
+test('snapshot age is undefined without persistedAt and live when fresh', () => {
+    assert.equal(
+        getSubagentSnapshotAge([snapshotEntry([agent('/root/a', usage())])]),
+        undefined
+    )
+    const fresh = [
+        {
+            type: 'custom',
+            customType: 'subagents-v2-state',
+            data: {
+                version: 1,
+                rootSessionId: 'root-1',
+                persistedAt: Date.now(),
+                agents: [agent('/root/a', usage())],
+            },
+        },
+    ]
+    const age = getSubagentSnapshotAge(fresh)
+    assert.ok(age !== undefined && age < 2000)
 })

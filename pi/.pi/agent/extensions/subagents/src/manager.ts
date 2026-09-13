@@ -585,31 +585,53 @@ export class SubagentManager {
         for (const set of this.steerWaiters.values()) set.clear()
     }
 
+    /**
+     * Capture latest usage from all live sessions without tearing them
+     * down. Call before serialize() so snapshots never lag a turn.
+     * Best-effort: usage must never break persist.
+     */
+    async flushUsage(): Promise<void> {
+        await Promise.all(
+            [...this.runtimes.keys()].map((id) => this.captureUsage(id))
+        )
+    }
+
     /** Serialize logical state for cold resume (no live handles). */
     serialize(rootSessionId: string): PersistedMultiAgentState {
+        const agents = [...this.records.values()]
+            .filter((r) => r.path !== ('/root' as AgentPath))
+            .sort((a, b) => b.lastActivityAt - a.lastActivityAt)
+            .slice(0, 50)
+            .sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0))
+            .map((r) => ({
+                id: r.id,
+                path: r.path,
+                parentId: r.parentId,
+                model: r.model,
+                role: r.role,
+                reasoningEffort: r.reasoningEffort,
+                statusTag: r.status._tag,
+                statusMessage:
+                    r.status._tag === 'Completed'
+                        ? (r.status.message ?? undefined)
+                        : r.status._tag === 'Errored'
+                          ? r.status.error
+                          : undefined,
+                createdAt: r.createdAt,
+                lastActivityAt: r.lastActivityAt,
+                ...(r.usage ? { usage: r.usage } : {}),
+                ...(previewOf(r.status)
+                    ? { lastMessagePreview: previewOf(r.status) }
+                    : {}),
+                ...(topToolsOf(r.usage)
+                    ? { lastTools: topToolsOf(r.usage) }
+                    : {}),
+            }))
         return {
             version: 1,
             rootSessionId,
-            agents: [...this.records.values()]
-                .filter((r) => r.path !== ('/root' as AgentPath))
-                .map((r) => ({
-                    id: r.id,
-                    path: r.path,
-                    parentId: r.parentId,
-                    model: r.model,
-                    role: r.role,
-                    reasoningEffort: r.reasoningEffort,
-                    statusTag: r.status._tag,
-                    statusMessage:
-                        r.status._tag === 'Completed'
-                            ? (r.status.message ?? undefined)
-                            : r.status._tag === 'Errored'
-                              ? r.status.error
-                              : undefined,
-                    createdAt: r.createdAt,
-                    lastActivityAt: r.lastActivityAt,
-                    ...(r.usage ? { usage: r.usage } : {}),
-                })),
+            persistedAt: Date.now(),
+            agents,
         }
     }
 
@@ -944,12 +966,45 @@ export interface PersistedAgentSnapshot {
     readonly createdAt: number
     readonly lastActivityAt: number
     readonly usage?: AgentUsageTotals
+    /** Truncated final/error text for TUI previews (max 200 chars). */
+    readonly lastMessagePreview?: string
+    /** Top tool names by count for TUI previews (max 5). */
+    readonly lastTools?: readonly string[]
 }
 
 export interface PersistedMultiAgentState {
     readonly version: 1
     readonly rootSessionId: string
+    /** Wall-clock ms when the snapshot was written (staleness indicator). */
+    readonly persistedAt?: number
     readonly agents: readonly PersistedAgentSnapshot[]
+}
+
+const PREVIEW_CHARS = 200
+
+function previewOf(status: AgentRecord['status']): string | undefined {
+    const raw =
+        status._tag === 'Completed'
+            ? (status.message ?? '')
+            : status._tag === 'Errored'
+              ? status.error
+              : ''
+    const trimmed = raw.trim().replace(/\s+/g, ' ')
+    if (!trimmed) return undefined
+    return trimmed.length > PREVIEW_CHARS
+        ? `${trimmed.slice(0, PREVIEW_CHARS)}…`
+        : trimmed
+}
+
+function topToolsOf(
+    usage: AgentUsageTotals | undefined
+): readonly string[] | undefined {
+    if (!usage || usage.toolCalls.length === 0) return undefined
+    const top = [...usage.toolCalls]
+        .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name))
+        .slice(0, 5)
+        .map((entry) => entry.name)
+    return top.length > 0 ? top : undefined
 }
 
 function persistedStatus(

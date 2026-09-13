@@ -1,0 +1,196 @@
+openapi: 3.1.0
+info:
+  title: {{API_TITLE}}
+  description: >
+    {{API_DESCRIPTION}}
+  version: {{API_VERSION}}
+  contact:
+    name: {{CONTACT_NAME}}
+    email: {{CONTACT_EMAIL}}
+  license:
+    name: {{LICENSE_NAME}}
+    url: {{LICENSE_URL}}
+
+servers:
+  - url: {{SERVER_URL}}
+    description: {{SERVER_DESCRIPTION}}
+
+paths:
+  /{{RESOURCE_PLURAL}}:
+    get:
+      summary: List all {{RESOURCE_PLURAL}}
+      description: >
+        Returns a paginated list of {{RESOURCE_PLURAL}}. Supports filtering,
+        sorting, and field selection via query parameters.
+      operationId: list{{RESOURCE_NAME}}s
+      tags:
+        - {{RESOURCE_PLURAL}}
+      parameters:
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+          description: Page number for pagination.
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+            maximum: 100
+          description: Number of items per page.
+      responses:
+        "200":
+          description: A list of {{RESOURCE_PLURAL}}.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/{{RESOURCE_NAME}}"
+                  meta:
+                    type: object
+                    properties:
+                      page:
+                        type: integer
+                      limit:
+                        type: integer
+                      total:
+                        type: integer
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+    post:
+      summary: Create a new {{RESOURCE_NAME}}
+      description: >
+        Creates a {{RESOURCE_NAME}} with the provided payload. All required
+        fields must be present.
+      operationId: create{{RESOURCE_NAME}}
+      tags:
+        - {{RESOURCE_PLURAL}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/{{RESOURCE_NAME}}Create"
+      responses:
+        "201":
+          description: {{RESOURCE_NAME}} created successfully.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/{{RESOURCE_NAME}}"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+
+  /{{RESOURCE_PLURAL}}/{id}:
+    get:
+      summary: Get a {{RESOURCE_NAME}} by ID
+      operationId: get{{RESOURCE_NAME}}ById
+      tags:
+        - {{RESOURCE_PLURAL}}
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Unique identifier of the {{RESOURCE_NAME}}.
+      responses:
+        "200":
+          description: The requested {{RESOURCE_NAME}}.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/{{RESOURCE_NAME}}"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+components:
+  schemas:
+    {{RESOURCE_NAME}}:
+      type: object
+      required:
+        - id
+        - name
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+          description: Unique identifier.
+        name:
+          type: string
+          minLength: 1
+          maxLength: 255
+          description: Human-readable name.
+        createdAt:
+          type: string
+          format: date-time
+          readOnly: true
+          description: Timestamp when the resource was created.
+
+    {{RESOURCE_NAME}}Create:
+      type: object
+      required:
+        - name
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 255
+          description: Human-readable name.
+
+  responses:
+    BadRequest:
+      description: Malformed request.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
+    NotFound:
+      description: Resource not found.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
+    ValidationError:
+      description: Input validation failed.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
+    InternalError:
+      description: Unexpected server error.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
+  schemas:
+    Error:
+      type: object
+      required:
+        - code
+        - message
+      properties:
+        code:
+          type: string
+          description: Machine-readable error code.
+        message:
+          type: string
+          description: Human-readable error description.
+        details:
+          type: object
+          description: Optional additional error context.

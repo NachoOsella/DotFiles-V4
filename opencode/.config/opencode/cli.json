@@ -1,0 +1,41 @@
+{
+  "$schema": "https://opencode.ai/v2/cli.json",
+  "theme": {
+    "name": "gruvbox-material-dark-hard",
+    "mode": "dark"
+  },
+  "diffs": {
+    "wrap": "none",
+    "view": "unified"
+  },
+  "session": {
+    "sidebar": "auto",
+    "scrollbar": true,
+    "thinking": "show",
+    "permissions": "autoaccept",
+    "markdown": "rendered",
+    "new_location": "launch"
+  },
+  "animations": true,
+  "scroll": {
+    "speed": 4,
+    "acceleration": true
+  },
+  "prompt": {
+    "image_preview": true
+  },
+  "terminal": {
+    "title": true
+  },
+  "tabs": {
+    "layout": "horizontal",
+    "indicators": "status"
+  },
+  "attention": {
+    "notifications": false,
+    "sound": false
+  },
+  "debug": {
+    "devtools": false
+  }
+}

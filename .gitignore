@@ -44,3 +44,6 @@ pi/.pi/agent/skills/jira-admin/config/project.json
 
 # KeePassXC local config can contain KeeShare private keys
 keepassxc/.config/keepassxc/keepassxc.ini
+
+# OpenCode local service state (contains password)
+opencode/.config/opencode/service.json

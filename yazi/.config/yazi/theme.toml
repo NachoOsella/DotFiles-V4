@@ -1,9 +1,9 @@
 # ~/.config/yazi/theme.toml
 # Gruvbox Material - Dark Hard
-# Base (Hard): bg=#1d2021, fg=#d4be98, gray=#928374, border=#665c54
+# Base (Hard): bg=#1d2021, fg=#d4be98, gray=#928374, border=#504945
 # Accents: red=#ea6962, orange=#e78a4e, yellow=#d8a657, green=#a9b665,
 #          blue=#7daea3, purple=#d3869b, cyan=#89b482
-# UI backgrounds (Material): bg0=#282828 bg1=#32302f bg2=#3a3735 bg3=#45403d bg4=#504945 (useful for panels) :contentReference[oaicite:3]{index=3}
+# UI backgrounds (Material Hard): bg0=#1d2021 bg1=#282828 bg2=#32302f bg3=#3c3836 bg4=#504945
 
 # -------------------------------------------------------------------
 # App background (OSC 11)
@@ -16,7 +16,7 @@ overall = { bg = "#1d2021" } # requires OSC 11 support :contentReference[oaicite
 # Manager
 # -------------------------------------------------------------------
 [mgr]
-cwd           = { fg = "#7daea3", bold = true }
+cwd           = { fg = "#a9b665", bold = true }
 
 find_keyword  = { fg = "#a9b665", italic = true }
 find_position = { fg = "#e78a4e", italic = true }
@@ -31,13 +31,13 @@ count_copied    = { fg = "#7daea3", bold = true }
 count_cut       = { fg = "#ea6962", bold = true }
 
 border_symbol = "│"
-border_style  = { fg = "#665c54" }
+border_style  = { fg = "#504945" }
 
 # -------------------------------------------------------------------
 # Pane indicator bars
 # -------------------------------------------------------------------
 [indicator]
-parent  = { fg = "#45403d", bg = "#1d2021" }
+parent  = { fg = "#504945", bg = "#1d2021" }
 current = { fg = "#1d2021", bg = "#a9b665", bold = true }
 preview = { fg = "#1d2021", bg = "#d8a657", bold = true }
 
@@ -75,14 +75,14 @@ sep_left  = { open = "", close = "" }
 sep_right = { open = "", close = "" }
 
 progress_label  = { fg = "#d4be98", bold = true }
-progress_normal = { fg = "#504945", bg = "#3a3735" }
-progress_error  = { fg = "#ea6962", bg = "#3a3735" }
+progress_normal = { fg = "#504945", bg = "#32302f" }
+progress_error  = { fg = "#ea6962", bg = "#32302f" }
 
 perm_type  = { fg = "#928374" }
 perm_read  = { fg = "#a9b665" }
-perm_write = { fg = "#ea6962" }
-perm_exec  = { fg = "#d8a657" }
-perm_sep   = { fg = "#665c54" }
+perm_write = { fg = "#d8a657" }
+perm_exec  = { fg = "#ea6962" }
+perm_sep   = { fg = "#504945" }
 
 # -------------------------------------------------------------------
 # Which
@@ -94,13 +94,13 @@ cand  = { fg = "#7daea3", bold = true }
 rest  = { fg = "#928374" }
 desc  = { fg = "#e78a4e" }
 separator = "  "
-separator_style = { fg = "#665c54" }
+separator_style = { fg = "#504945" }
 
 # -------------------------------------------------------------------
 # Confirm / Spot / Notify
 # -------------------------------------------------------------------
 [confirm]
-border = { fg = "#665c54" }
+border = { fg = "#504945" }
 title  = { fg = "#d8a657", bold = true }
 body   = { fg = "#d4be98" }
 list   = { fg = "#928374" }
@@ -110,7 +110,7 @@ btn_labels = ["Yes", "No"]
 
 
 [spot]
-border = { fg = "#665c54" }
+border = { fg = "#504945" }
 title  = { fg = "#d8a657", bold = true }
 
 # Do not color the full column background (removes the "gray block")
@@ -128,18 +128,18 @@ title_error = { fg = "#ea6962", bold = true }
 # Pick / Input / Completion
 # -------------------------------------------------------------------
 [pick]
-border   = { fg = "#665c54" }
+border   = { fg = "#504945" }
 active   = { fg = "#1d2021", bg = "#7daea3", bold = true }
 inactive = { fg = "#d4be98" }
 
 [input]
-border   = { fg = "#665c54" }
+border   = { fg = "#504945" }
 title    = { fg = "#d8a657", bold = true }
 value    = { fg = "#d4be98" }
 selected = { reversed = true }
 
 [cmp]
-border       = { fg = "#665c54" }
+border       = { fg = "#504945" }
 active       = { fg = "#1d2021", bg = "#504945" }
 inactive     = { fg = "#928374" }
 icon_file    = "󰈙"
@@ -150,7 +150,7 @@ icon_command = ""
 # Tasks / Help
 # -------------------------------------------------------------------
 [tasks]
-border  = { fg = "#665c54" }
+border  = { fg = "#504945" }
 title   = { fg = "#7daea3", bold = true }
 hovered = { fg = "#1d2021", bg = "#504945", bold = true }
 
@@ -170,7 +170,7 @@ icon_error = ""
 [filetype]
 rules = [
   # Directories
-  { url = "*/", fg = "#7daea3", bold = true },
+  { url = "*/", fg = "#a9b665", bold = true },
 
   # Images / media
   { mime = "image/*",           fg = "#d8a657" },
@@ -186,7 +186,7 @@ rules = [
   { mime = "application/x-rar",           fg = "#e78a4e" },
 
   # Executables / links
-  { url = "*", is = "exec",   fg = "#a9b665", bold = true },
+  { url = "*", is = "exec",   fg = "#ea6962", bold = true },
   { url = "*", is = "link",   fg = "#89b482" },
   { url = "*", is = "orphan", fg = "#ea6962", bold = true },
 ]
@@ -198,5 +198,5 @@ rules = [
 # Workaround for catppuccin/yazi#35 and similar cases:
 # force directory icon color via glob (high priority).
 prepend_globs = [
-  { url = "*/", text = "", fg = "#7daea3" },
+  { url = "*/", text = "", fg = "#a9b665" },
 ]

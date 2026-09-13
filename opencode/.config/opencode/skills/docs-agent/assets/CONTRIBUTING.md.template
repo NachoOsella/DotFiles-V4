@@ -1,0 +1,69 @@
+# Contributing to {{PROJECT_NAME}}
+
+Thank you for your interest in contributing. This document covers setup, workflow, and standards.
+
+## Development Setup
+
+```bash
+# Clone the repository
+git clone {{REPO_URL}}
+cd {{PROJECT_DIR}}
+
+# Install dependencies
+{{INSTALL_COMMAND}}
+
+# Run the test suite
+{{TEST_COMMAND}}
+```
+
+## Branching Strategy
+
+- `main` — production-ready code
+- `develop` — integration branch for the next release
+- Feature branches: `feature/short-description`
+- Bugfix branches: `fix/issue-number-short-description`
+
+## Commit Messages
+
+Follow [Conventional Commits](https://www.conventionalcommits.org/):
+
+```
+<type>(<scope>): <description>
+
+[optional body]
+
+[optional footer]
+```
+
+Types: `feat`, `fix`, `docs`, `style`, `refactor`, `test`, `chore`
+
+## Pull Request Process
+
+1. Ensure your branch is up to date with the target branch.
+2. Add or update tests for any changed functionality.
+3. Update relevant documentation (README, docstrings, API specs).
+4. Verify all checks pass: linting, type checking, tests.
+5. Request review from at least one maintainer.
+6. Squash fixup commits before merging if requested.
+
+## Code Style
+
+- Follow the existing formatting in each file.
+- Run the formatter before committing: `{{FORMAT_COMMAND}}`.
+- Run the linter before committing: `{{LINT_COMMAND}}`.
+
+## Documentation Requirements
+
+- All public functions, classes, and modules must have docstrings.
+- Complex logic must include inline comments explaining *why*, not *what*.
+- Update `README.md` if user-facing behavior changes.
+- Update `openapi.yaml` if API contracts change.
+
+## Reporting Issues
+
+Use the issue templates provided. Include:
+
+- Steps to reproduce
+- Expected vs actual behavior
+- Environment details (OS, language version, dependency versions)
+- Minimal code sample if applicable
