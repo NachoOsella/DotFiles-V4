@@ -13,7 +13,8 @@ There is no extension mailbox and no extension turn scheduler.
 spawn_agent submits exactly one NEW_TASK custom message.
 send_message never starts an idle turn.
 followup_task steers a running session and starts an idle session.
-FINAL_ANSWER goes only to the direct parent with triggerTurn=false.
+FINAL_ANSWER goes only to the direct parent, delivered as a steer
+(triggerTurn=true) so a running parent ingests it mid-run.
 wait_agent synchronizes only; it never consumes or returns message content.
 Interrupted != destroyed.
 Completed != destroyed.
@@ -60,6 +61,16 @@ queue implementation.
 Pi has no typed inter-agent `agent_message` channel. Custom messages therefore
 become user messages when converted for an LLM request. This is an explicit
 host gap, not an emulated protocol claim.
+
+Delivery must steer, not queue: Pi's agent loop builds each turn from a local
+context copy and only ingests mid-run input through its steering queue.
+A `triggerTurn:false` custom message lands in session state (visible in the
+transcript, persisted) while the running parent's next requests never include
+it; it surfaces only on the next user prompt. Completion delivery therefore
+uses `triggerTurn:true` with `deliverAs:"steer"`. Plain `send_message` keeps
+its never-starts-a-turn contract via split delivery: it steers when the
+target is streaming (joining the live run without starting one) and appends
+queue-only when the target is idle (read on its next activation).
 
 ## Persistence and forks
 

@@ -47,7 +47,11 @@ import type { ParentExecutionSnapshot } from './parent-snapshot.ts'
 import { resolveRole } from './roles.ts'
 import { AgentMutex, type AgentRuntime } from './agent-runtime.ts'
 import { ExecutionLimiter } from './execution-limiter.ts'
-import { childEndpoint, type CommunicationEndpoint } from './transport.ts'
+import {
+    childEndpoint,
+    type CommunicationEndpoint,
+    type DeliveryOptions,
+} from './transport.ts'
 import {
     SessionFactory,
     type SubagentSessionFactory,
@@ -103,6 +107,8 @@ export interface SubagentCoordinatorOptions {
     readonly getModelRegistry: () => import('@earendil-works/pi-coding-agent').ModelRegistry
     readonly buildTools: (caller: AgentPath) => readonly unknown[]
     readonly sessionFactory?: SubagentSessionFactory
+    /** Live check used to route root-bound messages (steer vs append). */
+    readonly isRootStreaming?: () => boolean
 }
 
 const WAIT_COMPLETED = 'Wait completed.'
@@ -359,6 +365,7 @@ export class SubagentCoordinator {
             lastActivityAt: Date.now(),
             runSequence: 0,
             initiatingTurnId: newTurnId() as string,
+            task: options.message,
             forkKind: fork._tag,
         }
         let initialization!: Promise<AgentRuntime>
@@ -424,7 +431,7 @@ export class SubagentCoordinator {
             sourceCallId: args.callId,
         })
         await this.mutex(target.id).runExclusive(async () => {
-            await endpoint.send(comm, { triggerTurn: false })
+            await endpoint.send(comm, this.messageDelivery(target.id))
         })
         this.touch(target.id)
         this.waitHub.notifyMailbox(target.path as string)
@@ -583,6 +590,7 @@ export class SubagentCoordinator {
                     lastDeliveredRunSequence: record.lastDeliveredRunSequence,
                     pendingCompletions: record.pendingCompletions,
                     lastResult: record.lastResult,
+                    task: record.task,
                     legacyUnresumable: record.legacyUnresumable,
                     usage: record.usage,
                 })),
@@ -656,6 +664,7 @@ export class SubagentCoordinator {
                 lastDeliveredRunSequence: persisted.lastDeliveredRunSequence,
                 pendingCompletions: persisted.pendingCompletions,
                 lastResult: persisted.lastResult,
+                task: persisted.task,
                 legacyUnresumable: persisted.legacyUnresumable,
                 usage: persisted.usage,
             }
@@ -826,7 +835,14 @@ export class SubagentCoordinator {
         const parent = this.getRecordByPath(communication.recipient)
         if (!parent) throw new AgentNotFoundError(communication.recipient)
         const endpoint = await this.endpointFor(parent.id)
-        await endpoint.send(communication, { triggerTurn: false })
+        // Steer, never queue-only: Pi's agent loop works on a local context
+        // copy and only ingests mid-run input through its steering queue.
+        // A triggerTurn:false custom message would sit in session state,
+        // visible in the transcript, while the running parent never sees it.
+        await endpoint.send(communication, {
+            triggerTurn: true,
+            delivery: 'steer',
+        })
         this.setRecord(childId, (previous) => ({
             ...previous,
             lastDeliveredRunSequence: sequence,
@@ -875,7 +891,7 @@ export class SubagentCoordinator {
                     author: item.author,
                     recipient: item.recipient,
                     payload: item.payload,
-                    triggerTurn: false,
+                    triggerTurn: true,
                 })
             } catch {
                 // Keep the durable outbox entry for the next load or root start.
@@ -883,8 +899,29 @@ export class SubagentCoordinator {
         }
     }
 
+    /**
+     * Queue-only delivery never starts an idle turn, but a running Pi loop
+     * only ingests mid-run input through its steering queue: steer when the
+     * target is streaming so a busy receiver sees the note before its next
+     * response, and append without triggering when it is idle.
+     */
+    private messageDelivery(id: AgentId): DeliveryOptions {
+        const streaming =
+            id === this.rootId
+                ? (this.options.isRootStreaming?.() ?? false)
+                : (this.runtimes.get(id)?.session.isStreaming ?? false)
+        return streaming
+            ? { triggerTurn: true, delivery: 'steer' }
+            : { triggerTurn: false }
+    }
+
     private async endpointFor(id: AgentId): Promise<CommunicationEndpoint> {
-        if (id === this.rootId) return this.options.rootEndpoint
+        // Resolve by canonical path as well as identity. A restored or
+        // rehydrated registry must never try to open /root as a child session.
+        const record = this.records.get(id)
+        if (id === this.rootId || record?.path === ROOT_PATH) {
+            return this.options.rootEndpoint
+        }
         const runtime = await this.ensureLoaded(id)
         return runtime.endpoint!
     }

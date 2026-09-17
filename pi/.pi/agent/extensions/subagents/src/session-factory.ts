@@ -21,6 +21,14 @@ import { assembleChildPrompt } from './prompts.ts'
 import { resolveRole } from './roles.ts'
 import { resolveConfiguredMode } from './mode.ts'
 import {
+    TOOL_FOLLOWUP_TASK,
+    TOOL_INTERRUPT_AGENT,
+    TOOL_LIST_AGENTS,
+    TOOL_SEND_MESSAGE,
+    TOOL_SPAWN_AGENT,
+    TOOL_WAIT_AGENT,
+} from './tool-specs.ts'
+import {
     makeAgentRuntime,
     type AgentRuntime,
     type LiveActivity,
@@ -127,13 +135,29 @@ export class SessionFactory implements SubagentSessionFactory {
         }
     ): Promise<AgentRuntime> {
         const model = resolveModel(this.options.getModelRegistry(), state.model)
-        const customTools = this.options.buildTools(record.path) as never[]
-        // Agents at the nesting limit must not receive a tool they cannot use.
-        const tools = unique([...state.activeTools]).filter(
+        const disallowedCollaborationTools = collaborationToolNames().filter(
             (tool) =>
-                tool !== 'spawn_agent' ||
-                nestingDepth(record.path) < this.options.config.maxDepth
+                !isCollaborationToolAllowed(
+                    tool,
+                    record.path,
+                    this.options.config
+                )
         )
+        const disallowed = new Set(disallowedCollaborationTools)
+        const customTools = this.options
+            .buildTools(record.path)
+            .filter((tool) => {
+                const name = toolName(tool)
+                return name === undefined || !disallowed.has(name)
+            }) as never[]
+        // Pi treats `tools` as an allowlist for built-in and custom tools. Keep
+        // inherited tools while adding permitted child collaboration tools.
+        const tools = unique([
+            ...state.activeTools,
+            ...customTools
+                .map(toolName)
+                .filter((name): name is string => name !== undefined),
+        ]).filter((tool) => !disallowed.has(tool))
         const resourceLoader = await this.createResourceLoader(
             state.cwd,
             record
@@ -146,6 +170,7 @@ export class SessionFactory implements SubagentSessionFactory {
             model,
             thinkingLevel: state.thinkingLevel,
             tools,
+            excludeTools: disallowedCollaborationTools,
         })
         return makeAgentRuntime({
             path: record.path,
@@ -224,6 +249,35 @@ function resolveModel(registry: ModelRegistry, identity: ModelIdentity) {
 
 function unique(values: readonly string[]): string[] {
     return [...new Set(values)]
+}
+
+function collaborationToolNames(): string[] {
+    return [
+        TOOL_SPAWN_AGENT,
+        TOOL_SEND_MESSAGE,
+        TOOL_FOLLOWUP_TASK,
+        TOOL_WAIT_AGENT,
+        TOOL_INTERRUPT_AGENT,
+        TOOL_LIST_AGENTS,
+    ]
+}
+
+function isCollaborationToolAllowed(
+    tool: string,
+    path: AgentRecord['path'],
+    config: CodexSubagentsConfig
+): boolean {
+    if (tool === TOOL_SPAWN_AGENT) {
+        return nestingDepth(path) < config.maxDepth
+    }
+    if (tool === TOOL_WAIT_AGENT) return config.waitAgentEnabled
+    return true
+}
+
+function toolName(tool: unknown): string | undefined {
+    if (!tool || typeof tool !== 'object') return undefined
+    const name = (tool as { name?: unknown }).name
+    return typeof name === 'string' ? name : undefined
 }
 
 function nestingDepth(path: AgentRecord['path']): number {

@@ -116,6 +116,7 @@ interface Harness {
     readonly sessions: Map<string, FakeSession>
     readonly opens: { count: number }
     readonly rootMessages: InterAgentCommunication[]
+    readonly rootDeliveries: DeliveryOptions[]
 }
 
 function createHarness(options?: {
@@ -127,10 +128,12 @@ function createHarness(options?: {
     finalGate?: Deferred<void>
     onFinalStarted?: () => void
     roles?: typeof DEFAULT_SUBAGENTS_CONFIG.roles
+    isRootStreaming?: () => boolean
 }): Harness {
     const sessions = new Map<string, FakeSession>()
     const opens = { count: 0 }
     const rootMessages: InterAgentCommunication[] = []
+    const rootDeliveries: DeliveryOptions[] = []
     const rootSnapshot: ParentExecutionSnapshot = {
         path: ROOT_PATH,
         cwd: '/repo',
@@ -168,9 +171,10 @@ function createHarness(options?: {
         path: ROOT_PATH,
         async send(
             communication: InterAgentCommunication,
-            _options: DeliveryOptions
+            sendOptions: DeliveryOptions
         ) {
             rootMessages.push(communication)
+            rootDeliveries.push(sendOptions)
             if (communication.kind === 'result' && options?.finalGate) {
                 options.onFinalStarted?.()
                 await options.finalGate.promise
@@ -192,8 +196,9 @@ function createHarness(options?: {
         getModelRegistry: () => ({}) as never,
         buildTools: () => [],
         sessionFactory: factory,
+        isRootStreaming: options?.isRootStreaming,
     })
-    return { coordinator, sessions, opens, rootMessages }
+    return { coordinator, sessions, opens, rootMessages, rootDeliveries }
 }
 
 function restoreOne(
@@ -421,8 +426,131 @@ test('child send_message to root uses the root endpoint without opening a sessio
     assert.equal(harness.opens.count, 0)
     assert.equal(harness.rootMessages.at(-1)?.kind, 'message')
     assert.equal(harness.rootMessages.at(-1)?.payload, 'progress')
+    assert.deepEqual(harness.rootDeliveries.at(-1), { triggerTurn: false })
     harness.sessions.get('/root/a')?.finishRun()
     await harness.coordinator.shutdown()
+})
+
+test('nested completion delivery steers the loaded parent session', async () => {
+    const harness = createHarness()
+    await harness.coordinator.spawn({
+        caller: ROOT_PATH,
+        taskName: 'parent',
+        message: 'parent task',
+    })
+    await harness.coordinator.spawn({
+        caller: '/root/parent' as AgentPath,
+        taskName: 'worker',
+        message: 'worker task',
+    })
+    harness.sessions.get('/root/parent/worker')?.finishRun()
+    await new Promise((resolve) => setImmediate(resolve))
+    await new Promise((resolve) => setImmediate(resolve))
+
+    const parent = harness.sessions.get('/root/parent')!
+    const delivery = parent.customMessages.find((entry) => {
+        const message = (entry as { message?: { content?: unknown } }).message
+        return String(message?.content).includes('FINAL_ANSWER')
+    }) as
+        { options?: { triggerTurn?: boolean; deliverAs?: string } } | undefined
+    assert.ok(delivery, 'parent session never received the FINAL_ANSWER')
+    assert.equal(delivery?.options?.triggerTurn, true)
+    assert.equal(delivery?.options?.deliverAs, 'steer')
+
+    parent.finishRun()
+    await harness.coordinator.shutdown()
+})
+
+test('send_message steers a streaming target but never starts an idle one', async () => {
+    const harness = createHarness()
+    await harness.coordinator.spawn({
+        caller: ROOT_PATH,
+        taskName: 'a',
+        message: 'start',
+    })
+    const session = harness.sessions.get('/root/a')!
+    assert.equal(session.runCalls, 1)
+
+    await harness.coordinator.sendMessage({
+        caller: ROOT_PATH,
+        target: '/root/a',
+        message: 'note while busy',
+    })
+    const steered = session.customMessages.at(-1) as {
+        options?: { triggerTurn?: boolean; deliverAs?: string }
+    }
+    assert.equal(steered.options?.triggerTurn, true)
+    assert.equal(steered.options?.deliverAs, 'steer')
+    assert.equal(session.runCalls, 1)
+
+    session.finishRun()
+    await new Promise((resolve) => setImmediate(resolve))
+    await harness.coordinator.sendMessage({
+        caller: ROOT_PATH,
+        target: '/root/a',
+        message: 'note while idle',
+    })
+    const appended = session.customMessages.at(-1) as {
+        options?: { triggerTurn?: boolean }
+    }
+    assert.ok(!appended.options?.triggerTurn)
+    assert.equal(session.runCalls, 1)
+    assert.equal(session.isStreaming, false)
+    await harness.coordinator.shutdown()
+})
+
+test('send_message to a busy root steers, to an idle root appends', async () => {
+    const streaming = { current: true }
+    const harness = createHarness({ isRootStreaming: () => streaming.current })
+    await harness.coordinator.spawn({
+        caller: ROOT_PATH,
+        taskName: 'a',
+        message: 'start',
+    })
+    await harness.coordinator.sendMessage({
+        caller: '/root/a' as AgentPath,
+        target: '/root',
+        message: 'note while root busy',
+    })
+    assert.deepEqual(harness.rootDeliveries.at(-1), {
+        triggerTurn: true,
+        delivery: 'steer',
+    })
+
+    streaming.current = false
+    await harness.coordinator.sendMessage({
+        caller: '/root/a' as AgentPath,
+        target: '/root',
+        message: 'note while root idle',
+    })
+    assert.deepEqual(harness.rootDeliveries.at(-1), { triggerTurn: false })
+    harness.sessions.get('/root/a')?.finishRun()
+    await harness.coordinator.shutdown()
+})
+
+test('spawn stores the initial task and it survives serialize/restore', async () => {
+    const first = createHarness()
+    await first.coordinator.spawn({
+        caller: ROOT_PATH,
+        taskName: 'a',
+        message: 'Do the thing with care.',
+    })
+    assert.equal(
+        first.coordinator.getRecordByPath('/root/a' as AgentPath)?.task,
+        'Do the thing with care.'
+    )
+    const snapshot = first.coordinator.serialize('root-session')
+    assert.equal(snapshot.agents[0]?.task, 'Do the thing with care.')
+    first.sessions.get('/root/a')?.finishRun()
+    await first.coordinator.shutdown()
+
+    const second = createHarness()
+    second.coordinator.restore(snapshot)
+    assert.equal(
+        second.coordinator.getRecordByPath('/root/a' as AgentPath)?.task,
+        'Do the thing with care.'
+    )
+    await second.coordinator.shutdown()
 })
 
 test('concurrent unloaded operations share one AgentSession load', async () => {
@@ -484,7 +612,23 @@ test('followup during settling waits for settlement and starts a tracked run', a
     assert.ok(
         harness.rootMessages
             .filter((message) => message.kind === 'result')
-            .every((message) => message.triggerTurn === false)
+            .every((message) => message.triggerTurn === true)
+    )
+    // Completion delivery steers so a running parent ingests the payload
+    // mid-run instead of finding it only on the next user prompt.
+    assert.ok(
+        harness.rootDeliveries
+            .filter(
+                (_, index) => harness.rootMessages[index]?.kind === 'result'
+            )
+            .every((delivery) => {
+                const mode = (delivery as unknown as Record<string, unknown>)
+                    .deliverAs
+                return (
+                    delivery.triggerTurn === true &&
+                    (delivery.delivery ?? mode) === 'steer'
+                )
+            })
     )
     await harness.coordinator.shutdown()
 })
@@ -543,11 +687,19 @@ test('failed nested completion delivery remains queued until the parent reloads'
 
     harness.sessions.get('/root/other')?.finishRun()
     await new Promise((resolve) => setImmediate(resolve))
-    await harness.coordinator.followup({
+    // Reloading retries the queued completion first. Steered delivery starts
+    // a parent run (as in real Pi), then the followup starts its own run:
+    // drive both, since the fake harness has no live model loop.
+    const followupPromise = harness.coordinator.followup({
         caller: ROOT_PATH,
         target: '/root/parent',
         message: 'resume parent',
     })
+    for (let i = 0; i < 50; i++) {
+        await new Promise((resolve) => setImmediate(resolve))
+        harness.sessions.get('/root/parent')?.finishRun()
+    }
+    await followupPromise
 
     const reloadedParent = harness.sessions.get('/root/parent')!
     assert.ok(

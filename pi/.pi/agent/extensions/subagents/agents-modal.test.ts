@@ -11,6 +11,7 @@ import {
     collapseRedundant,
     type DashboardState,
     type ModalState,
+    type RenderEntry,
 } from './src/agents-modal.ts'
 import type { ActivityEntry } from './src/activity-feed.ts'
 
@@ -133,6 +134,144 @@ test('dashboard wraps long stories instead of truncating every line', () => {
     assert.ok(body.includes('FINAL'))
     assert.ok(body.includes('aquella costa.'))
     assert.ok(!body.includes('…'))
+})
+
+test('tool blocks show shell commands plainly with durations', () => {
+    const at = Date.now()
+    const reader = {
+        ...emptyReader,
+        getActivity: (_path: AgentPath): RenderEntry[] => [
+            {
+                id: 1,
+                at,
+                kind: 'tool' as const,
+                summary: `bash $ printf 'HI/\\n'`,
+                doneAt: at + 2500,
+            },
+            {
+                id: 2,
+                at,
+                kind: 'thinking' as const,
+                summary: 'considering the next step',
+            },
+        ],
+    }
+    const lines = buildAgentsDashboardLines(
+        [listedAgent()],
+        reader,
+        {
+            selected: 0,
+            focus: 'activity',
+            scroll: 0,
+            followTail: true,
+            narrowPanel: 'activity',
+            hiddenKinds: new Set(),
+            seenByPath: new Map(),
+        },
+        100,
+        24,
+        stubTheme
+    )
+    const body = lines.join('\n')
+    assert.ok(body.includes('bash'))
+    assert.ok(body.includes(`$ printf`))
+    assert.ok(!body.includes('command='))
+    assert.ok(!body.includes('\\\\n'))
+    assert.match(body, /done in 2s/)
+    assert.ok(body.includes('THINK'))
+    assert.ok(body.includes('│'))
+})
+
+test('agent rows show status, thinking and elapsed without truncation', () => {
+    const reader = {
+        getRecordByPath: (_path: AgentPath) =>
+            ({
+                thinkingLevel: 'xhigh',
+                lastActivityAt: Date.now(),
+                model: 'opencode/muse-spark-1.3-contributor-free',
+            }) as unknown as AgentRecord,
+        getActivity: (_path: AgentPath): ActivityEntry[] => [],
+    }
+    const lines = buildAgentsDashboardLines(
+        [
+            listedAgent({
+                path: '/root/tool_subagente_uno' as AgentPath,
+                status: 'Completed',
+                running: false,
+            }),
+        ],
+        reader,
+        {
+            selected: 0,
+            focus: 'agents',
+            scroll: 0,
+            followTail: true,
+            narrowPanel: 'agents',
+            hiddenKinds: new Set(),
+            seenByPath: new Map(),
+        },
+        120,
+        24,
+        stubTheme
+    )
+    const body = lines.join('\n')
+    assert.ok(body.includes('tool_subagente_uno'))
+    assert.match(body, /Completed · xhigh/)
+    assert.ok(body.includes('muse-spark-1.3-contributor-free'))
+    assert.ok(!body.includes('…'))
+})
+
+test('dashboard pins the spawn prompt above the activity', () => {
+    const reader = {
+        getRecordByPath: (_path: AgentPath) =>
+            ({
+                thinkingLevel: 'xhigh',
+                lastActivityAt: Date.now(),
+                model: 'opencode/muse-spark',
+                task: 'Cuéntame una historia breve y original',
+            }) as unknown as AgentRecord,
+        getActivity: (_path: AgentPath): ActivityEntry[] => [
+            {
+                id: 1,
+                at: Date.now(),
+                kind: 'final' as const,
+                summary: 'done',
+            },
+        ],
+    }
+    const dashboard: DashboardState = {
+        selected: 0,
+        focus: 'activity',
+        scroll: 0,
+        followTail: true,
+        narrowPanel: 'activity',
+        hiddenKinds: new Set(),
+        seenByPath: new Map(),
+    }
+    const lines = buildAgentsDashboardLines(
+        [listedAgent()],
+        reader,
+        dashboard,
+        100,
+        24,
+        stubTheme
+    )
+    const body = lines.join('\n')
+    const taskIndex = body.indexOf('◆ TASK')
+    const finalIndex = body.indexOf('FINAL')
+    assert.ok(taskIndex >= 0)
+    assert.ok(finalIndex > taskIndex)
+    assert.ok(body.includes('Cuéntame una historia breve y original'))
+
+    const withoutTask = buildAgentsDashboardLines(
+        [listedAgent()],
+        dashboardReader,
+        { ...dashboard, seenByPath: new Map() },
+        100,
+        24,
+        stubTheme
+    )
+    assert.ok(!withoutTask.join('\n').includes('◆ TASK'))
 })
 
 test('every modal line spans the full width (no terminal ghosting)', () => {

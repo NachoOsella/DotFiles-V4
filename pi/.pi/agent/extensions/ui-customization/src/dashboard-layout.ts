@@ -114,6 +114,13 @@ export function formatModelLabelWithoutProvider(
   return thinking ? `${modelId} · ${thinking}` : modelId;
 }
 
+export function formatSubagentCount(running: number): string {
+  if (!Number.isFinite(running)) return "";
+  const count = Math.max(0, Math.floor(running));
+  if (count === 0) return "";
+  return `● ${count} ${count === 1 ? "subagent" : "subagents"}`;
+}
+
 // Live streaming estimates carry a `~` prefix; measured final cadences do
 // not. Null/unknown throughput renders as an em-dash placeholder.
 export function formatThroughput(
@@ -143,6 +150,7 @@ export interface UsageLabelInput {
   contextWindow: number;
   cost: number;
   throughput: string;
+  subagentsRunning?: number;
   includeThroughput?: boolean;
 }
 
@@ -163,10 +171,12 @@ export function formatUsageLabel(input: UsageLabelInput): string {
     typeof input.cost === "number" && Number.isFinite(input.cost)
       ? input.cost
       : 0;
+  const subagentCount = formatSubagentCount(input.subagentsRunning ?? 0);
+  const subagentSuffix = subagentCount ? ` · ${subagentCount}` : "";
   const base = `${percent}%/${window} · $${cost.toFixed(2)}`;
   return input.includeThroughput === false
-    ? base
-    : `${base} · ${input.throughput}`;
+    ? `${base}${subagentSuffix}`
+    : `${base} · ${input.throughput}${subagentSuffix}`;
 }
 
 export interface GitLabelInput {
@@ -204,6 +214,7 @@ export interface FooterFitInput {
   cost: number;
   tokensPerSecond: number | null;
   throughputIsEstimate: boolean;
+  subagentsRunning?: number;
   branch: string | null;
   changedFiles: number;
   pullRequestNumber: number | null;
@@ -267,6 +278,7 @@ export function fitFooterSegments(input: FooterFitInput): FooterFitOutput {
       contextWindow: input.contextWindow,
       cost: input.cost,
       throughput,
+      subagentsRunning: input.subagentsRunning,
       includeThroughput,
     });
     const git = formatGitLabel({

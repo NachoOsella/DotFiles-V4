@@ -36,12 +36,8 @@ export function resolveConfiguredMode(
     config: CodexSubagentsConfig,
     thinkingLevel: string
 ): MultiAgentMode {
-    if (config.multiAgentModeHintText !== undefined) {
-        return resolveMode({
-            ultraReasoning: false,
-            customModeHint: config.multiAgentModeHintText,
-        })
-    }
+    // The configured hint is appended by prompt assembly; it must not replace
+    // the resolved mode guidance or its collaboration invariants.
     if (config.mode === 'explicit') return { _tag: 'ExplicitRequestOnly' }
     if (config.mode === 'proactive') return { _tag: 'Proactive' }
     return resolveMode({

@@ -1,6 +1,7 @@
 export const MODEL_INFO_CHANNEL = "dashboard:model-info";
 export const GIT_INFO_CHANNEL = "dashboard:git-info";
 export const DISCORD_ACTIVITY_CHANNEL = "dashboard:discord-activity";
+export const SUBAGENTS_INFO_CHANNEL = "dashboard:subagents";
 export const REFRESH_CHANNEL = "dashboard:refresh";
 
 export interface ModelInfoState {
@@ -44,6 +45,10 @@ export interface DiscordActivityState {
   active: boolean;
 }
 
+export interface SubagentInfoState {
+  running: number;
+}
+
 export function emptyModelInfoState(): ModelInfoState {
   return {
     provider: "",
@@ -68,6 +73,10 @@ export function emptyGitInfoState(): GitInfoState {
   };
 }
 
+export function emptySubagentInfoState(): SubagentInfoState {
+  return { running: 0 };
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
@@ -80,6 +89,12 @@ export function isDiscordActivityState(
   value: unknown,
 ): value is DiscordActivityState {
   return isRecord(value) && typeof value.active === "boolean";
+}
+
+export function isSubagentInfoState(
+  value: unknown,
+): value is SubagentInfoState {
+  return isRecord(value) && typeof value.running === "number";
 }
 
 export function isModelInfoState(value: unknown): value is ModelInfoState {
@@ -160,4 +175,13 @@ export function sanitizeGitInfoState(value: GitInfoState): GitInfoState {
     ? Math.max(0, Math.floor(value.changedFiles))
     : 0;
   return { ...value, changedFiles };
+}
+
+export function sanitizeSubagentInfoState(
+  value: SubagentInfoState,
+): SubagentInfoState {
+  const running = isFiniteNumber(value.running)
+    ? Math.max(0, Math.floor(value.running))
+    : 0;
+  return { running };
 }

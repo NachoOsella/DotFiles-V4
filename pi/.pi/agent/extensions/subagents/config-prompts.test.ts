@@ -19,6 +19,7 @@ import {
 import {
     assertNoForbiddenTools,
     buildSpawnAgentParams,
+    buildWaitAgentParams,
     plannedV2Tools,
 } from './src/tool-specs.ts'
 
@@ -111,7 +112,7 @@ describe('prompts', () => {
         const child = assembleChildPrompt(input)
         assert.ok(child.includes('FINAL_ANSWER'))
         assert.ok(!child.includes('/root, the primary'))
-        assert.match(child, /depth limit/)
+        assert.match(child, /may spawn nested agents/)
 
         const nestedChild = assembleChildPrompt({
             ...input,
@@ -121,21 +122,25 @@ describe('prompts', () => {
         assert.match(nestedChild, /may spawn nested agents/)
     })
 
-    it('honors configured overrides including empty suppression', () => {
+    it('appends configured hints without replacing collaboration invariants', () => {
         const custom = {
             ...DEFAULT_SUBAGENTS_CONFIG,
             rootAgentUsageHintText: 'custom root',
         }
-        assert.equal(rootRoleInstructions(custom), 'custom root')
+        const rootRole = rootRoleInstructions(custom)
+        assert.ok(rootRole?.includes('You are /root'))
+        assert.ok(rootRole?.includes('custom root'))
         const suppressed = {
             ...DEFAULT_SUBAGENTS_CONFIG,
             rootAgentUsageHintText: '  ',
             subagentUsageHintText: '',
         }
-        assert.equal(rootRoleInstructions(suppressed), null)
-        assert.equal(subagentRoleInstructions(suppressed), null)
+        assert.ok(rootRoleInstructions(suppressed)?.includes('You are /root'))
+        assert.ok(
+            subagentRoleInstructions(suppressed)?.includes('You are one agent')
+        )
         const assembled = assembleRootPrompt({ ...input, config: suppressed })
-        assert.ok(!assembled.includes('You are /root'))
+        assert.ok(assembled.includes('You are /root'))
     })
 
     it('conditions wait guidance on tool exposure', () => {
@@ -183,6 +188,34 @@ describe('tool plan', () => {
             roles: {},
         }) as { properties: Record<string, unknown> }
         assert.ok(!('agent_type' in schema.properties))
+    })
+
+    it('uses strict bounded model-visible schemas', () => {
+        const schema = buildSpawnAgentParams({
+            exposeSpawnAgentModelOverrides: true,
+            hideSpawnAgentMetadata: false,
+            roles: {},
+        }) as unknown as {
+            additionalProperties: boolean
+            properties: Record<string, any>
+        }
+        assert.equal(schema.additionalProperties, false)
+        assert.equal(schema.properties.task_name.pattern, '^[a-z0-9_]+$')
+        assert.equal(schema.properties.message.minLength, 1)
+        assert.equal(schema.properties.target, undefined)
+        assert.equal(schema.properties.model.pattern, '^[^/\\s]+/[^/\\s]+$')
+        assert.equal(schema.properties.reasoning_effort.anyOf.length, 7)
+        assert.equal(schema.properties.fork_turns.anyOf.length, 3)
+        const wait = buildWaitAgentParams({
+            wait: { minTimeoutMs: 10, defaultTimeoutMs: 20, maxTimeoutMs: 30 },
+        }) as unknown as {
+            properties: {
+                timeout_ms: { type: string; minimum: number; maximum: number }
+            }
+        }
+        assert.equal(wait.properties.timeout_ms.type, 'integer')
+        assert.equal(wait.properties.timeout_ms.minimum, 10)
+        assert.equal(wait.properties.timeout_ms.maximum, 30)
     })
 
     it('exposes the exact six-tool family and no V1 names', () => {

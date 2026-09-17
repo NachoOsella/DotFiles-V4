@@ -90,6 +90,8 @@ export interface AgentRecord {
     readonly legacyUnresumable?: boolean
     readonly lastResult?: string
     readonly initiatingTurnId?: string
+    /** Initial spawn prompt (the NEW_TASK payload) for UI display. */
+    readonly task?: string
     /** Fork policy snapshot for reload/diagnostics. */
     readonly forkKind?: string
     /** Accumulated usage across all turns/sessions of this agent. */
@@ -117,5 +119,7 @@ export interface AgentRecordInit {
     readonly legacyUnresumable?: boolean
     readonly lastResult?: string
     readonly initiatingTurnId?: string
+    /** Initial spawn prompt (the NEW_TASK payload) for UI display. */
+    readonly task?: string
     readonly forkKind?: string
 }

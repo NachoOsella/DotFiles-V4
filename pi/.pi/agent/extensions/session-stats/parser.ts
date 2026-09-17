@@ -470,7 +470,14 @@ function ensureMessageModel(
 function finishCollectors(stats: SessionStats, collectors: Collectors): void {
     stats.toolCalls = mapToolUsage(collectors.toolCalls)
     stats.models = [...collectors.models.values()].sort(
-        (left, right) => right.count - left.count
+        (left, right) =>
+            right.cost - left.cost ||
+            right.input +
+                right.output +
+                right.cacheRead +
+                right.cacheWrite -
+                (left.input + left.output + left.cacheRead + left.cacheWrite) ||
+            left.modelId.localeCompare(right.modelId)
     )
     finalizeTotalTokens(
         stats,

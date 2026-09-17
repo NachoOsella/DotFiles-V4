@@ -77,6 +77,24 @@ describe('communication envelopes', () => {
         assert.match(String(deliveries[0]?.message.content), /Payload:\ndone/)
     })
 
+    it('propagates asynchronous root delivery failures', async () => {
+        const endpoint = rootEndpoint(ROOT, async () => {
+            throw new Error('root session is unavailable')
+        })
+
+        await assert.rejects(
+            endpoint.send(
+                plainMessageCommunication({
+                    author: CHILD,
+                    recipient: ROOT,
+                    payload: 'progress',
+                }),
+                { triggerTurn: false }
+            ),
+            /root session is unavailable/
+        )
+    })
+
     it('maps kinds to message types and trigger flags', () => {
         const spawn = newTaskCommunication({
             kind: 'spawn',
@@ -110,7 +128,7 @@ describe('communication envelopes', () => {
             payload: 'done',
         })
         assert.equal(answer.messageType, 'FINAL_ANSWER')
-        assert.equal(answer.triggerTurn, false)
+        assert.equal(answer.triggerTurn, true)
 
         assert.equal(displayNameFor(CHILD), 'worker')
         const rendered = renderCommunicationText(answer)

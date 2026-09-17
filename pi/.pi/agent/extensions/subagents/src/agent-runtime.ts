@@ -141,8 +141,11 @@ function formatToolMetadata(args: unknown): string {
     for (const key of preferred) {
         const value = record[key]
         if (typeof value === 'string' && value.trim()) {
-            const compact = value.trim().replace(/\s+/g, ' ')
-            return `${key}=${JSON.stringify(compact.slice(0, 180))}`
+            const compact = value.trim().replace(/\s+/g, ' ').slice(0, 180)
+            // Manual quoting: JSON.stringify would double every backslash
+            // and render commands as command="printf 'x/\\n'".
+            if (key === 'command') return `$ ${compact}`
+            return `${key}="${compact.replace(/"/g, '\\"')}"`
         }
     }
     return ''

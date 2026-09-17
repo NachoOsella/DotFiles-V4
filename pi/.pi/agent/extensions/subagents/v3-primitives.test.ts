@@ -72,6 +72,14 @@ describe('V3 wait hub', () => {
         assert.deepEqual(await future, { kind: 'steer', timedOut: false })
         assert.equal(hub.hasPending('/root'), false)
     })
+
+    it('does not carry a stale steer into a later wait', async () => {
+        const hub = new WaitHub()
+        hub.notifySteer('/root')
+
+        const outcome = await hub.wait('/root', 10)
+        assert.deepEqual(outcome, { kind: 'mailbox', timedOut: true })
+    })
 })
 
 describe('V3 Pi session persistence characterization', () => {

@@ -24,6 +24,7 @@ import {
     SUBAGENTS_STATE_CUSTOM_TYPE,
 } from './src/persistence.ts'
 import { assembleRootPrompt } from './src/prompts.ts'
+import { SUBAGENTS_INFO_CHANNEL } from '../shared/dashboard-state.ts'
 import type { AgentPath } from './src/ids.ts'
 import type { ParentExecutionSnapshot } from './src/parent-snapshot.ts'
 
@@ -111,6 +112,13 @@ export default function subagentsExtension(pi: ExtensionAPI) {
     let coordinator: SubagentCoordinator | undefined
     let latestCtx: ExtensionContext | undefined
 
+    const publishRunningCount = (manager: SubagentCoordinator): void => {
+        const running = manager
+            .list(ROOT_PATH)
+            .filter((agent) => agent.status === 'Running').length
+        pi.events.emit(SUBAGENTS_INFO_CHANNEL, { running })
+    }
+
     const rootSnapshot = (): ParentExecutionSnapshot => {
         const ctx = latestCtx
         const model = ctx?.model
@@ -137,6 +145,10 @@ export default function subagentsExtension(pi: ExtensionAPI) {
                 }),
                 rootSessionId: () =>
                     latestCtx?.sessionManager.getSessionId() ?? 'unknown-root',
+                isRootStreaming: () => {
+                    const ctx = latestCtx
+                    return ctx ? !ctx.isIdle() : false
+                },
                 rootSessionDir: () =>
                     latestCtx?.sessionManager.getSessionDir() ?? '',
                 getModelRegistry: () => {
@@ -148,6 +160,10 @@ export default function subagentsExtension(pi: ExtensionAPI) {
                     buildChildToolDefinitions(getCoordinator(), caller),
             })
             coordinator.onEvent((event) => {
+                if (event._tag === 'StatusChanged') {
+                    const manager = coordinator
+                    if (manager) publishRunningCount(manager)
+                }
                 if (
                     event._tag === 'ActivityCompleted' ||
                     event._tag === 'ActivityInterrupted'
@@ -179,6 +195,7 @@ export default function subagentsExtension(pi: ExtensionAPI) {
             const persisted = findLatestState(ctx.sessionManager.getBranch())
             if (persisted) manager.restore(persisted)
         }
+        publishRunningCount(manager)
         void manager.retryPendingCompletions(ROOT_PATH)
     })
 
@@ -188,6 +205,10 @@ export default function subagentsExtension(pi: ExtensionAPI) {
 
     pi.on('input', (_event, ctx) => {
         latestCtx = ctx
+        // Only mid-run input interrupts waits. A fresh prompt from idle would
+        // otherwise leave a stale steer signal that instantly aborts the
+        // run's first wait_agent with "interrupted by new input".
+        if (ctx.isIdle()) return
         getCoordinator().notifySteer(
             getCoordinator().callerFromSession(
                 ctx.sessionManager.getSessionId()
@@ -220,6 +241,7 @@ export default function subagentsExtension(pi: ExtensionAPI) {
         const sessionId = ctx.sessionManager.getSessionId()
         coordinator = undefined
         latestCtx = undefined
+        pi.events.emit(SUBAGENTS_INFO_CHANNEL, { running: 0 })
         if (!manager) return
         try {
             pi.appendEntry(

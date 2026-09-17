@@ -15,14 +15,18 @@ import {
   DISCORD_ACTIVITY_CHANNEL,
   emptyGitInfoState,
   emptyModelInfoState,
+  emptySubagentInfoState,
   GIT_INFO_CHANNEL,
   MODEL_INFO_CHANNEL,
   REFRESH_CHANNEL,
+  SUBAGENTS_INFO_CHANNEL,
   isDiscordActivityState,
   isGitInfoState,
   isModelInfoState,
+  isSubagentInfoState,
   sanitizeGitInfoState,
   sanitizeModelInfoState,
+  sanitizeSubagentInfoState,
 } from "../shared/dashboard-state.ts";
 import {
   appendOverflowIndicator,
@@ -121,6 +125,7 @@ export default function uiCustomization(pi: ExtensionAPI) {
   let title = "pi";
   let modelInfo = emptyModelInfoState();
   let gitInfo = emptyGitInfoState();
+  let subagentInfo = emptySubagentInfoState();
   let discordActivityActive = false;
   let requestRender: (() => void) | undefined;
   let activeTui: DashboardTui | undefined;
@@ -145,6 +150,15 @@ export default function uiCustomization(pi: ExtensionAPI) {
     (value) => {
       if (!isDiscordActivityState(value)) return;
       discordActivityActive = value.active;
+      requestRender?.();
+    },
+  );
+
+  const stopSubagentListener = pi.events.on(
+    SUBAGENTS_INFO_CHANNEL,
+    (value) => {
+      if (!isSubagentInfoState(value)) return;
+      subagentInfo = sanitizeSubagentInfoState(value);
       requestRender?.();
     },
   );
@@ -212,6 +226,7 @@ export default function uiCustomization(pi: ExtensionAPI) {
             cost: modelInfo.cost,
             tokensPerSecond: modelInfo.tokensPerSecond,
             throughputIsEstimate: isEstimate,
+            subagentsRunning: subagentInfo.running,
             branch: gitInfo.branch,
             changedFiles: gitInfo.changedFiles,
             pullRequestNumber: gitInfo.pullRequest?.number ?? null,
@@ -283,6 +298,7 @@ export default function uiCustomization(pi: ExtensionAPI) {
     title = formatDirectory(ctx.cwd);
     modelInfo = emptyModelInfoState();
     gitInfo = emptyGitInfoState();
+    subagentInfo = emptySubagentInfoState();
     discordActivityActive = false;
     install(ctx);
   });
@@ -295,6 +311,7 @@ export default function uiCustomization(pi: ExtensionAPI) {
     stopModelListener();
     stopGitListener();
     stopDiscordActivityListener();
+    stopSubagentListener();
     for (const timer of themeRemovalTimers) clearTimeout(timer);
     themeRemovalTimers = [];
     activeTui = undefined;

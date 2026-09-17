@@ -8,6 +8,7 @@ import {
   fitFooterSegments,
   formatGitLabel,
   formatModelLabel,
+  formatSubagentCount,
   formatThroughput,
   formatUsageLabel,
   LEGACY_HEADER_LINE_COUNT,
@@ -161,6 +162,15 @@ describe("footer degradation", () => {
   });
 });
 
+describe("subagent labels", () => {
+  it("shows active counts and hides an empty count", () => {
+    assert.equal(formatSubagentCount(0), "");
+    assert.equal(formatSubagentCount(1), "● 1 subagent");
+    assert.equal(formatSubagentCount(3.8), "● 3 subagents");
+    assert.equal(formatSubagentCount(Number.NaN), "");
+  });
+});
+
 describe("throughput labels", () => {
   it("marks live estimates with ~ and measured cadence without", () => {
     assert.equal(formatThroughput(12.4, true), "~12 tok/s");
@@ -178,6 +188,14 @@ describe("throughput labels", () => {
       throughput: "~12 tok/s",
     });
     assert.ok(full.includes("tok/s"));
+    const withSubagents = formatUsageLabel({
+      contextPercent: 42,
+      contextWindow: 200_000,
+      cost: 1.23,
+      throughput: "80 tok/s",
+      subagentsRunning: 2,
+    });
+    assert.ok(withSubagents.includes("80 tok/s · ● 2 subagents"));
     const slim = formatUsageLabel({
       contextPercent: 42,
       contextWindow: 200_000,

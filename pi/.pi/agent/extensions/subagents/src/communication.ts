@@ -167,7 +167,11 @@ export function plainMessageCommunication(args: {
     })
 }
 
-/** Terminal child results produce queue-only FINAL_ANSWER. */
+/**
+ * Terminal child results produce FINAL_ANSWER steered into the parent.
+ * Queue-only delivery would leave the payload in session state while a
+ * running parent loop never ingests it (see coordinator.deliverCompletion).
+ */
 export function finalAnswerCommunication(args: {
     author: AgentPath
     recipient: AgentPath
@@ -179,7 +183,7 @@ export function finalAnswerCommunication(args: {
         author: args.author,
         recipient: args.recipient,
         payload: args.payload,
-        triggerTurn: false,
+        triggerTurn: true,
     })
 }
 

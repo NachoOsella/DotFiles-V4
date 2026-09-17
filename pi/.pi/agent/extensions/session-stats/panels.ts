@@ -150,7 +150,7 @@ export function compactModelUsage(
 ): AggregatedModelUsage[] {
     const sorted = [...models].sort(
         (left, right) =>
-            right.messages - left.messages ||
+            right.cost - left.cost ||
             modelTokenCount(right) - modelTokenCount(left) ||
             left.modelId.localeCompare(right.modelId)
     )

@@ -1,31 +1,35 @@
 {
-    "lastChangelogVersion": "0.85.1",
-    "theme": "gruvbox-material-dark-hard",
-    "hideThinkingBlock": false,
-    "quietStartup": true,
-    "enableSkillCommands": true,
-    "extensions": [],
-    "steeringMode": "one-at-a-time",
-    "terminal": {
-        "showTerminalProgress": false,
-        "showImages": true
-    },
-    "showCacheMissNotices": true,
-    "defaultProjectTrust": "always",
-    "tuiMode": "fullscreen",
-    "markdown": {
-        "mermaid": "streaming"
-    },
-    "fullscreenScrollbar": "always",
-    "packages": ["git:https://github.com/ShpetimA/pi-fff.git"],
-    "modelThinkingLevels": {
-        "openai-codex/gpt-5.6-terra": "high"
-    },
-    "defaultProvider": "openai-codex",
-    "defaultModel": "gpt-5.6-luna",
-    "defaultThinkingLevel": "xhigh",
-    "followUpMode": "one-at-a-time",
-    "subagents": {
-        "mode": "proactive"
-    }
+  "lastChangelogVersion": "0.85.1",
+  "theme": "gruvbox-material-dark-hard",
+  "hideThinkingBlock": false,
+  "quietStartup": true,
+  "enableSkillCommands": true,
+  "extensions": [
+    "!extensions/subagents/**"
+  ],
+  "skills": [
+    "!skills/subagent-orchestration/**"
+  ],
+  "steeringMode": "one-at-a-time",
+  "terminal": {
+    "showTerminalProgress": false,
+    "showImages": true
+  },
+  "showCacheMissNotices": true,
+  "defaultProjectTrust": "always",
+  "tuiMode": "fullscreen",
+  "markdown": {
+    "mermaid": "streaming"
+  },
+  "fullscreenScrollbar": "always",
+  "packages": [
+    "git:https://github.com/ShpetimA/pi-fff.git"
+  ],
+  "modelThinkingLevels": {
+    "openai-codex/gpt-5.6-terra": "high"
+  },
+  "defaultProvider": "openai-codex",
+  "defaultModel": "gpt-5.6-luna",
+  "defaultThinkingLevel": "xhigh",
+  "followUpMode": "one-at-a-time"
 }

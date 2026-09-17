@@ -9,7 +9,10 @@
  */
 
 import { Type } from 'typebox'
-import type { CodexSubagentsConfig } from './config.ts'
+import {
+    DEFAULT_SUBAGENTS_CONFIG,
+    type CodexSubagentsConfig,
+} from './config.ts'
 
 export const COLLABORATION_NAMESPACE = 'collaboration'
 
@@ -35,22 +38,33 @@ export const SpawnAgentParams = createSpawnAgentParams({
 export function buildSpawnAgentParams(config: SpawnSchemaConfig) {
     const properties: Record<string, unknown> = {
         message: Type.String({
-            description: 'One bounded delegated task for the new agent.',
+            minLength: 1,
+            pattern: '\\S',
+            description:
+                'One nonempty, bounded delegated task for the new agent.',
         }),
         task_name: Type.String({
+            minLength: 1,
+            pattern: '^[a-z0-9_]+$',
             description:
-                'Single path segment (lowercase letters, digits, underscore).',
+                'One nonempty path segment: lowercase letters, digits, and underscores only.',
         }),
         fork_turns: Type.Optional(
-            Type.String({
-                description: 'History to fork: "all" (default), "none", or N.',
-            })
+            Type.Union([
+                Type.Literal('all'),
+                Type.Literal('none'),
+                Type.String({
+                    pattern: '^[1-9][0-9]*$',
+                    description:
+                        'A positive integer N for the most recent N turns.',
+                }),
+            ])
         ),
     }
     if (!config.hideSpawnAgentMetadata) {
-        const customNames = Object.keys(config.roles).filter(
-            (name) => name !== 'default'
-        )
+        const customNames = Object.keys(config.roles)
+            .filter((name) => name !== 'default')
+            .sort()
         const names = customNames.length > 0 ? ['default', ...customNames] : []
         if (names.length > 0) {
             const agentType =
@@ -62,53 +76,110 @@ export function buildSpawnAgentParams(config: SpawnSchemaConfig) {
     }
     if (config.exposeSpawnAgentModelOverrides) {
         properties.model = Type.Optional(
-            Type.String({ description: 'Child model as provider/model-id.' })
-        )
-        properties.reasoning_effort = Type.Optional(
             Type.String({
-                description:
-                    'Child reasoning: off, minimal, low, medium, high, xhigh, or max.',
+                minLength: 3,
+                pattern: '^[^/\\s]+/[^/\\s]+$',
+                description: 'Child model in provider/model-id form.',
             })
         )
+        properties.reasoning_effort = Type.Optional(
+            Type.Union(
+                [
+                    Type.Literal('off'),
+                    Type.Literal('minimal'),
+                    Type.Literal('low'),
+                    Type.Literal('medium'),
+                    Type.Literal('high'),
+                    Type.Literal('xhigh'),
+                    Type.Literal('max'),
+                ],
+                {
+                    description:
+                        'Child reasoning effort: off, minimal, low, medium, high, xhigh, or max.',
+                }
+            )
+        )
     }
-    return Type.Object(properties as never)
+    return Type.Object(properties as never, { additionalProperties: false })
 }
 
 function createSpawnAgentParams(config: SpawnSchemaConfig) {
     return buildSpawnAgentParams(config)
 }
 
-export const SendMessageParams = Type.Object({
-    target: Type.String({
-        description: 'Canonical /root/... path or relative task name.',
-    }),
-    message: Type.String({ description: 'Queue-only message payload.' }),
-})
+const targetSchema = () =>
+    Type.String({
+        minLength: 1,
+        pattern:
+            '^(?:/root(?:/[a-z0-9_]+)*|(?:\\./|\\.\\./)?[a-z0-9_]+(?:/[a-z0-9_]+)*)$',
+        description:
+            'Valid agent target. Prefer the canonical /root/... path returned by spawn_agent or list_agents because relative names resolve from the caller.',
+    })
 
-export const FollowupTaskParams = Type.Object({
-    target: Type.String({
-        description: 'Canonical /root/... path or relative task name.',
-    }),
-    message: Type.String({ description: 'Follow-up task payload.' }),
-})
+const messageSchema = (description: string) =>
+    Type.String({ minLength: 1, pattern: '\\S', description })
 
-export const WaitAgentParams = Type.Object({
-    timeout_ms: Type.Optional(
-        Type.Number({ description: 'Wait timeout in milliseconds.' })
-    ),
-})
+export const SendMessageParams = Type.Object(
+    {
+        target: targetSchema(),
+        message: messageSchema(
+            'Nonempty context payload; send_message queues it without starting a turn.'
+        ),
+    },
+    { additionalProperties: false }
+)
 
-export const InterruptAgentParams = Type.Object({
-    target: Type.String({
-        description: 'Canonical /root/... path or relative task name.',
-    }),
-})
+export const FollowupTaskParams = Type.Object(
+    {
+        target: targetSchema(),
+        message: messageSchema(
+            'Nonempty task payload; followup_task queues NEW_TASK, steering an active run or starting one when idle.'
+        ),
+    },
+    { additionalProperties: false }
+)
 
-export const ListAgentsParams = Type.Object({
-    path_prefix: Type.Optional(
-        Type.String({ description: 'Scope listing to one subtree.' })
-    ),
-})
+export interface WaitSchemaConfig {
+    readonly wait: CodexSubagentsConfig['wait']
+}
+
+/** Build the wait schema using the resolved V3 timeout bounds. */
+export function buildWaitAgentParams(config: WaitSchemaConfig) {
+    return Type.Object(
+        {
+            timeout_ms: Type.Optional(
+                Type.Integer({
+                    minimum: config.wait.minTimeoutMs,
+                    maximum: config.wait.maxTimeoutMs,
+                    description: `Optional integer timeout in milliseconds (${config.wait.minTimeoutMs}-${config.wait.maxTimeoutMs}); defaults to ${config.wait.defaultTimeoutMs}.`,
+                })
+            ),
+        },
+        { additionalProperties: false }
+    )
+}
+
+export const WaitAgentParams = buildWaitAgentParams(DEFAULT_SUBAGENTS_CONFIG)
+
+export const InterruptAgentParams = Type.Object(
+    {
+        target: targetSchema(),
+    },
+    { additionalProperties: false }
+)
+
+export const ListAgentsParams = Type.Object(
+    {
+        path_prefix: Type.Optional(
+            Type.String({
+                minLength: 5,
+                pattern: '^/root(?:/[a-z0-9_]+)*$',
+                description: 'Canonical /root/... subtree prefix.',
+            })
+        ),
+    },
+    { additionalProperties: false }
+)
 
 export const FORBIDDEN_V1_TOOLS = [
     'send_input',

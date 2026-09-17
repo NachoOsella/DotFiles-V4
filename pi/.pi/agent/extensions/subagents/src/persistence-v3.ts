@@ -22,6 +22,7 @@ export interface PersistedSubagentV2 {
     readonly lastDeliveredRunSequence?: number
     readonly pendingCompletions?: readonly PendingCompletion[]
     readonly lastResult?: string
+    readonly task?: string
     readonly legacyUnresumable?: boolean
     readonly usage?: AgentUsageTotals
 }

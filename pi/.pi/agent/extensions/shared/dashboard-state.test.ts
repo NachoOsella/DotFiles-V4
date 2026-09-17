@@ -3,10 +3,13 @@ import { describe, it } from "node:test";
 import {
   emptyGitInfoState,
   emptyModelInfoState,
+  emptySubagentInfoState,
   isGitInfoState,
   isModelInfoState,
+  isSubagentInfoState,
   sanitizeGitInfoState,
   sanitizeModelInfoState,
+  sanitizeSubagentInfoState,
 } from "./dashboard-state.ts";
 
 describe("dashboard-state contracts", () => {
@@ -48,6 +51,11 @@ describe("dashboard-state contracts", () => {
 
   it("still accepts legacy git payloads without freshness fields", () => {
     assert.equal(isGitInfoState(emptyGitInfoState()), true);
+  });
+
+  it("accepts subagent counts and rejects mistypes", () => {
+    assert.equal(isSubagentInfoState(emptySubagentInfoState()), true);
+    assert.equal(isSubagentInfoState({ running: "1" }), false);
   });
 
   it("accepts optional freshness fields and rejects mistypes", () => {
@@ -140,5 +148,14 @@ describe("dashboard-state sanitizers", () => {
         .changedFiles,
       2,
     );
+  });
+
+  it("coerces invalid subagent counts to non-negative integers", () => {
+    assert.equal(
+      sanitizeSubagentInfoState({ running: Infinity }).running,
+      0,
+    );
+    assert.equal(sanitizeSubagentInfoState({ running: -1 }).running, 0);
+    assert.equal(sanitizeSubagentInfoState({ running: 2.7 }).running, 2);
   });
 });

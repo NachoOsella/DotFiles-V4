@@ -59,16 +59,18 @@ export function rootEndpoint(
             triggerTurn: boolean
             deliverAs?: DeliveryOptions['delivery']
         }
-    ) => void
+    ) => void | Promise<void>
 ): CommunicationEndpoint {
     return {
         path,
         async send(comm, options) {
             const message = customMessage(comm)
-            sendMessage(
+            await sendMessage(
                 {
                     ...message,
-                    // Root completions should be visible without triggering a turn.
+                    // Root completions stay visible in the transcript. Delivery
+                    // itself steers (see coordinator.deliverCompletion) so the
+                    // running parent actually ingests them mid-run.
                     display: comm.messageType === 'FINAL_ANSWER',
                 },
                 {

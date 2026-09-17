@@ -1,49 +1,58 @@
 # Global Instructions
 
-* Never use emojis in responses, code, comments, commit messages, or generated files.
+## Core
 
-* Always write code in a clear, concise, and maintainable manner, following language-specific best practices.
+- Never use emojis in responses, code, comments, commit messages, documentation, or generated files.
+- Write all code, comments, documentation, commit messages, and generated project text in English.
+- Prefer the smallest clear, correct change that fully solves the task.
+- Read and understand the relevant code before editing.
+- Reuse existing code, standard library features, platform features, and installed dependencies before adding new implementations.
+- Preserve the repository's architecture, naming, formatting, error handling, and conventions unless the task requires otherwise.
+- Do not perform unrelated refactors or cleanup.
+- Follow YAGNI. Prefer simple, direct solutions over speculative abstractions, extra flexibility, boilerplate, or dependencies.
+- Make routine implementation decisions without asking. Ask only when reasonable interpretations would materially change the result.
 
-* Always use meaningful names for variables, functions, classes, and files.
+## Code
 
-* Always include concise English comments for non-obvious logic. Avoid commenting self-explanatory code.
+- Write clear, concise, maintainable code with meaningful names.
+- Comment only non-obvious intent, constraints, or deliberate shortcuts.
+- Avoid unexplained domain or configuration literals. Do not extract obvious literals into pointless constants.
+- Fix shared root causes instead of patching individual symptoms.
+- For bug fixes, inspect relevant callers and sibling paths.
+- Delete code made obsolete by the change, but do not optimize for fewer lines or smaller diffs at the cost of readability.
+- If a file becomes meaningfully harder to maintain, split it along an existing responsibility boundary, not an arbitrary line limit.
+- Mark deliberate shortcuts with a `ponytail` comment describing the limitation and intended upgrade path.
 
-* Always write all code, comments, documentation, commit messages, and generated text in English.
+## Tests
 
-* Prefer modifying existing code over creating duplicate implementations.
+- Do not write excessive tests.
+- Add tests for meaningful observable behavior, not incidental implementation details.
+- Avoid assertions on styling, colors, or internal structure unless they are part of the required behavior.
+- For bug fixes, prefer a focused regression test when practical.
+- Run the smallest relevant verification first, then expand when the risk justifies it.
 
-* Keep changes minimal and consistent with the existing codebase. Do not perform unrelated refactors unless explicitly requested.
+## Writing style
 
-* Read the relevant files before editing them. Understand the existing implementation before making changes.
+- Use direct, literal prose.
+- No em dashes, decorative language, metaphors, filler, or unnecessary repetition.
+- Prefer ordinary, precise wording.
 
-* Preserve the existing code style and project conventions unless instructed otherwise.
+## UI
 
-* When making architectural decisions, favor simplicity over unnecessary abstraction.
+- Do not add subtitles, helper text, or descriptive copy by default.
+- Prefer concise, self-explanatory labels and headings.
+- Add supporting text only when requested or needed to prevent misunderstanding.
+- Follow existing UI patterns and avoid adding elements just to make a screen feel fuller.
 
-- Follow the YAGNI principles.
+## Reliable file editing
 
-### Model selection
-
-Choose the cheapest model that can reliably complete the delegated task. Model and reasoning overrides work with every `fork_turns` mode, including `all`.
-
-Prefer models in this order:
-
-* `opencode/muse-spark-1.3-contributor-free` with `xhigh` for most delegated work.
-* `openai-codex/gpt-5.6-luna` with `high` for straightforward coding, tests, exploration, and debugging.
-* `openai-codex/gpt-5.6-luna` with `xhigh` for harder multi-file or reasoning-heavy tasks.
-* `openai-codex/gpt-5.6-sol` for important architecture, subtle correctness problems, or difficult reviews.
-
-### Results
-
-Subagents should return conclusions, not work diaries.
-
-For investigation, report the conclusion, relevant files or symbols, evidence, and unresolved uncertainty.
-
-For implementation, report what changed, files changed, verification performed, and remaining issues.
-
-Do not blindly trust a successful child result. Inspect important changes and run the relevant verification before considering the work complete.
-
-
-### UI
-- Do not add subtitles, helper text, or descriptive copy beneath headings, labels, cards, or settings by default.
-- Prefer one concise, self-explanatory heading or label. Add supporting copy only when explicitly requested or necessary to prevent misunderstanding or error. Never repeat the heading in supporting text.
+- Before editing an existing file, work from the latest file content you have actually read. Never reconstruct `oldText` from memory.
+- For the native `edit` tool, use `{ "path": "...", "edits": [{ "oldText": "...", "newText": "..." }] }`. Both text fields must be strings.
+- Copy `oldText` exactly from the latest read, preserving indentation, whitespace, blank lines, quotes, Unicode, and newlines.
+- Keep `oldText` as small as possible while still identifying exactly one location.
+- All edits in one call target the same original snapshot. Do not overlap or nest edits; merge nearby changes when appropriate.
+- If an edit fails, do not repeat the same call. For stale, missing, or ambiguous text, reread the relevant region, rebuild the edit, and retry. For schema or argument errors, correct the payload shape first.
+- Do not rely on fuzzy matching to compensate for guessed or stale `oldText`.
+- After a successful edit, inspect the returned diff. Reread only when the diff is insufficient or further edits need fresh context.
+- Use `write` only for new files or intentional full-file replacements when the complete content is known.
+- Never claim an edit succeeded unless the tool reports success.

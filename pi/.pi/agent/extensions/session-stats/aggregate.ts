@@ -59,7 +59,7 @@ export function buildModelStats(
     }
     return Array.from(map.values()).sort(
         (left, right) =>
-            right.messages - left.messages ||
+            right.cost - left.cost ||
             modelTokenCount(right) - modelTokenCount(left) ||
             left.modelId.localeCompare(right.modelId)
     )

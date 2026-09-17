@@ -32,8 +32,17 @@ export class WaitHub {
 
     notify(path: string, kind: WaitNotificationKind): void {
         const state = this.state(path)
-        state.sequence += 1
-        state.kind = kind
+        if (kind === 'steer') {
+            // Steering is an edge-triggered wakeup. Do not carry input from a
+            // completed turn into the next wait_agent invocation.
+            if (state.listeners.size === 0) return
+            state.kind = kind
+        } else {
+            // Mailbox notifications remain level-triggered so messages that
+            // arrive before wait_agent are observed by its first check.
+            state.sequence += 1
+            state.kind = kind
+        }
         for (const listener of [...state.listeners]) listener()
     }
 

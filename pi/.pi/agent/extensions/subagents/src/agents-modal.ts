@@ -216,6 +216,19 @@ export function buildAgentsDashboardLines(
         'tab panel · j/k move · g/G top/bottom · ^u/^d page · 1/2/3 filter · q close'
     )
     const rule = theme.fg('borderMuted', '─'.repeat(width))
+    const record = selectedPath
+        ? reader.getRecordByPath(selectedPath)
+        : undefined
+    const task = record?.task?.trim() ? record.task.trim() : ''
+    const subtitle = record
+        ? [
+              record.model,
+              record.thinkingLevel ? `thinking:${record.thinkingLevel}` : '',
+              selected?.residency ?? '',
+          ]
+              .filter(Boolean)
+              .join(' · ')
+        : ''
 
     let body: string[]
     if (narrow) {
@@ -232,6 +245,8 @@ export function buildAgentsDashboardLines(
                 : renderActivityPanel(
                       selected,
                       activity,
+                      subtitle,
+                      task,
                       state,
                       width,
                       contentHeight,
@@ -251,6 +266,8 @@ export function buildAgentsDashboardLines(
         const right = renderActivityPanel(
             selected,
             activity,
+            subtitle,
+            task,
             state,
             rightWidth,
             contentHeight,
@@ -310,6 +327,8 @@ function renderAgentPanel(
         const elapsed = record?.lastActivityAt
             ? shortElapsed(record.lastActivityAt)
             : ''
+        // Meta stays short on purpose: status, thinking, elapsed always fit
+        // the 28-38 column panel. The full model lives in the detail title.
         const marker = selected ? theme.fg('accent', '▸') : ' '
         const glyph = modalStatusGlyph(agent, theme)
         const badge = unread > 0 ? theme.fg('warning', ` +${unread}`) : ''
@@ -317,7 +336,7 @@ function renderAgentPanel(
         const nameStyled = selected
             ? theme.fg('accent', theme.bold(name))
             : name
-        const meta = [agent.status, shortModel(agent.model), elapsed]
+        const meta = [agent.status, record?.thinkingLevel, elapsed]
             .filter(Boolean)
             .join(' · ')
         rows.push(
@@ -338,6 +357,8 @@ function renderAgentPanel(
 function renderActivityPanel(
     agent: ListedAgent | undefined,
     activity: readonly ActivityEntry[],
+    subtitle: string,
+    task: string,
     state: DashboardState,
     width: number,
     height: number,
@@ -353,10 +374,22 @@ function renderActivityPanel(
             theme.bold(truncateToWidth(title, width, '…', false))
         ),
     ]
+    if (subtitle) {
+        rows.push(theme.fg('dim', truncateToWidth(subtitle, width, '…', false)))
+    }
+    if (task) {
+        rows.push(theme.fg('accent', theme.bold('◆ TASK')))
+        const taskWidth = Math.max(20, width - 2)
+        const rail = theme.fg('accent', '│')
+        for (const line of wrapTextWithAnsi(task, taskWidth)) {
+            rows.push(`${rail} ${line}`)
+        }
+        rows.push('')
+    }
     const eventRows = collapsed.flatMap((entry) =>
         renderActivityEntry(entry, width, theme)
     )
-    const available = Math.max(1, height - 1)
+    const available = Math.max(1, height - rows.length)
     const maxScroll = Math.max(0, eventRows.length - available)
     state.scroll = Math.min(state.scroll, maxScroll)
     const end = Math.max(0, eventRows.length - state.scroll)
@@ -425,44 +458,69 @@ function renderActivityEntry(
 ): string[] {
     const time = formatClock(entry.at)
     const live = entry.live ? theme.fg('accent', ' ●live') : ''
-    const indent = '  '
-    const bodyWidth = Math.max(20, width - indent.length)
+    const bodyWidth = Math.max(20, width - 2)
+    type Color = Parameters<Theme['fg']>[0]
+    const rail = (color: Color) => theme.fg(color, '│')
+    const guttered = (color: Color, text: string): string[] => {
+        const clean = text.trim().replace(/\s+/g, ' ')
+        if (!clean) return []
+        return wrapTextWithAnsi(clean, bodyWidth).map(
+            (line) => `${rail(color)} ${line}`
+        )
+    }
     switch (entry.kind) {
         case 'tool': {
-            const done = entry.doneAt
-                ? theme.fg('dim', ` → done ${formatClock(entry.doneAt)}`)
+            const parsed = String(entry.summary).match(/^(\S+)\s+([\s\S]*)$/)
+            const toolName = parsed?.[1] ?? String(entry.summary)
+            const rest = (parsed?.[2] ?? '').trim()
+            const outcome = entry.doneAt
+                ? theme.fg(
+                      'dim',
+                      ` → done in ${formatDuration(entry.doneAt - entry.at)}`
+                  )
                 : theme.fg('warning', ' → running')
-            return [
+            const rows = [
                 padLine(
-                    `${theme.fg('toolTitle', theme.bold('TOOL'))} ${theme.fg('dim', `· ${time}`)}${live}`,
+                    `${theme.fg('dim', 'TOOL ·')} ${theme.fg('toolTitle', theme.bold(toolName))} ${theme.fg('dim', `· ${time}`)}${live}`,
                     width
                 ),
-                truncateToWidth(`${indent}${entry.summary}`, width, '…', false),
-                padLine(done, width),
-                '',
             ]
+            if (rest) {
+                rows.push(
+                    truncateToWidth(
+                        `${rail('toolTitle')} ${rest}`,
+                        width,
+                        '…',
+                        false
+                    )
+                )
+            }
+            rows.push(padLine(`${rail('toolTitle')}${outcome}`, width), '')
+            return rows
         }
         case 'tool_result': {
+            const toolName = toolNameOf(String(entry.summary))
             return [
                 padLine(
-                    `${theme.fg('warning', theme.bold('TOOL FAILED'))} ${theme.fg('dim', `· ${time}`)}`,
+                    `${theme.fg('error', theme.bold('! FAILED'))} ${theme.fg('toolTitle', theme.bold(toolName))} ${theme.fg('dim', `· ${time}`)}`,
                     width
                 ),
-                ...wrapBody(entry.summary, bodyWidth, indent).map((line) =>
-                    theme.fg('warning', line)
-                ),
+                ...guttered('error', String(entry.summary)),
                 '',
             ]
         }
         case 'thinking': {
-            const wrapped = wrapBody(entry.summary, bodyWidth, indent)
+            const wrapped = guttered('dim', entry.summary)
             const cap = 8
             const shown = wrapped
                 .slice(0, cap)
                 .map((line) => theme.fg('dim', line))
             if (wrapped.length > cap) {
                 shown.push(
-                    theme.fg('dim', `${indent}… +${wrapped.length - cap} more`)
+                    theme.fg(
+                        'dim',
+                        `${rail('dim')} … +${wrapped.length - cap} more`
+                    )
                 )
             }
             return [
@@ -477,30 +535,32 @@ function renderActivityEntry(
         case 'final': {
             return [
                 padLine(
-                    `${theme.fg('success', theme.bold('FINAL'))} ${theme.fg('dim', `· ${time}`)}`,
+                    `${theme.fg('success', theme.bold('✓ FINAL'))} ${theme.fg('dim', `· ${time}`)}`,
                     width
                 ),
-                ...wrapBody(entry.summary, bodyWidth, indent),
+                ...guttered('success', entry.summary),
                 '',
             ]
         }
         default: {
             return [
                 padLine(
-                    `${theme.fg('text', 'TEXT')} ${theme.fg('dim', `· ${time}`)}${live}`,
+                    `${theme.fg('muted', 'TEXT')} ${theme.fg('dim', `· ${time}`)}${live}`,
                     width
                 ),
-                ...wrapBody(entry.summary, bodyWidth, indent),
+                ...guttered('muted', entry.summary),
                 '',
             ]
         }
     }
 }
 
-function wrapBody(text: string, width: number, indent: string): string[] {
-    const clean = text.trim().replace(/\s+/g, ' ')
-    if (!clean) return []
-    return wrapTextWithAnsi(clean, width).map((line) => `${indent}${line}`)
+function formatDuration(ms: number): string {
+    if (!Number.isFinite(ms) || ms < 0) return '—'
+    if (ms < 1000) return `${Math.max(1, Math.round(ms))}ms`
+    const seconds = Math.floor(ms / 1000)
+    if (seconds < 60) return `${seconds}s`
+    return `${Math.floor(seconds / 60)}m ${seconds % 60}s`
 }
 
 function formatClock(at: number): string {
@@ -508,14 +568,6 @@ function formatClock(at: number): string {
     const hours = String(date.getHours()).padStart(2, '0')
     const minutes = String(date.getMinutes()).padStart(2, '0')
     return `${hours}:${minutes}`
-}
-
-function shortModel(model: string): string {
-    if (!model || model === 'root') return ''
-    const short = model.includes('/')
-        ? (model.split('/').pop() ?? model)
-        : model
-    return short.length > 18 ? `${short.slice(0, 17)}…` : short
 }
 
 function shortElapsed(at: number): string {
