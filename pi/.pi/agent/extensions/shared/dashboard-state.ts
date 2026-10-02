@@ -13,12 +13,20 @@ export interface ModelInfoState {
   contextWindow: number;
   contextPercent: number | null;
   cost: number;
+  /** Parent-only prompt-token buckets backing the session cache share. */
+  promptTokens?: PromptTokens;
   tokensPerSecond: number | null;
   generating: boolean;
   // Optional: true when tokensPerSecond is a live streaming estimate,
   // false/undefined when it is a measured final cadence. Footer renders
   // estimates with a `~` prefix. Absent means "derive from generating".
   throughputIsEstimate?: boolean;
+}
+
+export interface PromptTokens {
+  input: number;
+  cacheRead: number;
+  cacheWrite: number;
 }
 
 export interface PullRequestInfo {
@@ -47,6 +55,12 @@ export interface DiscordActivityState {
 
 export interface SubagentInfoState {
   running: number;
+  /** Cumulative child cost, excluding the parent. */
+  cost?: number;
+  /** Cumulative child prompt-token buckets, excluding the parent. */
+  promptTokens?: PromptTokens;
+  /** Plain current snapshot; consumers validate it before use. */
+  snapshot?: unknown;
 }
 
 export function emptyModelInfoState(): ModelInfoState {
@@ -59,6 +73,7 @@ export function emptyModelInfoState(): ModelInfoState {
     contextWindow: 0,
     contextPercent: null,
     cost: 0,
+    promptTokens: { input: 0, cacheRead: 0, cacheWrite: 0 },
     tokensPerSecond: null,
     generating: false,
   };
@@ -75,6 +90,25 @@ export function emptyGitInfoState(): GitInfoState {
 
 export function emptySubagentInfoState(): SubagentInfoState {
   return { running: 0 };
+}
+
+function isPromptTokens(value: unknown): value is PromptTokens {
+  return (
+    isRecord(value) &&
+    typeof value.input === "number" &&
+    typeof value.cacheRead === "number" &&
+    typeof value.cacheWrite === "number"
+  );
+}
+
+export function sanitizePromptTokens(
+  value: PromptTokens | undefined,
+): PromptTokens {
+  return {
+    input: Math.max(0, finiteOr(value?.input, 0)),
+    cacheRead: Math.max(0, finiteOr(value?.cacheRead, 0)),
+    cacheWrite: Math.max(0, finiteOr(value?.cacheWrite, 0)),
+  };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -94,7 +128,12 @@ export function isDiscordActivityState(
 export function isSubagentInfoState(
   value: unknown,
 ): value is SubagentInfoState {
-  return isRecord(value) && typeof value.running === "number";
+  return (
+    isRecord(value) &&
+    typeof value.running === "number" &&
+    (value.cost === undefined || typeof value.cost === "number") &&
+    (value.promptTokens === undefined || isPromptTokens(value.promptTokens))
+  );
 }
 
 export function isModelInfoState(value: unknown): value is ModelInfoState {
@@ -109,6 +148,7 @@ export function isModelInfoState(value: unknown): value is ModelInfoState {
     typeof value.contextWindow === "number" &&
     isNullableNumber(value.contextPercent) &&
     typeof value.cost === "number" &&
+    (value.promptTokens === undefined || isPromptTokens(value.promptTokens)) &&
     isNullableNumber(value.tokensPerSecond) &&
     typeof value.generating === "boolean" &&
     (value.throughputIsEstimate === undefined ||
@@ -166,6 +206,7 @@ export function sanitizeModelInfoState(value: ModelInfoState): ModelInfoState {
     contextWindow: finiteOr(value.contextWindow, 0),
     contextPercent: finiteOrNull(value.contextPercent),
     cost: finiteOr(value.cost, 0),
+    promptTokens: sanitizePromptTokens(value.promptTokens),
     tokensPerSecond: finiteOrNull(value.tokensPerSecond),
   };
 }
@@ -183,5 +224,10 @@ export function sanitizeSubagentInfoState(
   const running = isFiniteNumber(value.running)
     ? Math.max(0, Math.floor(value.running))
     : 0;
-  return { running };
+  return {
+    ...value,
+    running,
+    cost: Math.max(0, finiteOr(value.cost, 0)),
+    promptTokens: sanitizePromptTokens(value.promptTokens),
+  };
 }

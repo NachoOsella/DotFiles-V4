@@ -45,8 +45,7 @@ function buildBreakdown(
   const cwdChars = cwdLine.length;
 
   // Base = total - known sections (approx)
-  const accounted =
-    appendChars + contextFilesChars + skillsChars + cwdChars;
+  const accounted = appendChars + contextFilesChars + skillsChars + cwdChars;
   const baseChars = Math.max(0, systemPrompt.length - accounted);
 
   return {
@@ -79,13 +78,8 @@ function getToolsJsonForEstimation(
   // Prefer actual tool definitions from pi
   try {
     const all = pi.getAllTools();
-    const activeNames = new Set(
-      options.selectedTools ?? pi.getActiveTools(),
-    );
-    const active =
-      activeNames.size > 0
-        ? all.filter((t) => activeNames.has(t.name))
-        : all;
+    const activeNames = new Set(pi.getActiveTools());
+    const active = all.filter((t) => activeNames.has(t.name));
     return active.map((t) => ({
       name: t.name,
       description: t.description,
@@ -106,23 +100,24 @@ type SystemPromptOptionsContext = ExtensionContext & {
   getSystemPromptOptions?: () => BuildSystemPromptOptions;
 };
 
-// Command contexts expose the full prompt construction options. Tool contexts
-// only expose the rendered prompt, so fall back to the fields available there.
+// Tool contexts lack this method; their caller supplies the current run's options.
 function resolveSystemPromptOptions(
   ctx: ExtensionContext,
-): BuildSystemPromptOptions {
+): BuildSystemPromptOptions | undefined {
   const provider = ctx as SystemPromptOptionsContext;
   return typeof provider.getSystemPromptOptions === "function"
     ? provider.getSystemPromptOptions()
-    : { cwd: ctx.cwd };
+    : undefined;
 }
 
 export function buildInspectionReport(
   ctx: ExtensionContext,
   pi: ExtensionAPI,
+  runOptions?: BuildSystemPromptOptions,
 ): InspectionReport {
   const systemPrompt = ctx.getSystemPrompt();
-  const options = resolveSystemPromptOptions(ctx);
+  const resolvedOptions = resolveSystemPromptOptions(ctx) ?? runOptions;
+  const options = resolvedOptions ?? { cwd: ctx.cwd };
   const breakdown = buildBreakdown(systemPrompt, options);
 
   const toolsJson = getToolsJsonForEstimation(pi, options);
@@ -183,6 +178,7 @@ export function buildInspectionReport(
     toolsTokens,
     skills,
     contextFiles,
+    resourcesAvailable: resolvedOptions !== undefined,
     contextUsage: usage
       ? {
           tokens: usage.tokens,

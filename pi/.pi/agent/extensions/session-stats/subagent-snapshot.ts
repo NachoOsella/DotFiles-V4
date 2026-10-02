@@ -1,28 +1,16 @@
 /**
- * New-methodology subagent usage for session-stats.
- *
- * Subagent children are independent Pi sessions. The subagents extension
- * records logical child metadata in a root snapshot while child transcripts
- * remain in their own session files. Older snapshots may still contain
- * accumulated usage from the V2 runtime.
- *
- * The subagents extension formerly recorded
- * per-agent accumulated usage in its `subagents-v2-state` snapshot (a plain
- * CustomEntry persisted on the parent branch). This module reads the latest
- * snapshot and converts each agent with usage into SessionStats that merge
- * with the existing pipeline (per-agent breakdown + Threads panel).
- *
- * Legacy file-based children (parentSessionPath links, `subagent:` names)
- * keep working through the unchanged discovery path in index.ts.
+ * Convert current child snapshots into per-agent usage, preserving physical
+ * model rows and pricing provenance. Used for live footer totals and as a
+ * fallback when a child's transcript is unavailable.
  */
 
 import {
     findLatestState,
-    isPersistedState,
+    parsePersistedState,
     type PersistedState,
-} from '../subagents/src/persistence.ts'
+} from '../subagents/src/persistence/session-state.ts'
 import { finalizeTotalTokens } from './format.ts'
-import { calculateUsageCost, combinePricingSources } from './pricing.ts'
+import { calculateUsageCost } from './pricing.ts'
 import type {
     ModelPricingResolver,
     ModelUsage,
@@ -43,6 +31,7 @@ interface ValidatedAgentUsage {
     readonly assistantMessages: number
     readonly toolResults: number
     readonly toolCalls: ToolUsage[]
+    readonly models?: ModelUsage[]
 }
 
 /** Build per-agent stats from the latest snapshot on a branch. */
@@ -82,8 +71,9 @@ export function buildStatsFromSnapshotData(
     file: string,
     pricing?: ModelPricingResolver
 ): SessionStats[] {
-    if (!isPersistedState(data)) return []
-    return snapshotAgents(data).flatMap((agent) =>
+    const snapshot = parsePersistedState(data)
+    if (!snapshot) return []
+    return snapshotAgents(snapshot).flatMap((agent) =>
         agentStats(agent, file, pricing)
     )
 }
@@ -108,25 +98,22 @@ function agentStats(
     const path = typeof agent.path === 'string' ? agent.path : 'subagent'
     const tokenCount =
         usage.input + usage.output + usage.cacheRead + usage.cacheWrite
-    const classified = classifySnapshotCost(usage, tokenCount, pricing)
-    const model: ModelUsage = {
-        provider: usage.provider,
-        modelId: usage.modelId,
-        count: usage.assistantMessages,
-        input: usage.input,
-        output: usage.output,
-        cacheRead: usage.cacheRead,
-        cacheWrite: usage.cacheWrite,
-        cost: classified.actual,
-        reportedCost: classified.reported,
-        catalogCost: classified.catalog,
-        estimatedCost: classified.estimated,
-        unknownTokens: classified.unknownTokens,
-        pricedTokens: classified.pricedTokens,
-        pricingSource: classified.source,
-    }
+    const models = usage.models?.length
+        ? usage.models
+        : [usageModel(usage, tokenCount, pricing)]
+    const sum = (key: keyof ModelUsage): number =>
+        models.reduce(
+            (total, model) =>
+                total +
+                (typeof model[key] === 'number' ? (model[key] as number) : 0),
+            0
+        )
+    const modelTokens =
+        sum('input') + sum('output') + sum('cacheRead') + sum('cacheWrite')
+    const unattributedTokens = Math.max(0, tokenCount - modelTokens)
+    const unattributedCost = Math.max(0, usage.cost - sum('cost'))
     const stats: SessionStats = {
-        file,
+        file: typeof agent.sessionFile === 'string' ? agent.sessionFile : file,
         name: path,
         parentSessionPath: file,
         totalTokens: {
@@ -136,19 +123,23 @@ function agentStats(
             cacheWrite: usage.cacheWrite,
             totalTokens: tokenCount,
             cost: {
-                total: classified.actual,
-                reported: classified.reported,
-                catalog: classified.catalog,
-                estimated: classified.estimated,
-                unknownTokens: classified.unknownTokens,
-                pricedTokens: classified.pricedTokens,
+                total: sum('cost') + unattributedCost,
+                reported: sum('reportedCost') + unattributedCost,
+                catalog: sum('catalogCost'),
+                estimated: sum('estimatedCost'),
+                unknownTokens:
+                    sum('unknownTokens') +
+                    (unattributedCost > 0 ? 0 : unattributedTokens),
+                pricedTokens:
+                    sum('pricedTokens') +
+                    (unattributedCost > 0 ? unattributedTokens : 0),
             },
         },
         userMessages: usage.userMessages,
         assistantMessages: usage.assistantMessages,
         toolResults: usage.toolResults,
         toolCalls: usage.toolCalls,
-        models: [model],
+        models,
         customMessages: 0,
     }
     const createdAt = readTime(agent.createdAt)
@@ -167,8 +158,6 @@ function agentStats(
 function readUsage(
     agent: Record<string, unknown>
 ): ValidatedAgentUsage | undefined {
-    const fallbackModel =
-        typeof agent.model === 'string' ? agent.model : undefined
     // Agents that never ran a turn carry no usage yet.
     if (!isRecord(agent.usage)) return undefined
     const usage = agent.usage
@@ -188,10 +177,7 @@ function readUsage(
     }
     return {
         provider: typeof usage.provider === 'string' ? usage.provider : '',
-        modelId:
-            typeof usage.modelId === 'string'
-                ? usage.modelId
-                : (fallbackModel ?? 'unknown'),
+        modelId: typeof usage.modelId === 'string' ? usage.modelId : 'unknown',
         input,
         output,
         cacheRead,
@@ -201,6 +187,33 @@ function readUsage(
         assistantMessages,
         toolResults,
         toolCalls: readToolCalls(usage.toolCalls),
+        ...(Array.isArray(usage.models)
+            ? { models: usage.models as ModelUsage[] }
+            : {}),
+    }
+}
+
+function usageModel(
+    usage: ValidatedAgentUsage,
+    tokenCount: number,
+    pricing?: ModelPricingResolver
+): ModelUsage {
+    const classified = classifySnapshotCost(usage, tokenCount, pricing)
+    return {
+        provider: usage.provider,
+        modelId: usage.modelId,
+        count: usage.assistantMessages,
+        input: usage.input,
+        output: usage.output,
+        cacheRead: usage.cacheRead,
+        cacheWrite: usage.cacheWrite,
+        cost: classified.actual,
+        reportedCost: classified.reported,
+        catalogCost: classified.catalog,
+        estimatedCost: classified.estimated,
+        unknownTokens: classified.unknownTokens,
+        pricedTokens: classified.pricedTokens,
+        pricingSource: classified.source,
     }
 }
 

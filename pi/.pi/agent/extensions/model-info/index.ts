@@ -1,3 +1,4 @@
+import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type {
   ExtensionAPI,
   ExtensionContext,
@@ -7,19 +8,33 @@ import {
   MODEL_INFO_CHANNEL,
   REFRESH_CHANNEL,
 } from "../shared/dashboard-state.ts";
-import { computeActiveBranchCost } from "./src/session-cost.ts";
+import {
+  computeSessionBilling,
+  type SessionBilling,
+} from "./src/session-cost.ts";
+import { createModelPricingResolver } from "../session-stats/pricing-resolver.ts";
 
 const CHARS_PER_ESTIMATED_TOKEN = 4;
 const LIVE_UPDATE_INTERVAL_MS = 200;
 
-// Active-branch cost accounting (labeled semantics, P11 step 7): the sum of
-// every usage-bearing entry on the active branch counted exactly once -
-// assistant messages, tool-result usage, compaction summary usage, and
-// branch-summary usage. This is NOT lifetime billing (other branches and
-// abandoned leaves are excluded) and does NOT traverse
-// compaction.retainedTail as separately billed messages.
-function getSessionCost(ctx: ExtensionContext) {
-  return computeActiveBranchCost(ctx.sessionManager.getBranch());
+// Billing is cumulative across persisted branches; context occupancy remains active-context only.
+function getSessionBilling(
+  ctx: ExtensionContext,
+  finalizedMessage?: AssistantMessage,
+): SessionBilling {
+  const entries = ctx.sessionManager.getEntries();
+  // Extension message_end also runs before the SDK appends the finalized response.
+  const reportedEntries =
+    finalizedMessage &&
+    !entries.some(
+      (entry) => entry.type === "message" && entry.message === finalizedMessage,
+    )
+      ? [...entries, { type: "message" as const, message: finalizedMessage }]
+      : entries;
+  return computeSessionBilling(
+    reportedEntries,
+    createModelPricingResolver(ctx),
+  );
 }
 
 function estimateContentTokens(characters: number) {
@@ -41,8 +56,9 @@ export default function modelInfo(pi: ExtensionAPI) {
 
   const publish = () => pi.events.emit(MODEL_INFO_CHANNEL, { ...state });
 
-  function refresh(ctx: ExtensionContext) {
+  function refresh(ctx: ExtensionContext, finalizedMessage?: AssistantMessage) {
     currentContext = ctx;
+    const billing = getSessionBilling(ctx, finalizedMessage);
     const model = ctx.model;
     const usage = ctx.getContextUsage();
 
@@ -75,7 +91,12 @@ export default function modelInfo(pi: ExtensionAPI) {
       contextTokens,
       contextWindow: usageWindow || modelWindow,
       contextPercent,
-      cost: getSessionCost(ctx),
+      cost: billing.cost,
+      promptTokens: {
+        input: billing.input,
+        cacheRead: billing.cacheRead,
+        cacheWrite: billing.cacheWrite,
+      },
       // A refresh recomputes from stored usage: any previously published
       // live estimate is superseded by a measured value.
       throughputIsEstimate: false,
@@ -229,14 +250,13 @@ export default function modelInfo(pi: ExtensionAPI) {
     }
 
     resetMessageTracking();
-    refresh(ctx);
+    refresh(ctx, event.message);
   });
 
   pi.on("turn_end", (_event, ctx) => refresh(ctx));
 
-  // Branch navigation, compaction, and tool completion can all change billed
-  // usage without an assistant message_end on the new branch. Keep the
-  // native agent_settled hook below for the end-of-work state.
+  // Navigation changes context; compaction and tools can add billed usage.
+  // Keep the settled hook for the final generation state.
   pi.on("session_tree", (_event, ctx) => refresh(ctx));
 
   pi.on("session_compact", (_event, ctx) => refresh(ctx));

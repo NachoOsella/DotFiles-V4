@@ -21,7 +21,7 @@ Pi-specific omissions are tracked in `docs/CODEX_PARITY.md`, including
 parent-authoritative cold reload, environment, permissions, execution policy,
 and inherited instruction handling.
 
-Until then: behavioral reimplementation only. `src/prompts.ts`
+Until then: behavioral reimplementation only. `src/config/prompts.ts`
 contains original wording preserving the upstream meaning clauses;
 no Rust source or upstream prompt text is copied into this repo.
 Every translated module cites its upstream file in a header comment.

@@ -26,6 +26,7 @@ import {
     sanitizeGitInfoState,
     sanitizeModelInfoState,
     sanitizeSubagentInfoState,
+    type PromptTokens,
 } from '../shared/dashboard-state.ts'
 import {
     appendOverflowIndicator,
@@ -34,6 +35,18 @@ import {
     normalizeWidth,
     packExtensionStatuses,
 } from './src/dashboard-layout.ts'
+
+function sumPromptTokens(
+    parent: PromptTokens | undefined,
+    children: PromptTokens | undefined
+): PromptTokens | undefined {
+    if (!parent && !children) return undefined
+    return {
+        input: (parent?.input ?? 0) + (children?.input ?? 0),
+        cacheRead: (parent?.cacheRead ?? 0) + (children?.cacheRead ?? 0),
+        cacheWrite: (parent?.cacheWrite ?? 0) + (children?.cacheWrite ?? 0),
+    }
+}
 
 function formatDirectory(cwd: string) {
     const home = homedir()
@@ -110,7 +123,11 @@ export default function uiCustomization(pi: ExtensionAPI) {
                             thinking: modelInfo.thinking,
                             contextPercent: modelInfo.contextPercent,
                             contextWindow: modelInfo.contextWindow,
-                            cost: modelInfo.cost,
+                            cost: modelInfo.cost + (subagentInfo.cost ?? 0),
+                            promptTokens: sumPromptTokens(
+                                modelInfo.promptTokens,
+                                subagentInfo.promptTokens
+                            ),
                             tokensPerSecond: modelInfo.tokensPerSecond,
                             throughputIsEstimate: isEstimate,
                             subagentsRunning: subagentInfo.running,

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
-import { computeActiveBranchCost } from "./src/session-cost.ts";
+import { computeSessionCost } from "./src/session-cost.ts";
 
 function usage(total: number) {
   return {
@@ -90,17 +90,29 @@ function usageEntry(id: string, total: number) {
   } as unknown as SessionEntry;
 }
 
-describe("computeActiveBranchCost", () => {
+describe("computeSessionCost", () => {
   it("sums assistant messages on the active branch", () => {
     assert.equal(
-      computeActiveBranchCost([assistant("a1", 1), assistant("a2", 2)]),
+      computeSessionCost([assistant("a1", 1), assistant("a2", 2)]),
       3,
+    );
+  });
+
+  it("uses catalog pricing when the provider did not report a cost", () => {
+    assert.equal(
+      computeSessionCost([assistant("a1", 0)], () => ({
+        input: 2,
+        output: 4,
+        cacheRead: 0,
+        cacheWrite: 0,
+      })),
+      0.0004,
     );
   });
 
   it("includes tool-result usage (regression: previously omitted)", () => {
     const branch = [assistant("a1", 1), toolResult("t1", 0.5)];
-    assert.equal(computeActiveBranchCost(branch), 1.5);
+    assert.equal(computeSessionCost(branch), 1.5);
   });
 
   it("includes compaction and branch-summary usage (regression)", () => {
@@ -109,12 +121,12 @@ describe("computeActiveBranchCost", () => {
       compaction("c1", 0.25),
       branchSummary("b1", 0.25),
     ];
-    assert.equal(computeActiveBranchCost(branch), 1.5);
+    assert.equal(computeSessionCost(branch), 1.5);
   });
 
   it("includes model-attributed usage entries such as cache warming", () => {
     const branch = [assistant("a1", 1), usageEntry("u1", 0.25)];
-    assert.equal(computeActiveBranchCost(branch), 1.25);
+    assert.equal(computeSessionCost(branch), 1.25);
   });
 
   it("differs from the old assistant-only total on a mixed fixture", () => {
@@ -138,7 +150,7 @@ describe("computeActiveBranchCost", () => {
         0,
       );
     assert.equal(assistantOnly, 1);
-    assert.equal(computeActiveBranchCost(branch), 2.5);
+    assert.equal(computeSessionCost(branch), 2.5);
   });
 
   it("does not traverse retainedTail as separately billed messages", () => {
@@ -153,7 +165,7 @@ describe("computeActiveBranchCost", () => {
       },
     ];
     const branch = [compaction("c1", 0.5, { retainedTail })];
-    assert.equal(computeActiveBranchCost(branch), 0.5);
+    assert.equal(computeSessionCost(branch), 0.5);
   });
 
   it("counts each entry once and ignores entries without usage", () => {
@@ -169,7 +181,7 @@ describe("computeActiveBranchCost", () => {
         timestamp: "",
       } as unknown as SessionEntry,
     ];
-    assert.equal(computeActiveBranchCost(branch), 1);
+    assert.equal(computeSessionCost(branch), 1);
   });
 
   it("ignores non-finite cost totals", () => {
@@ -178,20 +190,20 @@ describe("computeActiveBranchCost", () => {
       assistant("a2", NaN),
       assistant("a3", Infinity),
     ];
-    assert.equal(computeActiveBranchCost(branch), 1);
+    assert.equal(computeSessionCost(branch), 1);
   });
 
   it("returns 0 for an empty branch", () => {
-    assert.equal(computeActiveBranchCost([]), 0);
+    assert.equal(computeSessionCost([]), 0);
   });
 
   it("recomputes on navigation and replay (no stale cached total)", () => {
     const before = [assistant("a1", 1)];
     const afterNavigation = [assistant("a1", 1), assistant("a2", 2)];
-    assert.equal(computeActiveBranchCost(before), 1);
-    assert.equal(computeActiveBranchCost(afterNavigation), 3);
+    assert.equal(computeSessionCost(before), 1);
+    assert.equal(computeSessionCost(afterNavigation), 3);
     // Replay with identical ids but new usage objects must not reuse totals.
     const replayed = [assistant("a1", 10)];
-    assert.equal(computeActiveBranchCost(replayed), 10);
+    assert.equal(computeSessionCost(replayed), 10);
   });
 });

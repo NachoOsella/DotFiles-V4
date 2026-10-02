@@ -16,22 +16,30 @@ const FILE = '/tmp/parent.jsonl'
 function snapshotEntry(agents: unknown[]) {
     return {
         type: 'custom',
-        customType: 'subagents-v2-state',
+        customType: 'subagents-v3-state',
         data: {
-            version: 1,
+            version: 2,
             rootSessionId: 'root-1',
             agents,
         },
     }
 }
 
+function parentPathOf(path: string): string {
+    const index = path.lastIndexOf('/')
+    return index <= 0 ? '/root' : path.slice(0, index)
+}
+
 function agent(path: string, usage: unknown, extra: unknown = {}) {
     return {
         id: `id-${path}`,
         path,
-        parentId: null,
-        model: 'openai-codex/gpt-5.6-luna',
-        statusTag: 'Completed',
+        parentPath: parentPathOf(path),
+        rootSessionId: 'root-1',
+        model: { provider: 'openai-codex', id: 'gpt-5.6-luna' },
+        activeTools: [],
+        status: 'Completed',
+        runSequence: 1,
         createdAt: 1_000,
         lastActivityAt: 5_000,
         usage,
@@ -89,7 +97,7 @@ test('falls back to catalog pricing when no reported cost exists', () => {
     })
     const stats = buildStatsFromSnapshotData(
         {
-            version: 1,
+            version: 2,
             rootSessionId: 'root-1',
             agents: [agent('/root/a', usage({ cost: 0 }))],
         },
@@ -104,7 +112,7 @@ test('falls back to catalog pricing when no reported cost exists', () => {
 test('marks unknown pricing when nothing resolves', () => {
     const stats = buildStatsFromSnapshotData(
         {
-            version: 1,
+            version: 2,
             rootSessionId: 'root-1',
             agents: [agent('/root/a', usage({ cost: 0 }))],
         },
@@ -148,7 +156,15 @@ test('tolerates malformed snapshots', () => {
     assert.deepEqual(buildStatsFromSnapshotData({ version: 2 }, FILE), [])
     assert.deepEqual(
         buildStatsFromSnapshotData(
-            { version: 1, rootSessionId: 'x', agents: 'nope' },
+            { version: 2, rootSessionId: 'x', agents: 'nope' },
+            FILE
+        ),
+        []
+    )
+    // Retired V1 snapshots are ignored, never migrated.
+    assert.deepEqual(
+        buildStatsFromSnapshotData(
+            { version: 1, rootSessionId: 'x', agents: [] },
             FILE
         ),
         []
@@ -183,9 +199,9 @@ test('parser folds snapshot usage into persisted file totals', async () => {
                 id: 'snap-1',
                 parentId: null,
                 timestamp: '2026-01-01T00:00:02.000Z',
-                customType: 'subagents-v2-state',
+                customType: 'subagents-v3-state',
                 data: {
-                    version: 1,
+                    version: 2,
                     rootSessionId: 'root-1',
                     agents: [agent('/root/worker', usage())],
                 },
@@ -210,9 +226,9 @@ test('parser folds snapshot usage into persisted file totals', async () => {
 test('running and nested agents with usage are included', () => {
     const entries = [
         snapshotEntry([
-            agent('/root/worker', usage(), { statusTag: 'Running' }),
+            agent('/root/worker', usage(), { status: 'Running' }),
             agent('/root/worker/nested', usage({ input: 20, output: 10 }), {
-                statusTag: 'Running',
+                status: 'Running',
             }),
         ]),
     ]
@@ -230,9 +246,9 @@ test('snapshot age is undefined without persistedAt and live when fresh', () => 
     const fresh = [
         {
             type: 'custom',
-            customType: 'subagents-v2-state',
+            customType: 'subagents-v3-state',
             data: {
-                version: 1,
+                version: 2,
                 rootSessionId: 'root-1',
                 persistedAt: Date.now(),
                 agents: [agent('/root/a', usage())],

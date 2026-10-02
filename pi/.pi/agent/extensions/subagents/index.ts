@@ -5,30 +5,34 @@ import type {
     ExtensionContext,
 } from '@earendil-works/pi-coding-agent'
 import { getAgentDir } from '@earendil-works/pi-coding-agent'
-import { showAgentsModal } from './src/agents-modal.ts'
-import { decodeConfig, DEFAULT_SUBAGENTS_CONFIG } from './src/config.ts'
-import { SubagentCoordinator } from './src/coordinator.ts'
+import { showAgentsModal } from './src/ui/agents-modal.ts'
+import { decodeConfig, DEFAULT_SUBAGENTS_CONFIG } from './src/config/config.ts'
+import { SubagentCoordinator } from './src/core/coordinator.ts'
 import {
     buildRootToolDefinitions,
     buildChildToolDefinitions,
-    validateToolPlan,
-} from './src/extension-tools.ts'
+} from './src/tools/extension-tools.ts'
 import {
     rootEndpoint,
     SUBAGENTS_COMMUNICATION_CUSTOM_TYPE,
-} from './src/transport.ts'
-import { renderSubagentCommunication } from './src/final-answer-renderer.ts'
-import { renderSubagentsState } from './src/state-renderer.ts'
-import { resolveConfiguredMode } from './src/mode.ts'
+} from './src/core/transport.ts'
+import { renderSubagentCommunication } from './src/ui/final-answer-renderer.ts'
+import { renderSubagentsState } from './src/ui/state-renderer.ts'
+import { resolveConfiguredMode } from './src/config/mode.ts'
+import { plannedToolNames } from './src/tools/tool-specs.ts'
 import {
     findLatestState,
-    LEGACY_SUBAGENTS_STATE_CUSTOM_TYPE,
     SUBAGENTS_STATE_CUSTOM_TYPE,
-} from './src/persistence.ts'
-import { assembleRootPrompt } from './src/prompts.ts'
-import { SUBAGENTS_INFO_CHANNEL } from '../shared/dashboard-state.ts'
-import type { AgentPath } from './src/ids.ts'
-import type { ParentExecutionSnapshot } from './src/parent-snapshot.ts'
+} from './src/persistence/session-state.ts'
+import { assembleRootPrompt } from './src/config/prompts.ts'
+import {
+    SUBAGENTS_INFO_CHANNEL,
+    REFRESH_CHANNEL,
+} from '../shared/dashboard-state.ts'
+import { createModelPricingResolver } from '../session-stats/pricing-resolver.ts'
+import { buildStatsFromSnapshotData } from '../session-stats/subagent-snapshot.ts'
+import type { AgentPath } from './src/domain/ids.ts'
+import type { ParentExecutionSnapshot } from './src/domain/parent-snapshot.ts'
 
 const ROOT_PATH = '/root' as AgentPath
 
@@ -41,8 +45,6 @@ function loadConfig(): typeof DEFAULT_SUBAGENTS_CONFIG {
             ;(
                 config as { maxConcurrentExecutions: number }
             ).maxConcurrentExecutions = value
-            ;(config as { maxConcurrentAgents: number }).maxConcurrentAgents =
-                value
         }
     }
     if (process.env.SUBAGENTS_MAX_AGENTS !== undefined) {
@@ -61,7 +63,6 @@ function loadConfig(): typeof DEFAULT_SUBAGENTS_CONFIG {
         const value = Number.parseInt(process.env.SUBAGENTS_MAX_LOADED, 10)
         if (Number.isSafeInteger(value) && value >= 1) {
             ;(config as { maxLoadedAgents: number }).maxLoadedAgents = value
-            ;(config as { maxResidentAgents: number }).maxResidentAgents = value
         }
     }
     if (process.env.SUBAGENTS_DISABLE_WAIT === '1') {
@@ -99,7 +100,7 @@ function readConfiguredConfig(): unknown {
 function selectSubagentsConfig(value: unknown): unknown {
     if (typeof value !== 'object' || value === null) return undefined
     const record = value as Record<string, unknown>
-    return record.subagents ?? record.subagentsConfig
+    return record.subagents
 }
 
 export default function subagentsExtension(pi: ExtensionAPI) {
@@ -110,23 +111,35 @@ export default function subagentsExtension(pi: ExtensionAPI) {
         SUBAGENTS_COMMUNICATION_CUSTOM_TYPE,
         renderSubagentCommunication
     )
-    pi.registerEntryRenderer(
-        SUBAGENTS_STATE_CUSTOM_TYPE,
-        renderSubagentsState
-    )
-    pi.registerEntryRenderer(
-        LEGACY_SUBAGENTS_STATE_CUSTOM_TYPE,
-        renderSubagentsState
-    )
+    pi.registerEntryRenderer(SUBAGENTS_STATE_CUSTOM_TYPE, renderSubagentsState)
 
     let coordinator: SubagentCoordinator | undefined
     let latestCtx: ExtensionContext | undefined
 
-    const publishRunningCount = (manager: SubagentCoordinator): void => {
+    const publishSubagentInfo = (manager: SubagentCoordinator): void => {
         const running = manager
             .list(ROOT_PATH)
             .filter((agent) => agent.status === 'Running').length
-        pi.events.emit(SUBAGENTS_INFO_CHANNEL, { running })
+        const ctx = latestCtx
+        if (!ctx) return
+        const snapshot = manager.serialize(ctx.sessionManager.getSessionId())
+        const agents = buildStatsFromSnapshotData(
+            snapshot,
+            ctx.sessionManager.getSessionFile() ?? 'ephemeral',
+            createModelPricingResolver(ctx)
+        )
+        const sum = (pick: (agent: (typeof agents)[number]) => number) =>
+            agents.reduce((total, agent) => total + pick(agent), 0)
+        pi.events.emit(SUBAGENTS_INFO_CHANNEL, {
+            running,
+            cost: sum((agent) => agent.totalTokens.cost.total),
+            promptTokens: {
+                input: sum((agent) => agent.totalTokens.input),
+                cacheRead: sum((agent) => agent.totalTokens.cacheRead),
+                cacheWrite: sum((agent) => agent.totalTokens.cacheWrite),
+            },
+            snapshot,
+        })
     }
 
     const rootSnapshot = (): ParentExecutionSnapshot => {
@@ -139,7 +152,7 @@ export default function subagentsExtension(pi: ExtensionAPI) {
             model: { provider: model.provider, id: model.id },
             thinkingLevel: ctx.thinkingLevel ?? pi.getThinkingLevel(),
             activeTools: pi.getActiveTools(),
-            contextEntries: ctx.sessionManager.buildContextEntries(),
+            contextEntries: ctx.sessionManager.getBranch(),
             sessionFile: ctx.sessionManager.getSessionFile(),
             sessionId: ctx.sessionManager.getSessionId(),
         }
@@ -170,11 +183,15 @@ export default function subagentsExtension(pi: ExtensionAPI) {
                     buildChildToolDefinitions(getCoordinator(), caller),
             })
             coordinator.onEvent((event) => {
-                if (event._tag === 'StatusChanged') {
+                if (
+                    event._tag === 'StatusChanged' ||
+                    event._tag === 'UsageUpdated'
+                ) {
                     const manager = coordinator
-                    if (manager) publishRunningCount(manager)
+                    if (manager) publishSubagentInfo(manager)
                 }
                 if (
+                    event._tag === 'UsageUpdated' ||
                     event._tag === 'ActivityCompleted' ||
                     event._tag === 'ActivityInterrupted'
                 ) {
@@ -185,7 +202,7 @@ export default function subagentsExtension(pi: ExtensionAPI) {
         return coordinator
     }
 
-    const toolNames = validateToolPlan(config.waitAgentEnabled)
+    const toolNames = plannedToolNames(config.waitAgentEnabled)
     for (const tool of buildRootToolDefinitions(getCoordinator())) {
         if (toolNames.includes(tool.name)) pi.registerTool(tool as never)
     }
@@ -204,20 +221,29 @@ export default function subagentsExtension(pi: ExtensionAPI) {
         },
     })
 
+    const stopRefresh = pi.events.on(REFRESH_CHANNEL, () => {
+        if (coordinator && latestCtx) publishSubagentInfo(coordinator)
+    })
+
     pi.on('session_start', (event, ctx) => {
         latestCtx = ctx
         const manager = getCoordinator()
         manager.bindSession(ctx.sessionManager.getSessionId(), ROOT_PATH)
-        if (event.reason === 'startup' || event.reason === 'resume') {
+        if (
+            event.reason === 'startup' ||
+            event.reason === 'resume' ||
+            event.reason === 'reload'
+        ) {
             const persisted = findLatestState(ctx.sessionManager.getBranch())
             if (persisted) manager.restore(persisted)
         }
-        publishRunningCount(manager)
+        publishSubagentInfo(manager)
         void manager.retryPendingCompletions(ROOT_PATH)
     })
 
     pi.on('session_tree', (_event, ctx) => {
         latestCtx = ctx
+        if (coordinator) publishSubagentInfo(coordinator)
     })
 
     pi.on('input', (_event, ctx) => {
@@ -256,6 +282,7 @@ export default function subagentsExtension(pi: ExtensionAPI) {
     pi.on('session_shutdown', async (_event, ctx) => {
         const manager = coordinator
         const sessionId = ctx.sessionManager.getSessionId()
+        stopRefresh()
         coordinator = undefined
         latestCtx = undefined
         pi.events.emit(SUBAGENTS_INFO_CHANNEL, { running: 0 })

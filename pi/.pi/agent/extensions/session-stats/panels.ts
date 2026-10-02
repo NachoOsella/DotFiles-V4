@@ -57,9 +57,7 @@ export function buildToolRows(
             color(
                 theme,
                 'dim',
-                progressTrackGlyph(theme).repeat(
-                    Math.max(0, barWidth - filled)
-                )
+                progressTrackGlyph(theme).repeat(Math.max(0, barWidth - filled))
             )
         const count = formatNumber(tool.count).padStart(countWidth)
         const percent = formatPercent((tool.count / total) * 100).padStart(

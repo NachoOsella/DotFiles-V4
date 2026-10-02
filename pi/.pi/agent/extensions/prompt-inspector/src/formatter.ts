@@ -65,8 +65,12 @@ export function formatSummary(report: InspectionReport): string {
     );
   }
   lines.push("");
-  lines.push("Notas: tokens = ceil(chars/4), imagen = 4800 chars. Es aproximado; el tokenizer real varia por provider.");
-  lines.push(`Usa /prompt full para ver el prompt completo, /prompt save [ruta] para guardarlo.`);
+  lines.push(
+    "Notas: tokens = ceil(chars/4), imagen = 4800 chars. Es aproximado; el tokenizer real varia por provider.",
+  );
+  lines.push(
+    `Usa /prompt full para ver el prompt completo, /prompt save [ruta] para guardarlo.`,
+  );
   return lines.join("\n");
 }
 
@@ -83,7 +87,9 @@ export function formatToolSummary(report: InspectionReport): string {
     `Active tools: ${report.tools.length} -- ${fmt(report.toolsJsonChars)} chars ~${fmt(report.toolsTokens)} tokens`,
   );
   lines.push(
-    `Skills: ${report.skills.length} -- context files: ${report.contextFiles.length}`,
+    report.resourcesAvailable
+      ? `Skills: ${report.skills.length} -- context files: ${report.contextFiles.length}`
+      : "Skills: n/a -- context files: n/a",
   );
   lines.push(
     `Messages: ${report.messageCount} ~${fmt(report.messagesTokens)} tokens (estimated)`,
@@ -172,7 +178,9 @@ export function formatForFile(report: InspectionReport): string {
   lines.push("## Context Files");
   lines.push("");
   for (const f of report.contextFiles) {
-    lines.push(`- \`${f.path}\` — ${fmt(f.chars)} chars ~${fmt(f.tokens)} tokens`);
+    lines.push(
+      `- \`${f.path}\` — ${fmt(f.chars)} chars ~${fmt(f.tokens)} tokens`,
+    );
   }
   if (report.contextFiles.length === 0) lines.push("(none)");
   return lines.join("\n");

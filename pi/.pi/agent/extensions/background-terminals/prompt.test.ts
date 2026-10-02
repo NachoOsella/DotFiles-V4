@@ -6,6 +6,7 @@ import {
   BG_START_TOOL_DESCRIPTION,
   buildKillReport,
   buildStatusResult,
+  buildStatusStructuredContent,
   buildTerminalResultMessage,
 } from "./src/prompt.ts";
 
@@ -86,6 +87,32 @@ test("status result marks head-truncated output with a pointer at the full log",
   );
   assert.match(text, /stdout truncated: showing last /);
   assert.match(text, /Full log: \/tmp\/bt-1\.stdout\.log/);
+});
+
+test("structured status bounds both streams and preserves full-log pointers", () => {
+  const terminal = snap({
+    stdout: view({
+      text: "x".repeat(32 * 1024),
+      totalBytes: 64 * 1024,
+      truncatedBytes: 32 * 1024,
+      spillPath: "/tmp/stdout.log",
+    }),
+    stderr: view({
+      text: "error\n".repeat(500),
+      totalBytes: 3000,
+      spillPath: "/tmp/stderr.log",
+    }),
+    errorText: "spawn diagnostic",
+  });
+  const output = buildStatusStructuredContent(terminal);
+  assert.ok(Buffer.byteLength(output.stdout.text) <= 16 * 1024);
+  assert.ok(output.stderr.text.split("\n").length <= 200);
+  assert.equal(output.stdout.truncated, true);
+  assert.equal(output.stderr.truncated, true);
+  assert.equal(output.stdout.totalBytes, 64 * 1024);
+  assert.equal(output.stdout.fullOutputPath, "/tmp/stdout.log");
+  assert.equal(output.stderr.fullOutputPath, "/tmp/stderr.log");
+  assert.equal(output.errorText, "spawn diagnostic");
 });
 
 test("completion message reports kill vs exit and omits empty stderr", () => {

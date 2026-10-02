@@ -739,7 +739,13 @@ export function calculateAllSessionTotals(
 
     return {
         rootSessionCount,
-        subagentRuns: sessions.length - rootSessionCount,
+        subagentRuns:
+            sessions.length -
+            rootSessionCount +
+            sessions.reduce(
+                (sum, session) => sum + (session.subagents?.length ?? 0),
+                0
+            ),
         activeDays: activeDates.size,
         conversationMessages,
         toolCalls,

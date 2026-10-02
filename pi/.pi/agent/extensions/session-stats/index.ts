@@ -8,11 +8,17 @@ import type {
 import { matchesKey } from '@earendil-works/pi-tui'
 import { Effect } from 'effect'
 import { showStatsModal } from './modal.ts'
+import { createModelPricingResolver } from './pricing-resolver.ts'
 import { mergeSessionStats } from './aggregate.ts'
 import {
-    buildSubagentSnapshotStats,
-    getSubagentSnapshotAge,
-} from './subagent-snapshot.ts'
+    SUBAGENTS_INFO_CHANNEL,
+    isSubagentInfoState,
+} from '../shared/dashboard-state.ts'
+import {
+    findLatestState,
+    parsePersistedState,
+    type PersistedState,
+} from '../subagents/src/persistence/session-state.ts'
 import { discoverSessionFiles } from './discovery.ts'
 import {
     buildAllStatsOutput,
@@ -21,34 +27,29 @@ import {
     buildProjectSummaries,
     type DataQuality,
 } from './output.ts'
-import { parseCurrentBranch, parseSessionFileEffect } from './parser.ts'
-import type {
-    ModelPricingResolver,
-    SessionEntryLike,
-    SessionStats,
-} from './types.ts'
+import {
+    parseCurrentBranch,
+    parseSessionFileEffect,
+    loadSubagentStats,
+} from './parser.ts'
+import type { SessionEntryLike, SessionStats } from './types.ts'
 
 const STATUS_KEY = 'session-stats'
 const MAX_CONCURRENT_READS = 16
-const pricingResolvers = new WeakMap<object, ModelPricingResolver>()
-
-/** Paid catalog equivalents used to estimate the value of free endpoints. */
-const FREE_MODEL_PRICE_REFERENCES: Record<string, readonly [string, string][]> =
-    {
-        'hy3-free': [['openrouter', 'tencent/hy3']],
-        'mimo-v2-pro-free': [['opencode-go', 'mimo-v2.5-pro']],
-        'nemotron-3-ultra-free': [
-            ['nvidia', 'nvidia/nemotron-3-ultra-550b-a55b'],
-        ],
-        'glm-4.7-free': [['openrouter', 'z-ai/glm-4.7']],
-        'ling-2.6-flash-free': [['openrouter', 'inclusionai/ling-2.6-flash']],
-        'trinity-large-preview-free': [
-            ['vercel-ai-gateway', 'arcee-ai/trinity-large-preview'],
-        ],
-    }
-
 /** Register `/stats` for current-session and aggregate usage statistics. */
 export default function sessionStatsExtension(pi: ExtensionAPI) {
+    let liveSnapshot: PersistedState | undefined
+    const stopUsage = pi.events.on(SUBAGENTS_INFO_CHANNEL, (value) => {
+        if (isSubagentInfoState(value))
+            liveSnapshot = parsePersistedState(value.snapshot)
+    })
+    pi.on('session_start', () => {
+        liveSnapshot = undefined
+    })
+    pi.on('session_shutdown', () => {
+        liveSnapshot = undefined
+        stopUsage()
+    })
     pi.registerCommand('stats', {
         description:
             'Show session statistics. /stats | /stats all [project] [days]',
@@ -62,7 +63,7 @@ export default function sessionStatsExtension(pi: ExtensionAPI) {
                 await showAllSessionStats(parsed.days, parsed.project, ctx)
                 return
             }
-            await showCurrentSessionStats(ctx)
+            await showCurrentSessionStats(ctx, liveSnapshot)
         },
     })
 }
@@ -123,14 +124,24 @@ async function showAllSessionStats(
             { concurrency: MAX_CONCURRENT_READS }
         )
 
-        const stats = parsed.flatMap((value) => (value ? [value] : []))
+        const parsedStats = parsed.flatMap((value) => (value ? [value] : []))
+        const includedChildren = new Set(
+            parsedStats.flatMap((root) =>
+                (root.subagents ?? [])
+                    .filter((child) => child.file !== root.file)
+                    .map((child) => child.file)
+            )
+        )
+        const stats = parsedStats.filter(
+            (session) => !includedChildren.has(session.file)
+        )
         return stats.length === 0
             ? { kind: 'unparseable' as const }
             : {
                   kind: 'success' as const,
                   stats,
                   quality: {
-                      parsedSessions: stats.length,
+                      parsedSessions: parsedStats.length,
                       discoveredSessions: sessions.length,
                   } satisfies DataQuality,
               }
@@ -284,7 +295,8 @@ async function showAllStatsBrowser(
 }
 
 async function showCurrentSessionStats(
-    ctx: ExtensionCommandContext
+    ctx: ExtensionCommandContext,
+    liveSnapshot?: PersistedState
 ): Promise<void> {
     const currentFile = ctx.sessionManager.getSessionFile() ?? 'ephemeral'
     const pricing = createModelPricingResolver(ctx)
@@ -295,11 +307,19 @@ async function showCurrentSessionStats(
         ctx.sessionManager.getSessionName() ?? undefined,
         pricing
     )
-    // Snapshot-only methodology: in-memory children report accumulated
-    // usage through the subagents snapshot persisted on this branch (never
-    // files on disk). No file discovery here by design.
-    const agents = buildSubagentSnapshotStats(entries, currentFile, pricing)
-    const snapshotAgeMs = getSubagentSnapshotAge(entries)
+    const rootSessionId = ctx.sessionManager.getSessionId()
+    const latest = findLatestState(entries)
+    const persisted =
+        latest?.rootSessionId === rootSessionId ? latest : undefined
+    const snapshot =
+        liveSnapshot?.rootSessionId === rootSessionId &&
+        liveSnapshot.persistedAt >= (persisted?.persistedAt ?? 0)
+            ? liveSnapshot
+            : persisted
+    const agents = await loadSubagentStats(snapshot, currentFile, pricing)
+    const snapshotAgeMs = snapshot?.persistedAt
+        ? Math.max(0, Date.now() - snapshot.persistedAt)
+        : undefined
     const stats = mergeSessionStats(
         [currentStats, ...agents],
         currentFile,
@@ -367,59 +387,6 @@ function parseCommand(args: string): ParsedCommand {
         return { kind: 'invalid', message: 'Days must be a positive integer.' }
     }
     return { kind: 'all', days, project: hasProjectFilter }
-}
-
-function createModelPricingResolver(
-    ctx: ExtensionCommandContext
-): ModelPricingResolver {
-    const registry = ctx.modelRegistry as object
-    const cached = pricingResolvers.get(registry)
-    if (cached) return cached
-
-    const resolver: ModelPricingResolver = (provider, modelId) => {
-        const directModel = ctx.modelRegistry.find(provider, modelId)
-        if (directModel) {
-            // A zero-rate catalog entry is known free usage, not missing pricing.
-            return { ...directModel.cost, source: 'catalog' }
-        }
-        if (!modelId.endsWith('-free')) return undefined
-
-        const baseModelId = modelId.slice(0, -'-free'.length)
-        const candidates = [
-            ['opencode', baseModelId] as const,
-            ['opencode-go', baseModelId] as const,
-            ...(FREE_MODEL_PRICE_REFERENCES[modelId] ?? []),
-        ]
-        for (const [referenceProvider, referenceModelId] of candidates) {
-            const referenceModel = ctx.modelRegistry.find(
-                referenceProvider,
-                referenceModelId
-            )
-            if (referenceModel && hasBillablePricing(referenceModel.cost)) {
-                return { ...referenceModel.cost, source: 'estimated' }
-            }
-        }
-
-        // Do not present a free model's zero rate as a paid reference when no
-        // equivalent exists; the dashboard will show it as unknown instead.
-        return undefined
-    }
-    pricingResolvers.set(registry, resolver)
-    return resolver
-}
-
-function hasBillablePricing(pricing: {
-    input: number
-    output: number
-    cacheRead: number
-    cacheWrite: number
-}): boolean {
-    return [
-        pricing.input,
-        pricing.output,
-        pricing.cacheRead,
-        pricing.cacheWrite,
-    ].some((rate) => Number.isFinite(rate) && rate > 0)
 }
 
 function errorMessage(error: unknown): string {

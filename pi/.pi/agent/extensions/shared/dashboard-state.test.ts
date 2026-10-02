@@ -56,6 +56,19 @@ describe("dashboard-state contracts", () => {
   it("accepts subagent counts and rejects mistypes", () => {
     assert.equal(isSubagentInfoState(emptySubagentInfoState()), true);
     assert.equal(isSubagentInfoState({ running: "1" }), false);
+    assert.equal(isSubagentInfoState({ running: 1, cost: 2 }), true);
+    assert.equal(
+      isSubagentInfoState({
+        running: 1,
+        promptTokens: { input: 1, cacheRead: 2, cacheWrite: 3 },
+      }),
+      true,
+    );
+    assert.equal(
+      isSubagentInfoState({ running: 1, promptTokens: { input: 1 } }),
+      false,
+    );
+    assert.equal(isSubagentInfoState({ running: 1, cost: "2" }), false);
   });
 
   it("accepts optional freshness fields and rejects mistypes", () => {
@@ -151,10 +164,7 @@ describe("dashboard-state sanitizers", () => {
   });
 
   it("coerces invalid subagent counts to non-negative integers", () => {
-    assert.equal(
-      sanitizeSubagentInfoState({ running: Infinity }).running,
-      0,
-    );
+    assert.equal(sanitizeSubagentInfoState({ running: Infinity }).running, 0);
     assert.equal(sanitizeSubagentInfoState({ running: -1 }).running, 0);
     assert.equal(sanitizeSubagentInfoState({ running: 2.7 }).running, 2);
   });

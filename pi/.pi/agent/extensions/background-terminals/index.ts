@@ -43,6 +43,7 @@ import {
   buildKillReport,
   buildStartResult,
   buildStatusResult,
+  buildStatusStructuredContent,
   buildTerminalResultMessage,
   describeTerminal,
 } from "./src/prompt.ts";
@@ -63,12 +64,24 @@ const BACKGROUND_TERMINALS_NAMESPACE = {
     "Start, inspect, and stop long-running background shell processes.",
 };
 
+const TERMINAL_OUTPUT_SCHEMA = Type.Object({
+  text: Type.String(),
+  totalBytes: Type.Number(),
+  truncated: Type.Boolean(),
+  fullOutputPath: Type.Optional(Type.String()),
+});
+
 const BG_STATUS_OUTPUT_SCHEMA = Type.Object({
   id: Type.String(),
+  title: Type.String(),
+  cwd: Type.String(),
   status: Type.String(),
   pid: Type.Optional(Type.Number()),
   exitCode: Type.Optional(Type.Number()),
   signal: Type.Optional(Type.String()),
+  errorText: Type.Optional(Type.String()),
+  stdout: TERMINAL_OUTPUT_SCHEMA,
+  stderr: TERMINAL_OUTPUT_SCHEMA,
 });
 
 const BG_LIST_OUTPUT_SCHEMA = Type.Object({
@@ -294,7 +307,9 @@ export default function (pi: ExtensionAPI) {
     },
     outputSchema: BG_STATUS_OUTPUT_SCHEMA,
     parameters: Type.Object({
-      id: Type.String({ description: BG_STATUS_PARAMETER_DESCRIPTIONS.id }),
+      id: Type.String({
+        description: BG_STATUS_PARAMETER_DESCRIPTIONS.id,
+      }),
     }),
     async execute(_toolCallId, params) {
       const manager = await getManager();
@@ -317,13 +332,7 @@ export default function (pi: ExtensionAPI) {
         exitCode: snap.exitCode,
         signal: snap.signal,
       };
-      const structuredContent = {
-        id: snap.id,
-        status: snap.status,
-        ...(snap.pid === undefined ? {} : { pid: snap.pid }),
-        ...(snap.exitCode === undefined ? {} : { exitCode: snap.exitCode }),
-        ...(snap.signal === undefined ? {} : { signal: snap.signal }),
-      };
+      const structuredContent = buildStatusStructuredContent(snap);
       return {
         content: [{ type: "text", text: buildStatusResult(snap) }],
         details,

@@ -86,6 +86,10 @@ export interface SessionStats {
     project?: string
     /** Parent session path when Pi recorded this as a child session. */
     parentSessionPath?: string
+    /** Logical child identity from its persisted metadata. */
+    agentPath?: string
+    /** Child rows already included in this root's totals. */
+    subagents?: readonly SessionStats[]
     name?: string
     startTime?: string
     durationMs?: number

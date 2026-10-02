@@ -23,13 +23,15 @@ export interface PromptBreakdown {
 
 export interface InspectionReport {
   cwd: string;
-  model: {
-    provider?: string;
-    id?: string;
-    name?: string;
-    contextWindow: number;
-    thinkingLevel?: string;
-  } | undefined;
+  model:
+    | {
+        provider?: string;
+        id?: string;
+        name?: string;
+        contextWindow: number;
+        thinkingLevel?: string;
+      }
+    | undefined;
   systemPrompt: string;
   breakdown: PromptBreakdown;
   tools: ToolInfo[];
@@ -37,11 +39,14 @@ export interface InspectionReport {
   toolsTokens: number;
   skills: Array<{ name: string; description: string; location: string }>;
   contextFiles: Array<{ path: string; chars: number; tokens: number }>;
-  contextUsage: {
-    tokens: number | null;
-    contextWindow: number;
-    percent: number | null;
-  } | undefined;
+  resourcesAvailable: boolean;
+  contextUsage:
+    | {
+        tokens: number | null;
+        contextWindow: number;
+        percent: number | null;
+      }
+    | undefined;
   messageCount: number;
   messagesTokens: number;
   totalEstimatedTokens: number;

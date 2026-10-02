@@ -149,6 +149,55 @@ describe('throughput labels', () => {
         assert.ok(slim.includes('42%'))
     })
 
+    it('shows the session cache share the way /stats computes it', () => {
+        const base = {
+            contextPercent: 10,
+            contextWindow: 1000,
+            throughput: '--',
+        }
+        // cacheRead / (input + cacheRead + cacheWrite), parent plus children.
+        assert.ok(
+            formatUsageLabel({
+                ...base,
+                cost: 1,
+                promptTokens: { input: 300, cacheRead: 600, cacheWrite: 100 },
+            }).includes('CH60.0%')
+        )
+        assert.ok(
+            formatUsageLabel({
+                ...base,
+                cost: 1,
+                promptTokens: { input: 200, cacheRead: 100, cacheWrite: 100 },
+            }).includes('CH25.0%')
+        )
+        // No prompt tokens or no cache activity: the segment stays hidden.
+        assert.doesNotMatch(formatUsageLabel({ ...base, cost: 1 }), /CH/)
+        assert.doesNotMatch(
+            formatUsageLabel({
+                ...base,
+                cost: 1,
+                promptTokens: { input: 500, cacheRead: 0, cacheWrite: 0 },
+            }),
+            /CH/
+        )
+    })
+
+    it('does not round small non-zero session costs down to zero', () => {
+        const input = {
+            contextPercent: 10,
+            contextWindow: 1000,
+            throughput: '--',
+        }
+        assert.ok(
+            formatUsageLabel({ ...input, cost: 0.003 }).includes('$0.003000')
+        )
+        assert.ok(
+            formatUsageLabel({ ...input, cost: 0.0000001 }).includes(
+                '<$0.000001'
+            )
+        )
+    })
+
     it('handles unknown context windows and non-finite costs', () => {
         const label = formatUsageLabel({
             contextPercent: null,

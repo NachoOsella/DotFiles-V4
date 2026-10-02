@@ -14,6 +14,7 @@
 
 import { defineTool } from "@earendil-works/pi-coding-agent";
 import type {
+  BuildSystemPromptOptions,
   ExtensionAPI,
   ExtensionCommandContext,
 } from "@earendil-works/pi-coding-agent";
@@ -24,13 +25,11 @@ import {
   formatSummary,
   formatToolSummary,
 } from "./src/formatter.js";
-import {
-  defaultDumpPath,
-  writeReportToFile,
-} from "./src/file-writer.js";
+import { defaultDumpPath, writeReportToFile } from "./src/file-writer.js";
 import { showInOverlayOrNotify } from "./src/ui.js";
 
-type PromptSubcommand = "summary" | "full" | "tools" | "skills" | "save" | "help";
+type PromptSubcommand =
+  "summary" | "full" | "tools" | "skills" | "save" | "help";
 
 interface ParsedCommand {
   subcommand: PromptSubcommand;
@@ -53,7 +52,8 @@ function parsePromptArgs(args: string): ParsedCommand {
     const savePath = parts.slice(1).join(" ").trim() || undefined;
     return { subcommand: "save", savePath };
   }
-  if (first === "summary" || first === "stats") return { subcommand: "summary" };
+  if (first === "summary" || first === "stats")
+    return { subcommand: "summary" };
 
   // Unknown arg treated as save path
   if (first.includes("/") || first.includes(".")) {
@@ -177,14 +177,15 @@ async function handlePromptCommand(
   }
 }
 
-
-
 /**
  * Model-facing inspection tool. It only reads session state, so it is declared
  * read-only and closed-world. `codemode` exposure makes it callable from
  * scripts without adding it to the model's default tool set.
  */
-function buildInspectPromptTool(pi: ExtensionAPI) {
+function buildInspectPromptTool(
+  pi: ExtensionAPI,
+  getRunOptions: () => BuildSystemPromptOptions | undefined,
+) {
   return defineTool({
     name: "inspect_prompt",
     label: "Inspect Prompt",
@@ -196,7 +197,7 @@ function buildInspectPromptTool(pi: ExtensionAPI) {
     exposure: "codemode",
     annotations: { readOnlyHint: true, openWorldHint: false },
     async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
-      const report = buildInspectionReport(ctx, pi);
+      const report = buildInspectionReport(ctx, pi, getRunOptions());
       return {
         content: [{ type: "text" as const, text: formatToolSummary(report) }],
         details: undefined,
@@ -206,7 +207,15 @@ function buildInspectPromptTool(pi: ExtensionAPI) {
 }
 
 export default function promptInspectorExtension(pi: ExtensionAPI) {
-  pi.registerTool(buildInspectPromptTool(pi));
+  let runOptions: BuildSystemPromptOptions | undefined;
+  pi.registerTool(buildInspectPromptTool(pi, () => runOptions));
+
+  pi.on("before_agent_start", (event) => {
+    runOptions = event.systemPromptOptions;
+  });
+  pi.on("session_shutdown", () => {
+    runOptions = undefined;
+  });
 
   pi.registerCommand("prompt", {
     description:
@@ -226,8 +235,7 @@ export default function promptInspectorExtension(pi: ExtensionAPI) {
     handler: async (args, ctx) => handlePromptCommand(args, ctx, pi),
   });
 
-  // Optional: log on session start for debugging (no-op, just keeps extension warm)
-  pi.on("session_start", (_event, _ctx) => {
-    // No-op: could warm cache here if needed
+  pi.on("session_start", () => {
+    runOptions = undefined;
   });
 }

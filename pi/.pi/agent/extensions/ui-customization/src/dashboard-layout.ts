@@ -1,4 +1,6 @@
 import { truncateToWidth, visibleWidth } from '@earendil-works/pi-tui'
+import { fmtCost } from '../../session-stats/format.ts'
+import type { PromptTokens } from '../../shared/dashboard-state.ts'
 
 // Pure dashboard layout helpers (P11).
 // Every function here is synchronous, deterministic, and performs no
@@ -90,6 +92,8 @@ export interface UsageLabelInput {
     cost: number
     throughput: string
     subagentsRunning?: number
+    /** Session prompt-token buckets, parent plus logical children. */
+    promptTokens?: PromptTokens
     includeThroughput?: boolean
 }
 
@@ -112,10 +116,21 @@ export function formatUsageLabel(input: UsageLabelInput): string {
             : 0
     const subagentCount = formatSubagentCount(input.subagentsRunning ?? 0)
     const subagentSuffix = subagentCount ? ` · ${subagentCount}` : ''
-    const base = `${percent}%/${window} · $${cost.toFixed(2)}`
+    const money = cost === 0 ? '$0.00' : fmtCost(Math.max(0, cost))
+    const cacheLabel = formatCacheShare(input.promptTokens)
+    const cacheSegment = cacheLabel ? ` · ${cacheLabel}` : ''
+    const base = `${percent}%/${window} · ${money}${cacheSegment}`
     return input.includeThroughput === false
         ? `${base}${subagentSuffix}`
         : `${base} · ${input.throughput}${subagentSuffix}`
+}
+
+export function formatCacheShare(tokens: PromptTokens | undefined): string {
+    if (!tokens) return ''
+    const { input, cacheRead, cacheWrite } = tokens
+    const promptTokens = input + cacheRead + cacheWrite
+    if (promptTokens <= 0 || cacheRead + cacheWrite <= 0) return ''
+    return `CH${((cacheRead / promptTokens) * 100).toFixed(1)}%`
 }
 
 export interface GitLabelInput {
@@ -157,6 +172,7 @@ export interface FooterFitInput {
     tokensPerSecond: number | null
     throughputIsEstimate: boolean
     subagentsRunning?: number
+    promptTokens?: PromptTokens
     branch: string | null
     changedFiles: number
     pullRequestNumber: number | null
@@ -223,6 +239,7 @@ export function fitFooterSegments(input: FooterFitInput): FooterFitOutput {
             cost: input.cost,
             throughput,
             subagentsRunning: input.subagentsRunning,
+            promptTokens: input.promptTokens,
             includeThroughput,
         })
         const git = formatGitLabel({

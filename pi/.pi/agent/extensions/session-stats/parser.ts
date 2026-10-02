@@ -1,9 +1,11 @@
 import { readFile, stat } from 'node:fs/promises'
 import { Data, Effect } from 'effect'
 import {
-    LEGACY_SUBAGENTS_STATE_CUSTOM_TYPE,
     SUBAGENTS_STATE_CUSTOM_TYPE,
-} from '../subagents/src/persistence.ts'
+    SUBAGENT_META_CUSTOM_TYPE,
+    findLatestState,
+    type PersistedState,
+} from '../subagents/src/persistence/session-state.ts'
 import { mergeSessionStats } from './aggregate.ts'
 import { finalizeTotalTokens } from './format.ts'
 import { calculateUsageCost, combinePricingSources } from './pricing.ts'
@@ -28,6 +30,7 @@ interface CachedSessionStats {
     readonly size: number
     readonly pricing?: ModelPricingResolver
     readonly stats: SessionStats
+    readonly snapshot?: PersistedState
 }
 
 const sessionStatsCache = new Map<string, CachedSessionStats>()
@@ -64,29 +67,45 @@ export function createEmptyStats(file: string, name?: string): SessionStats {
 /** Parse a persisted JSONL session as a composable Effect. */
 export function parseSessionFileEffect(
     filePath: string,
-    pricing?: ModelPricingResolver
+    pricing?: ModelPricingResolver,
+    includeSubagents = true
 ): Effect.Effect<SessionStats, SessionReadError> {
     return Effect.tryPromise({
         try: async () => {
             const fileStats = await stat(filePath)
-            const cached = sessionStatsCache.get(filePath)
+            let cached = sessionStatsCache.get(filePath)
             if (
-                cached?.modifiedMs === fileStats.mtimeMs &&
-                cached.size === fileStats.size &&
-                cached.pricing === pricing
+                !cached ||
+                cached.modifiedMs !== fileStats.mtimeMs ||
+                cached.size !== fileStats.size ||
+                cached.pricing !== pricing
             ) {
-                return cached.stats
+                const content = await readFile(filePath, 'utf8')
+                const parsed = parseSessionText(content, filePath, pricing)
+                cached = {
+                    modifiedMs: fileStats.mtimeMs,
+                    size: fileStats.size,
+                    pricing,
+                    ...parsed,
+                }
+                sessionStatsCache.set(filePath, cached)
             }
-
-            const content = await readFile(filePath, 'utf8')
-            const stats = parseSessionText(content, filePath, pricing)
-            sessionStatsCache.set(filePath, {
-                modifiedMs: fileStats.mtimeMs,
-                size: fileStats.size,
-                pricing,
-                stats,
-            })
-            return stats
+            if (!includeSubagents || !cached.snapshot) return cached.stats
+            // Cache only the root transcript; children can change while it is idle.
+            const agents = await loadSubagentStats(
+                cached.snapshot,
+                filePath,
+                pricing
+            )
+            return {
+                ...cached.stats,
+                ...mergeSessionStats(
+                    [cached.stats, ...agents],
+                    filePath,
+                    cached.stats.name
+                ),
+                subagents: agents,
+            }
         },
         catch: (cause) => new SessionReadError({ path: filePath, cause }),
     })
@@ -116,7 +135,14 @@ export function parseCurrentBranch(
     let firstTimestamp: number | undefined
     let lastTimestamp: number | undefined
 
-    for (const entry of entries) {
+    const metadata = entries.find(
+        (entry) =>
+            entry.type === 'custom' &&
+            entry.customType === SUBAGENT_META_CUSTOM_TYPE
+    )
+    if (isRecord(metadata?.data) && typeof metadata.data.path === 'string')
+        stats.agentPath = metadata.data.path
+    for (const entry of ownSessionEntries(entries)) {
         const timestamp = parseTimestamp(entry.timestamp)
         firstTimestamp ??= timestamp
         if (timestamp !== undefined) lastTimestamp = timestamp
@@ -143,57 +169,112 @@ function parseSessionText(
     content: string,
     filePath: string,
     pricing?: ModelPricingResolver
-): SessionStats {
-    const stats = createEmptyStats(filePath)
-    const collectors = createCollectors()
+): { stats: SessionStats; snapshot?: PersistedState } {
+    let stats = createEmptyStats(filePath)
+    let collectors = createCollectors()
     let firstTimestamp: number | undefined
     let lastTimestamp: number | undefined
-    let subagentSnapshot: unknown
-    let hasSubagentSnapshot = false
+    let hasAgentMetadata = false
+    const snapshots: SessionEntryLike[] = []
 
     for (const line of content.split(/\r?\n/)) {
         const entry = parseEntry(line)
         if (!entry) continue
-
         const timestamp = parseTimestamp(entry.timestamp)
         firstTimestamp ??= timestamp
         if (timestamp !== undefined) lastTimestamp = timestamp
-        if (entry.type === 'session_info' && typeof entry.name === 'string') {
+        if (entry.type === 'session_info' && typeof entry.name === 'string')
             stats.name = entry.name
-        }
         if (entry.type === 'session') {
             if (typeof entry.cwd === 'string') stats.project = entry.cwd
-            if (typeof entry.parentSession === 'string') {
+            if (typeof entry.parentSession === 'string')
                 stats.parentSessionPath = entry.parentSession
-            }
         } else if (
             entry.type === 'custom' &&
-            (entry.customType === SUBAGENTS_STATE_CUSTOM_TYPE ||
-                entry.customType === LEGACY_SUBAGENTS_STATE_CUSTOM_TYPE)
+            entry.customType === SUBAGENT_META_CUSTOM_TYPE &&
+            !hasAgentMetadata
         ) {
-            // Latest snapshot wins; in-memory children never touch disk, so
-            // their usage only exists inside the parent file.
-            subagentSnapshot = entry.data
-            hasSubagentSnapshot = true
-        } else {
-            collectEntry(stats, collectors, entry, pricing)
-        }
+            // Imported fork history is context, not work performed by this child.
+            const { project, parentSessionPath } = stats
+            stats = {
+                ...createEmptyStats(filePath),
+                project,
+                parentSessionPath,
+            }
+            if (isRecord(entry.data) && typeof entry.data.path === 'string') {
+                stats.agentPath = entry.data.path
+                stats.name = entry.data.path
+            }
+            collectors = createCollectors()
+            snapshots.length = 0
+            hasAgentMetadata = true
+        } else if (
+            entry.type === 'custom' &&
+            entry.customType === SUBAGENTS_STATE_CUSTOM_TYPE
+        ) {
+            snapshots.push(entry)
+        } else collectEntry(stats, collectors, entry, pricing)
     }
-
     if (firstTimestamp !== undefined)
         stats.startTime = new Date(firstTimestamp).toISOString()
-    if (firstTimestamp !== undefined && lastTimestamp !== undefined) {
+    if (firstTimestamp !== undefined && lastTimestamp !== undefined)
         stats.durationMs = Math.max(0, lastTimestamp - firstTimestamp)
-    }
     finishCollectors(stats, collectors)
-    if (!hasSubagentSnapshot) return stats
-    const agents = buildStatsFromSnapshotData(
-        subagentSnapshot,
-        filePath,
-        pricing
+    return { stats, snapshot: findLatestState(snapshots) }
+}
+
+/** Exclude the imported fork prefix while preserving all subsequently billed branches. */
+export function ownSessionEntries<T extends SessionEntryLike>(
+    entries: readonly T[]
+): readonly T[] {
+    const boundary = entries.findIndex(
+        (entry) =>
+            entry.type === 'custom' &&
+            entry.customType === SUBAGENT_META_CUSTOM_TYPE
     )
-    if (agents.length === 0) return stats
-    return mergeSessionStats([stats, ...agents], filePath, stats.name)
+    return boundary < 0 ? entries : entries.slice(boundary + 1)
+}
+
+/** Resolve each logical child once, preferring its transcript over aggregate fallback data. */
+export async function loadSubagentStats(
+    snapshot: PersistedState | undefined,
+    file: string,
+    pricing?: ModelPricingResolver
+): Promise<SessionStats[]> {
+    if (!snapshot) return []
+    const fallback = new Map(
+        buildStatsFromSnapshotData(snapshot, file, pricing).map((stats) => [
+            stats.name,
+            stats,
+        ])
+    )
+    const result: SessionStats[] = []
+    // Sequential children keep aggregate scans inside the caller's read concurrency limit.
+    for (const agent of snapshot.agents) {
+        let stats = fallback.get(agent.path)
+        if (agent.sessionFile && agent.sessionFile !== file) {
+            try {
+                const transcript = await Effect.runPromise(
+                    parseSessionFileEffect(agent.sessionFile, pricing, false)
+                )
+                if (
+                    !stats ||
+                    transcript.totalTokens.totalTokens >=
+                        stats.totalTokens.totalTokens
+                )
+                    stats = transcript
+            } catch {
+                // Missing, evicted, or unreadable files retain their last reported usage.
+            }
+        }
+        result.push({
+            ...(stats ?? createEmptyStats(agent.sessionFile ?? file)),
+            name: agent.path,
+            agentPath: agent.path,
+            parentSessionPath: file,
+        })
+    }
+    return result
 }
 
 interface Collectors {

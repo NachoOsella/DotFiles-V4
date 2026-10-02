@@ -82,6 +82,47 @@ export function describeTerminal(snap: TerminalSnapshot) {
   return `${snap.id} [${snap.status}] "${snap.title}" (${details.join(", ")})`;
 }
 
+function truncateOutput(
+  view: TerminalSnapshot["stdout"],
+  maxBytes: number,
+  maxLines: number,
+) {
+  const truncation = truncateTail(view.text, {
+    maxBytes: Math.min(maxBytes, DEFAULT_MAX_BYTES),
+    maxLines: Math.min(maxLines, DEFAULT_MAX_LINES),
+  });
+  return {
+    text: truncation.content,
+    totalBytes: view.totalBytes,
+    truncated: truncation.truncated || view.truncatedBytes > 0,
+    ...(view.spillPath ? { fullOutputPath: view.spillPath } : {}),
+  };
+}
+
+/** Script-facing status includes bounded streams and full-log paths. */
+export function buildStatusStructuredContent(snap: TerminalSnapshot) {
+  return {
+    id: snap.id,
+    title: snap.title,
+    cwd: snap.cwd,
+    status: snap.status,
+    ...(snap.pid === undefined ? {} : { pid: snap.pid }),
+    ...(snap.exitCode === undefined ? {} : { exitCode: snap.exitCode }),
+    ...(snap.signal === undefined ? {} : { signal: snap.signal }),
+    ...(snap.errorText === undefined ? {} : { errorText: snap.errorText }),
+    stdout: truncateOutput(
+      snap.stdout,
+      STATUS_STDOUT_MAX,
+      STATUS_STDOUT_MAX_LINES,
+    ),
+    stderr: truncateOutput(
+      snap.stderr,
+      STATUS_STDERR_MAX,
+      STATUS_STDERR_MAX_LINES,
+    ),
+  };
+}
+
 /** Tail-truncated labeled output section with a pointer at the full log. */
 function outputSection(
   label: string,
@@ -90,13 +131,10 @@ function outputSection(
   maxLines: number,
 ) {
   if (view.totalBytes === 0) return `${label}: (empty)`;
-  const truncation = truncateTail(view.text, {
-    maxBytes: Math.min(maxBytes, DEFAULT_MAX_BYTES),
-    maxLines: Math.min(maxLines, DEFAULT_MAX_LINES),
-  });
-  let text = `${label}:\n${truncation.content}`;
-  const shownBytes = truncation.outputBytes;
-  if (truncation.truncated || view.truncatedBytes > 0) {
+  const output = truncateOutput(view, maxBytes, maxLines);
+  let text = `${label}:\n${output.text}`;
+  const shownBytes = Buffer.byteLength(output.text, "utf8");
+  if (output.truncated) {
     const where = view.spillPath
       ? `Full log: ${view.spillPath}`
       : "Full output in the /ps viewer";

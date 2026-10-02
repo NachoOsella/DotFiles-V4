@@ -26,17 +26,18 @@ Preserve:
 
 ## Current structure
 
-| Extension | Entry | Notes |
-|-----------|-------|-------|
-| `prompt-inspector` | `prompt-inspector/index.ts` | Inspect system prompt + tools + skills with token breakdown. Modules in `prompt-inspector/src/`. |
-| `pi-zen-free` | `pi-zen-free/index.ts` | Provider registration split into API, config, model mapping, and types. |
-| `todowrite` | `todowrite/index.ts` | Tool entry split into schema, state, widget, renderers, and types. |
-| `token-rate` | `token-rate/token-rate.ts` | Package entry preserved; logic split into state, status, tokens, and types. |
-| `codex-plan-mode` | `codex-plan-mode/index.ts` | Entry handles state and Pi hooks; plan parsing, prompt builders, message helpers, and request-user-input are split out. |
-| `checkpoint` | `checkpoint/checkpoint.ts` | Package entry preserved; core git operations are in `checkpoint-core.ts`. |
-| `session-stats` | `session-stats/index.ts` | Entry handles `/stats`; parser, aggregation, formatting, modal, panels, and output builders are split out. |
-| `pi-diff-minimal` | `pi-diff-minimal/src/index.ts` | Package-style extension; renderer is the main remaining monolith. |
-| `pi-engram-memory` | `pi-engram-memory/index.ts` | Largest extension; config, types, pure utilities, row formatting, and tool renderers are split out. |
+| Extension          | Entry                          | Notes                                                                                                                   |
+| ------------------ | ------------------------------ | ----------------------------------------------------------------------------------------------------------------------- |
+| `prompt-inspector` | `prompt-inspector/index.ts`    | Inspect system prompt + tools + skills with token breakdown. Modules in `prompt-inspector/src/`.                        |
+| `pi-zen-free`      | `pi-zen-free/index.ts`         | Provider registration split into API, config, model mapping, and types.                                                 |
+| `todowrite`        | `todowrite/index.ts`           | Tool entry split into schema, state, widget, renderers, and types.                                                      |
+| `token-rate`       | `token-rate/token-rate.ts`     | Package entry preserved; logic split into state, status, tokens, and types.                                             |
+| `codex-plan-mode`  | `codex-plan-mode/index.ts`     | Entry handles state and Pi hooks; plan parsing, prompt builders, message helpers, and request-user-input are split out. |
+| `checkpoint`       | `checkpoint/checkpoint.ts`     | Package entry preserved; core git operations are in `checkpoint-core.ts`.                                               |
+| `session-stats`    | `session-stats/index.ts`       | Entry handles `/stats`; parser, aggregation, formatting, modal, panels, and output builders are split out.              |
+| `subagents`        | `subagents/index.ts`           | Modules and colocated tests grouped under `src/{core,domain,config,persistence,tools,ui}`.                              |
+| `pi-diff-minimal`  | `pi-diff-minimal/src/index.ts` | Package-style extension; renderer is the main remaining monolith.                                                       |
+| `pi-engram-memory` | `pi-engram-memory/index.ts`    | Largest extension; config, types, pure utilities, row formatting, and tool renderers are split out.                     |
 
 ## Module conventions
 
@@ -53,19 +54,22 @@ Preserve:
 
 `npm run test:allowed` selects direct `*.test.ts` files from an explicit directory allowlist. It includes the nested Codex test directory and fails when a selected directory has no matching tests.
 
-| Directory | Selected files |
-|-----------|----------------|
-| `extensions/ask-user` | `extensions/ask-user/*.test.ts` |
-| `extensions/background-terminals` | `extensions/background-terminals/*.test.ts` |
-| `extensions/codex-search/tests` | `extensions/codex-search/tests/*.test.ts` |
-| `extensions/git-info` | `extensions/git-info/*.test.ts` |
-| `extensions/model-info` | `extensions/model-info/*.test.ts` |
-| `extensions/subagents` | `extensions/subagents/*.test.ts` |
-| `extensions/todowrite` | `extensions/todowrite/*.test.ts` |
-| `extensions/ui-customization` | `extensions/ui-customization/*.test.ts` |
-| `extensions/shared` | `extensions/shared/*.test.ts` |
+| Directory                              | Selected files                                   |
+| -------------------------------------- | ------------------------------------------------ |
+| `extensions/ask-user`                  | `extensions/ask-user/*.test.ts`                  |
+| `extensions/background-terminals`      | `extensions/background-terminals/*.test.ts`      |
+| `extensions/codex-search/tests`        | `extensions/codex-search/tests/*.test.ts`        |
+| `extensions/git-info`                  | `extensions/git-info/*.test.ts`                  |
+| `extensions/model-info`                | `extensions/model-info/*.test.ts`                |
+| `extensions/subagents/src/core`        | `extensions/subagents/src/core/*.test.ts`        |
+| `extensions/subagents/src/domain`      | `extensions/subagents/src/domain/*.test.ts`      |
+| `extensions/subagents/src/config`      | `extensions/subagents/src/config/*.test.ts`      |
+| `extensions/subagents/src/persistence` | `extensions/subagents/src/persistence/*.test.ts` |
+| `extensions/subagents/src/ui`          | `extensions/subagents/src/ui/*.test.ts`          |
+| `extensions/ui-customization`          | `extensions/ui-customization/*.test.ts`          |
+| `extensions/shared`                    | `extensions/shared/*.test.ts`                    |
 
-The selector intentionally excludes `prompt-inspector`, `pi-zen-free`, `discord-activity`, and `session-stats`. It also leaves the deferred `extensions/file-search` test target and `extensions/firecrawl-search` workspace entry unchanged. This selector is offline only. It does not run live provider checks or visual terminal checks.
+The selector intentionally excludes `prompt-inspector`, `pi-zen-free`, `discord-activity`, and `session-stats`. This selector is offline only. It does not run live provider checks or visual terminal checks.
 
 ## Validation
 
@@ -75,7 +79,7 @@ Run the scoped offline tests from `/home/nacho/.pi/agent`:
 npm run test:allowed
 ```
 
-The existing repository-wide scripts remain available and unchanged. `npm test` still includes its existing `extensions/*/*.test.ts` target and the deferred `npm --prefix extensions/file-search test` follow-up, so use `test:allowed` for this allowlisted scope. The existing type checks remain:
+`npm test` runs direct `extensions/*/*.test.ts` files, the nested `extensions/codex-search/tests/*.test.ts` suite, and colocated `extensions/subagents/src/*/*.test.ts` tests. Use `npm run test:subagents` for the subagents suite. Use `test:allowed` for the explicit allowlisted scope above. The type checks remain:
 
 ```bash
 npm run check

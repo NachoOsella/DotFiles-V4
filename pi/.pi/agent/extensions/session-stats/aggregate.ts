@@ -274,9 +274,10 @@ export function mergeSessionStats(
 
 /** Return true for an explicitly linked or clearly named legacy subagent. */
 export function isSubagentSession(
-    session: Pick<SessionStats, 'parentSessionPath' | 'name'>
+    session: Pick<SessionStats, 'parentSessionPath' | 'name' | 'agentPath'>
 ): boolean {
     return (
+        Boolean(session.agentPath) ||
         Boolean(session.parentSessionPath) ||
         session.name?.startsWith('subagent:') === true
     )
