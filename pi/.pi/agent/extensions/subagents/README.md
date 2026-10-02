@@ -22,6 +22,42 @@ list_agents(path_prefix="/root")
 Children run in persistent independent Pi sessions, report back with one bounded
 `FINAL_ANSWER`, and never leak transcripts into the parent model context.
 
+## Child capabilities
+
+A child inherits the caller's active tools, cwd, skills, context files, and the
+`codemode` and `tool_search` built-ins, so it can orchestrate local tools and
+filter large results the same way the parent can. MCP is deliberately not
+loaded: no child opens an MCP server, and `-builtin:<name>` still disables a
+built-in for children too.
+
+The six collaboration tools declare an `outputSchema` and return
+`structuredContent`, so codemode scripts read their fields directly instead of
+parsing text:
+
+```js
+const child = await tools.spawn_agent({
+    task_name: 'review',
+    message: 'Review the pending diff.',
+})
+text(child.task_name)
+```
+
+`wait_agent` follows the caller's abort signal. Escape, a cancelled tool call,
+or a codemode deadline ends the wait immediately; it never interrupts the child
+that is still running. `interrupt_agent` remains the way to stop one.
+
+## Inspect and follow
+
+`/agents`, or `alt+a`, opens a live inspector: agent rows with status, thinking
+level and quiet time, plus a per-agent timeline of tool calls, durations and
+nested calls. `tab` switches panels, `1`-`5` filter kinds, `g`/`G` jump, `^u`/`^d`
+page, the wheel scrolls, and `q` closes. It reads state only: interrupting or
+messaging an agent stays in the conversation, through the collaboration tools.
+
+A child's final answer arrives in the parent transcript as a card with its role,
+model, tokens, cost and duration, and the `followup_task` path to continue that
+agent. Failed runs render as `FINAL ERROR` with the error text.
+
 ## Configure (environment)
 
 | Variable                     | Effect                                                                                                                                   |

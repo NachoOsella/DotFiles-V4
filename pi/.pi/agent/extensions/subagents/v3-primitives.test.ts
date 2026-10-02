@@ -8,6 +8,18 @@ import { projectFork } from './src/fork-projector.ts'
 import { parseForkTurns } from './src/communication.ts'
 import { SessionManager } from '@earendil-works/pi-coding-agent'
 import { WaitHub } from './src/wait-hub.ts'
+import { makeAgentRuntime } from './src/agent-runtime.ts'
+import type { AgentPath } from './src/ids.ts'
+import {
+    findLatestState,
+    isPersistedState,
+    LEGACY_SUBAGENTS_STATE_CUSTOM_TYPE,
+    snapshotAge,
+    SUBAGENTS_STATE_CUSTOM_TYPE,
+} from './src/persistence.ts'
+import { DEFAULT_SUBAGENTS_CONFIG } from './src/config.ts'
+import { COLLABORATION_NAMESPACE } from './src/tool-specs.ts'
+import { buildRootToolDefinitions } from './src/extension-tools.ts'
 
 function assistant(text: string, stopReason: 'stop' | 'toolUse' = 'stop') {
     return {
@@ -79,6 +91,215 @@ describe('V3 wait hub', () => {
 
         const outcome = await hub.wait('/root', 10)
         assert.deepEqual(outcome, { kind: 'mailbox', timedOut: true })
+    })
+
+    it('rejects an aborted wait without consuming later mail', async () => {
+        const hub = new WaitHub()
+        const controller = new AbortController()
+        const pending = hub.wait('/root', 60_000, controller.signal)
+        controller.abort()
+        await assert.rejects(pending, /Wait cancelled/)
+
+        hub.notifyMailbox('/root')
+        assert.deepEqual(await hub.wait('/root', 10), {
+            kind: 'mailbox',
+            timedOut: false,
+        })
+    })
+
+    it('rejects immediately when the signal is already aborted', async () => {
+        const hub = new WaitHub()
+        const controller = new AbortController()
+        controller.abort()
+        await assert.rejects(
+            hub.wait('/root', 60_000, controller.signal),
+            /Wait cancelled/
+        )
+    })
+
+    it('reports which paths are blocked in wait', async () => {
+        const hub = new WaitHub()
+        const pending = hub.wait('/root', 60_000)
+        assert.equal(hub.isWaiting('/root'), true)
+        assert.equal(hub.isWaiting('/root/other'), false)
+
+        hub.notifyMailbox('/root')
+        await pending
+        assert.equal(hub.isWaiting('/root'), false)
+    })
+
+    it('clear cancels in-flight waits instead of waiting for the timeout', async () => {
+        const hub = new WaitHub()
+        const pending = hub.wait('/root', 60_000)
+        hub.clear()
+        await assert.rejects(pending, /Wait cancelled/)
+    })
+})
+
+describe('agent activity', () => {
+    it('carries the error text of a failed tool', () => {
+        const activities: Array<{ kind?: string; summary?: string }> = []
+        let handler: ((event: unknown) => void) | undefined
+        makeAgentRuntime({
+            path: '/root/a' as AgentPath,
+            session: {
+                subscribe: (listener: (event: unknown) => void) => {
+                    handler = listener
+                    return () => undefined
+                },
+            } as never,
+            onActivity: (activity) => activities.push(activity as never),
+        })
+
+        handler?.({
+            type: 'tool_execution_end',
+            toolCallId: 'call-1',
+            toolName: 'read',
+            isError: true,
+            result: {
+                content: [
+                    { type: 'text', text: 'ENOENT: no such file\nsecond line' },
+                ],
+            },
+        })
+        const failed = activities.find((entry) => entry.kind === 'tool_result')
+        assert.equal(
+            failed?.summary,
+            'read failed: ENOENT: no such file second line'
+        )
+
+        handler?.({
+            type: 'tool_execution_end',
+            toolCallId: 'call-2',
+            toolName: 'read',
+            isError: false,
+            result: { content: [] },
+        })
+        assert.equal(activities.at(-1)?.summary, 'read completed')
+    })
+})
+
+describe('collaboration tool contract', () => {
+    const manager = {
+        getConfig: () => DEFAULT_SUBAGENTS_CONFIG,
+        list: () => [
+            {
+                path: '/root/worker',
+                status: 'Running',
+                residency: 'loaded',
+                model: 'test-model',
+                parentPath: '/root',
+                hasPendingMail: false,
+                running: true,
+            },
+        ],
+        getRecordByPath: () => ({ thinkingLevel: 'medium' }),
+    } as never
+
+    it('declares an output schema for every collaboration tool', () => {
+        const tools = buildRootToolDefinitions(manager) as unknown as Array<{
+            name: string
+            outputSchema?: unknown
+            exposure?: string
+            namespace?: { name?: string }
+            annotations?: {
+                readOnlyHint?: boolean
+                destructiveHint?: boolean
+            }
+        }>
+        assert.equal(tools.length, 6)
+        for (const tool of tools) {
+            assert.ok(tool.outputSchema, `${tool.name} needs an outputSchema`)
+            assert.equal(tool.exposure, 'direct')
+            assert.equal(tool.namespace?.name, COLLABORATION_NAMESPACE)
+            assert.equal(
+                typeof tool.annotations?.readOnlyHint,
+                'boolean',
+                `${tool.name} needs annotation hints`
+            )
+        }
+        const readOnly = tools
+            .filter((tool) => tool.annotations?.readOnlyHint)
+            .map((tool) => tool.name)
+        assert.deepEqual(readOnly, ['wait_agent', 'list_agents'])
+        const destructive = tools
+            .filter((tool) => tool.annotations?.destructiveHint)
+            .map((tool) => tool.name)
+        assert.deepEqual(destructive, ['interrupt_agent'])
+    })
+
+    it('returns structured content next to the model-facing JSON text', async () => {
+        const tools = buildRootToolDefinitions(manager) as unknown as Array<{
+            name: string
+            execute: (
+                id: string,
+                params: never,
+                signal: undefined,
+                onUpdate: undefined,
+                ctx: undefined
+            ) => Promise<{
+                content: Array<{ text?: string }>
+                details: unknown
+                structuredContent?: unknown
+            }>
+        }>
+        const list = tools.find((tool) => tool.name === 'list_agents')!
+        const result = await list.execute(
+            'call-1',
+            { path_prefix: '/root' } as never,
+            undefined,
+            undefined,
+            undefined
+        )
+
+        assert.equal(result.structuredContent, result.details)
+        const parsed = JSON.parse(String(result.content[0]?.text)) as {
+            agents: Array<{ agent_name: string; agent_status: string }>
+        }
+        assert.equal(parsed.agents[0]?.agent_name, '/root/worker')
+        assert.equal(parsed.agents[0]?.agent_status, 'Running')
+    })
+})
+
+describe('V3 state persistence', () => {
+    it('finds the latest snapshot on the branch', () => {
+        const session = SessionManager.inMemory('/repo')
+        assert.equal(findLatestState(session.getBranch()), undefined)
+
+        session.appendCustomEntry(SUBAGENTS_STATE_CUSTOM_TYPE, {
+            version: 2,
+            rootSessionId: 'root-session',
+            persistedAt: 1,
+            agents: [],
+        })
+        session.appendCustomEntry('unrelated', { nope: true })
+        session.appendCustomEntry(SUBAGENTS_STATE_CUSTOM_TYPE, {
+            version: 2,
+            rootSessionId: 'root-session',
+            persistedAt: 2,
+            agents: [],
+        })
+
+        const found = findLatestState(session.getBranch())
+        assert.equal(found?.persistedAt, 2)
+        assert.equal(snapshotAge(found!), 2)
+    })
+
+    it('accepts one legacy snapshot and ignores malformed ones', () => {
+        const legacy = SessionManager.inMemory('/repo')
+        legacy.appendCustomEntry(LEGACY_SUBAGENTS_STATE_CUSTOM_TYPE, {
+            version: 1,
+            rootSessionId: 'root-session',
+            agents: [],
+        })
+        const migrated = findLatestState(legacy.getBranch())
+        assert.equal(migrated?.version, 1)
+        assert.equal(snapshotAge(migrated!), undefined)
+
+        const broken = SessionManager.inMemory('/repo')
+        broken.appendCustomEntry(SUBAGENTS_STATE_CUSTOM_TYPE, { version: 3 })
+        assert.equal(findLatestState(broken.getBranch()), undefined)
+        assert.equal(isPersistedState({ version: 2 }), false)
     })
 })
 

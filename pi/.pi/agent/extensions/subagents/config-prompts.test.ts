@@ -13,6 +13,7 @@ import {
 import {
     assembleChildPrompt,
     assembleRootPrompt,
+    COLLABORATION_TOOL_PROMPTS,
     rootRoleInstructions,
     subagentRoleInstructions,
 } from './src/prompts.ts'
@@ -120,6 +121,32 @@ describe('prompts', () => {
             currentDepth: 0,
         })
         assert.match(nestedChild, /may spawn nested agents/)
+    })
+
+    it('keeps small work local in every mode', () => {
+        for (const mode of [
+            resolveMode({ ultraReasoning: false }),
+            resolveMode({ ultraReasoning: true }),
+        ]) {
+            assert.match(
+                assembleRootPrompt({ ...input, mode }),
+                /Keep small work local/
+            )
+        }
+        assert.match(
+            COLLABORATION_TOOL_PROMPTS.spawn_agent.promptGuidelines[0] ?? '',
+            /keep small work in the current agent/
+        )
+        const proactive = modeInstructions({ _tag: 'Proactive' }) ?? ''
+        assert.match(proactive, /but only for independent work/)
+        assert.match(
+            proactive,
+            /Do not delegate work that needs only one or two local tool calls/
+        )
+        assert.ok(
+            proactive.indexOf('but only for independent work') <
+                proactive.indexOf('When you do delegate')
+        )
     })
 
     it('appends configured hints without replacing collaboration invariants', () => {

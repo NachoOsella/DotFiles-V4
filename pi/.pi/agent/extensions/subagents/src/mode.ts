@@ -84,10 +84,9 @@ export function modeInstructions(mode: MultiAgentMode): string | null {
             ].join(' ')
         case 'Proactive':
             return [
-                'You may delegate proactively.',
-                'Use subagents for independent work that can run in parallel, such as reviewing separate modules, comparing alternatives, or running focused investigations.',
+                'You may delegate proactively, but only for independent work that can run in parallel, such as reviewing separate modules, comparing alternatives, or running focused investigations.',
                 'Do not delegate work that needs only one or two local tool calls, depends on constant access to the root conversation, or cannot proceed independently.',
-                'Give each agent one bounded task with explicit file ownership when edits are allowed, and ask for conclusions and verification results rather than work diaries.',
+                'When you do delegate, give each agent one bounded task with explicit file ownership, and ask for conclusions and verification results rather than work diaries.',
             ].join(' ')
         case 'Custom':
             if (mode.hint.trim() === '') return null

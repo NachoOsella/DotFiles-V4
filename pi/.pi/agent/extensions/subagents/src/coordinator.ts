@@ -15,6 +15,7 @@ import type {
     AgentRecord,
     AgentUsageTotals,
     PendingCompletion,
+    SessionToolCallCount,
 } from './agent-record.ts'
 import {
     assertNonEmptyMessage,
@@ -22,6 +23,7 @@ import {
     newTaskCommunication,
     plainMessageCommunication,
     parseForkTurns,
+    type FinalAnswerMeta,
     type ForkTurns,
     type InterAgentCommunication,
 } from './communication.ts'
@@ -46,6 +48,7 @@ import {
 import type { ParentExecutionSnapshot } from './parent-snapshot.ts'
 import { resolveRole } from './roles.ts'
 import { AgentMutex, type AgentRuntime } from './agent-runtime.ts'
+import type { AgentSession } from '@earendil-works/pi-coding-agent'
 import { ExecutionLimiter } from './execution-limiter.ts'
 import {
     childEndpoint,
@@ -70,6 +73,8 @@ export interface ListedAgent {
     readonly parentPath: AgentPath | null
     readonly hasPendingMail: boolean
     readonly running: boolean
+    /** Blocked in `wait_agent` right now. */
+    readonly waiting: boolean
 }
 
 export interface CoordinatorSpawnOptions {
@@ -200,7 +205,11 @@ export class SubagentCoordinator {
                         this.activityFeed.push(
                             path as string,
                             activity.kind,
-                            activity.summary
+                            activity.summary,
+                            {
+                                toolCallId: activity.toolCallId,
+                                nested: activity.nested,
+                            }
                         )
                     }
                     this.emit({
@@ -283,6 +292,7 @@ export class SubagentCoordinator {
                         record.path as string
                     ),
                     running: runtime?.session.isStreaming ?? false,
+                    waiting: this.waitHub.isWaiting(record.path as string),
                 }
             })
             .sort((left, right) =>
@@ -515,6 +525,7 @@ export class SubagentCoordinator {
     async wait(args: {
         caller: AgentPath
         timeoutMs?: number
+        signal?: AbortSignal
     }): Promise<WaitResult> {
         const caller = this.getRecordByPath(args.caller)
         if (!caller) throw new AgentNotFoundError(args.caller as string)
@@ -522,7 +533,8 @@ export class SubagentCoordinator {
         if (clamped.rejected) throw new Error(clamped.rejected)
         const outcome = await this.waitHub.wait(
             caller.path as string,
-            clamped.effectiveMs
+            clamped.effectiveMs,
+            args.signal
         )
         if (outcome.timedOut) {
             return {
@@ -695,6 +707,7 @@ export class SubagentCoordinator {
             ...previous,
             status: AgentStatus.running(),
             runSequence: runtime.runSequence,
+            runStartedAt: Date.now(),
         }))
         const sequence = runtime.runSequence
         let runPromise: Promise<void>
@@ -783,7 +796,10 @@ export class SubagentCoordinator {
     private captureUsage(id: AgentId, runtime: AgentRuntime): void {
         try {
             const stats = runtime.session.getSessionStats()
-            const model = runtime.session.model
+            // Under a virtual selection the session model is the selection; the
+            // routed model is the physical one that answered.
+            const model =
+                runtime.session.routedModel?.model ?? runtime.session.model
             const usage: AgentUsageTotals = {
                 provider: model?.provider ?? 'unknown',
                 modelId: model?.id ?? 'unknown',
@@ -795,7 +811,7 @@ export class SubagentCoordinator {
                 userMessages: stats.userMessages,
                 assistantMessages: stats.assistantMessages,
                 toolResults: stats.toolResults,
-                toolCalls: [],
+                toolCalls: countToolCalls(runtime.session),
             }
             this.setRecord(id, (previous) => ({ ...previous, usage }))
         } catch {
@@ -815,10 +831,14 @@ export class SubagentCoordinator {
             return
         const payload = formatFinalAnswer(status)
         if (payload === null || !record.parentPath) return
+        // Usage and start time land on the stored record during settlement, so
+        // read the current one instead of the caller's snapshot.
+        const current = this.records.get(record.id) ?? record
         const communication = finalAnswerCommunication({
             author: record.path,
             recipient: record.parentPath,
             payload,
+            meta: completionMeta(current, status),
         })
         try {
             await this.deliverCompletion(record.id, sequence, communication)
@@ -864,6 +884,7 @@ export class SubagentCoordinator {
             author: communication.author,
             recipient: communication.recipient,
             payload: communication.payload,
+            meta: communication.meta,
         }
         this.setRecord(childId, (previous) => ({
             ...previous,
@@ -892,6 +913,7 @@ export class SubagentCoordinator {
                     recipient: item.recipient,
                     payload: item.payload,
                     triggerTurn: true,
+                    meta: item.meta,
                 })
             } catch {
                 // Keep the durable outbox entry for the next load or root start.
@@ -1227,6 +1249,53 @@ function terminalMessage(record: AgentRecord): string | undefined {
         return record.status.message ?? undefined
     if (record.status._tag === 'Errored') return record.status.error
     return undefined
+}
+
+/** Transcript metadata for one terminal child result. */
+function completionMeta(
+    record: AgentRecord,
+    status: AgentRecord['status']
+): FinalAnswerMeta {
+    const usage = record.usage
+    const tokens = usage
+        ? usage.input + usage.output + usage.cacheRead + usage.cacheWrite
+        : 0
+    return {
+        ...(record.role ? { role: record.role } : {}),
+        model: record.model,
+        ...(record.runStartedAt !== undefined
+            ? { durationMs: Math.max(0, Date.now() - record.runStartedAt) }
+            : {}),
+        ...(tokens > 0 ? { tokens } : {}),
+        ...(usage && usage.cost > 0 ? { cost: usage.cost } : {}),
+        ...(status._tag === 'Errored' ? { failed: true } : {}),
+    }
+}
+
+/**
+ * Tool calls by name across every persisted entry, including history that
+ * compaction removed from the active branch. Feeds the inspector's top tools.
+ */
+function countToolCalls(session: AgentSession): SessionToolCallCount[] {
+    const counts = new Map<string, number>()
+    for (const entry of session.sessionManager.getEntries()) {
+        if (entry.type !== 'message') continue
+        const content = (entry.message as { content?: unknown }).content
+        if (!Array.isArray(content)) continue
+        for (const block of content) {
+            if (!block || typeof block !== 'object') continue
+            const call = block as { type?: unknown; name?: unknown }
+            if (call.type !== 'toolCall' || typeof call.name !== 'string')
+                continue
+            counts.set(call.name, (counts.get(call.name) ?? 0) + 1)
+        }
+    }
+    return [...counts.entries()]
+        .map(([name, count]) => ({ name, count }))
+        .sort(
+            (left, right) =>
+                right.count - left.count || left.name.localeCompare(right.name)
+        )
 }
 
 function restoredStatus(tag: string, message?: string): AgentStatus {

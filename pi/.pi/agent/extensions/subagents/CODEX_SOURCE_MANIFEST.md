@@ -1,13 +1,13 @@
 # Codex source manifest
 
-| Item | Value |
-|---|---|
-| Repository | `openai/codex` |
-| Revision (SHA) | `a592c38c16cdd7623dacc9168926ebccedfb67d3` |
-| Feature | `MultiAgentV2` |
-| Capture date | 2026-09-13 (refreshed after V3 lifecycle fixes) |
-| Pi host | `@earendil-works/pi-coding-agent@0.85.1` (see `docs/PI_API_BINDINGS.md`) |
-| Effect | `effect@4.0.0-beta.98` (pinned in root `package.json` overrides) |
+| Item           | Value                                                                    |
+| -------------- | ------------------------------------------------------------------------ |
+| Repository     | `openai/codex`                                                           |
+| Revision (SHA) | `a592c38c16cdd7623dacc9168926ebccedfb67d3`                               |
+| Feature        | `MultiAgentV2`                                                           |
+| Capture date   | 2026-09-13 (refreshed after V3 lifecycle fixes)                          |
+| Pi host        | `@earendil-works/pi-coding-agent@0.85.1` (see `docs/PI_API_BINDINGS.md`) |
+| Effect         | `effect@4.0.0-beta.98` (pinned in root `package.json` overrides)         |
 
 ## License status (blocking before verbatim reuse)
 

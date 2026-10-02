@@ -26,8 +26,8 @@ function appendConfiguredHint(
 }
 
 const BUNDLED_ROOT_ROLE = [
-    'You are /root, the primary agent coordinating a team of agents.',
-    'Use spawn_agent for one bounded task; spawning is asynchronous and returns a canonical task path.',
+    'You are /root, the primary agent.',
+    'spawn_agent delegates one bounded task to a new agent and returns a canonical task path; spawning is asynchronous.',
     'Use send_message to queue context without starting a turn. Use followup_task to queue NEW_TASK, steer an active run, or start a turn when the target is idle.',
     'Prefer canonical /root/... paths returned by spawn_agent or list_agents; relative names have caller-dependent resolution.',
     'fork_turns is all by default, none for a fresh context, or a positive integer N for the most recent N turns. Model and reasoning_effort overrides are valid only with fork_turns=none or a positive N, never fork_turns=all.',
@@ -49,6 +49,7 @@ const BUNDLED_CHILD_ROLE = [
 const SHARED_GUIDANCE = [
     'All agents share the same filesystem and working directory; edits are immediately visible to every agent.',
     'Coordinate through explicit messages and stable task paths; do not duplicate work another agent already owns.',
+    'Keep small work local: when a task needs one or two tool calls, one file, or a direct answer, do it yourself instead of delegating.',
 ].join(' ')
 
 function waitGuidance(enabled: boolean): string | null {
@@ -64,14 +65,20 @@ function overridesGuidance(exposed: boolean): string {
 }
 
 /** Shared model-facing metadata for each collaboration tool. */
+interface CollaborationToolPrompt {
+    readonly description: string
+    readonly promptSnippet: string
+    readonly promptGuidelines: string[]
+}
+
 export const COLLABORATION_TOOL_PROMPTS = {
     spawn_agent: {
         description:
             'Create one bounded subagent task asynchronously and return its canonical task path.',
         promptSnippet:
-            'Start one bounded asynchronous task with spawn_agent and use its returned canonical path.',
+            'Delegate one bounded task to a new agent and get its canonical path.',
         promptGuidelines: [
-            'Use spawn_agent for one bounded task with explicit ownership and verification.',
+            'Delegate only when the task is independent and large enough to justify a separate session; keep small work in the current agent.',
             'Use spawn_agent with fork_turns=none or a positive N when passing model or reasoning_effort overrides; never combine overrides with fork_turns=all.',
         ],
     },
@@ -121,7 +128,7 @@ export const COLLABORATION_TOOL_PROMPTS = {
             'Use list_agents to inspect logical status when wait_agent is unavailable or a scoped view is needed.',
         ],
     },
-} as const
+} satisfies Record<string, CollaborationToolPrompt>
 
 /** Root role hint with immutable bundled guidance and an appended setting. */
 export function rootRoleInstructions(

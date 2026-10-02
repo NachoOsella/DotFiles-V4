@@ -7,6 +7,16 @@ export interface ActivityEntry {
     readonly kind: ActivityKind
     readonly summary: string
     readonly live?: boolean
+    /** Tool call this entry describes, when it describes one. */
+    readonly toolCallId?: string
+    /** True when another tool, such as a codemode script, made the call. */
+    readonly nested?: boolean
+}
+
+/** Extra identity carried by tool activity. */
+export interface ActivityOptions {
+    readonly toolCallId?: string
+    readonly nested?: boolean
 }
 
 const MAX_SUMMARY_CHARS = 12_000
@@ -20,7 +30,12 @@ export class ActivityFeed {
     >()
     private nextId = 0
 
-    push(path: string, kind: ActivityKind, summary: string): void {
+    push(
+        path: string,
+        kind: ActivityKind,
+        summary: string,
+        options: ActivityOptions = {}
+    ): void {
         const clean = cleanSummary(summary)
         if (!clean) return
         const next = this.entries.get(path) ?? []
@@ -33,7 +48,14 @@ export class ActivityFeed {
                 next.pop()
             }
         }
-        next.push({ id: ++this.nextId, at: Date.now(), kind, summary: clean })
+        next.push({
+            id: ++this.nextId,
+            at: Date.now(),
+            kind,
+            summary: clean,
+            ...(options.toolCallId ? { toolCallId: options.toolCallId } : {}),
+            ...(options.nested ? { nested: true } : {}),
+        })
         this.entries.set(path, next)
     }
 

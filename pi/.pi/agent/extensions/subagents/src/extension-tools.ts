@@ -5,14 +5,25 @@
  */
 
 import { Text } from '@earendil-works/pi-tui'
+import type {
+    AgentToolResult,
+    Theme,
+    ToolDefinition,
+} from '@earendil-works/pi-coding-agent'
 import type { AgentPath } from './ids.ts'
 import type { ToolCallId } from './ids.ts'
 import type { SubagentCoordinator } from './coordinator.ts'
 import {
+    COLLABORATION_NAMESPACE,
+    DeliveryOutput,
     FollowupTaskParams,
+    InterruptAgentOutput,
     InterruptAgentParams,
+    ListAgentsOutput,
     ListAgentsParams,
     SendMessageParams,
+    SpawnAgentOutput,
+    WaitAgentOutput,
     buildSpawnAgentParams,
     TOOL_FOLLOWUP_TASK,
     TOOL_INTERRUPT_AGENT,
@@ -26,6 +37,42 @@ import {
 } from './tool-specs.ts'
 import { COLLABORATION_TOOL_PROMPTS } from './prompts.ts'
 
+/** Namespace shared by the whole collaboration tool family. */
+const collaborationNamespace = {
+    name: COLLABORATION_NAMESPACE,
+    description: 'Subagent collaboration tools rooted at /root.',
+    instructions:
+        'One agent tree is rooted at /root. Spawn bounded tasks ' +
+        'asynchronously, prefer canonical /root/... paths, coordinate ' +
+        'through send_message and followup_task, and keep small work local.',
+} as const
+
+/**
+ * MCP-style hints. Reads observe the tree; additive calls queue or spawn
+ * work.
+ */
+const readOnlyHints: NonNullable<ToolDefinition['annotations']> = {
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+    openWorldHint: false,
+}
+
+const additiveHints: NonNullable<ToolDefinition['annotations']> = {
+    readOnlyHint: false,
+    destructiveHint: false,
+    idempotentHint: false,
+    openWorldHint: false,
+}
+
+/** Interrupting discards a running turn, so it is the destructive one. */
+const interruptHints: NonNullable<ToolDefinition['annotations']> = {
+    readOnlyHint: false,
+    destructiveHint: true,
+    idempotentHint: true,
+    openWorldHint: false,
+}
+
 export interface ToolContextLike {
     readonly sessionManager: {
         getSessionId: () => string
@@ -33,7 +80,14 @@ export interface ToolContextLike {
     readonly cwd: string
 }
 
-function structuredResult(details: unknown) {
+/**
+ * Model-facing JSON text plus the same payload as `structuredContent`, so direct
+ * calls and codemode scripts read one shape. Call sites build JSON values only;
+ * the helper owns the single cast to the structured-content type.
+ */
+function structuredResult<T extends Record<string, unknown>>(
+    details: T
+): AgentToolResult<T> {
     return {
         content: [
             {
@@ -42,6 +96,8 @@ function structuredResult(details: unknown) {
             },
         ],
         details,
+        structuredContent:
+            details as unknown as AgentToolResult<T>['structuredContent'],
     }
 }
 
@@ -124,10 +180,15 @@ export function buildToolHandlers(manager: SubagentCoordinator) {
             })
             return structuredResult({ delivered: true })
         },
-        async wait(caller: AgentPath, params: { timeout_ms?: number }) {
+        async wait(
+            caller: AgentPath,
+            params: { timeout_ms?: number },
+            signal?: AbortSignal
+        ) {
             const result = await manager.wait({
                 caller,
                 timeoutMs: params.timeout_ms,
+                signal,
             })
             return structuredResult({
                 message: result.message,
@@ -166,36 +227,28 @@ export function buildToolHandlers(manager: SubagentCoordinator) {
     }
 }
 
-interface PiToolDefinition {
-    name: string
-    label: string
-    description: string
-    promptSnippet?: string
-    promptGuidelines?: readonly string[]
-    parameters: unknown
-    execute: (
-        toolCallId: string,
-        params: never,
-        signal: AbortSignal | undefined,
-        onUpdate: unknown,
-        ctx: never
-    ) => Promise<never>
-    renderCall?: (args: never, theme: never) => unknown
-    renderResult?: (result: never, options: never, theme: never) => unknown
+/** How a collaboration tool family is wired for its host session. */
+export interface CollaborationToolOptions {
+    /** Resolves the calling agent per call; a child pins one path. */
+    readonly resolveCaller: (ctx: ToolContextLike | undefined) => AgentPath
+    /** Root tools render their calls and results in the transcript. */
+    readonly renderers?: boolean
 }
 
-/** Root tool definitions for pi.registerTool (caller from session). */
-export function buildRootToolDefinitions(manager: SubagentCoordinator) {
+/** Collaboration tools for pi.registerTool or an SDK child session. */
+export function buildToolDefinitions(
+    manager: SubagentCoordinator,
+    options: CollaborationToolOptions
+): ToolDefinition[] {
     const handlers = buildToolHandlers(manager)
     const config = manager.getConfig()
     const spawnAgentParams = buildSpawnAgentParams(config)
     const waitAgentParams = buildWaitAgentParams(config)
-    const resolveCaller = (ctx: ToolContextLike) => callerOf(manager, ctx)
+    const resolveCaller = options.resolveCaller
+    const renderers = options.renderers === true
 
-    interface ThemeLike {
-        fg: (name: string, text: string) => string
-        bold: (text: string) => string
-    }
+    /** Pi's theme type, aliased to keep the renderer signatures short. */
+    type ThemeLike = Theme
 
     interface RenderContext {
         args?: unknown
@@ -208,7 +261,7 @@ export function buildRootToolDefinitions(manager: SubagentCoordinator) {
     }
 
     interface RenderResultValue {
-        content?: Array<{ text?: unknown }>
+        content?: ReadonlyArray<{ type: string; text?: string }>
         details?: unknown
     }
 
@@ -308,7 +361,13 @@ export function buildRootToolDefinitions(manager: SubagentCoordinator) {
             .filter(Boolean)
             .join(' · ')
         return new Text(
-            meta ? `${head}\n${theme.fg('dim', `  ${meta}`)}` : head,
+            [
+                head,
+                meta ? theme.fg('dim', `  ${meta}`) : '',
+                theme.fg('dim', '  inspect with /agents'),
+            ]
+                .filter(Boolean)
+                .join('\n'),
             0,
             0
         )
@@ -479,11 +538,40 @@ export function buildRootToolDefinitions(manager: SubagentCoordinator) {
         return new Text(`${head}\n${lines.join('\n')}`, 0, 0)
     }
 
-    const tools = [
+    const renderWaitCall = (args: unknown, theme: ThemeLike) =>
+        new Text(
+            `${theme.fg('toolTitle', theme.bold('wait_agent '))}${theme.fg('muted', formatTimeout(asRecord(args).timeout_ms))}`,
+            0,
+            0
+        )
+
+    const renderInterruptCall = (args: unknown, theme: ThemeLike) =>
+        new Text(
+            `${theme.fg('toolTitle', theme.bold('interrupt_agent '))}${theme.fg('accent', oneLine(asRecord(args).target, 48))}`,
+            0,
+            0
+        )
+
+    const renderListCall = (args: unknown, theme: ThemeLike) => {
+        const prefix = oneLine(asRecord(args).path_prefix, 40)
+        const head = theme.fg('toolTitle', theme.bold('list_agents'))
+        return new Text(
+            prefix
+                ? `${head} ${theme.fg('muted', `prefix “${prefix}”`)}`
+                : head,
+            0,
+            0
+        )
+    }
+
+    const tools: ToolDefinition[] = [
         {
             name: TOOL_SPAWN_AGENT,
             label: 'Spawn Agent',
             ...COLLABORATION_TOOL_PROMPTS.spawn_agent,
+            exposure: 'direct',
+            namespace: collaborationNamespace,
+            annotations: additiveHints,
             parameters: spawnAgentParams,
             async execute(
                 toolCallId: string,
@@ -506,13 +594,21 @@ export function buildRootToolDefinitions(manager: SubagentCoordinator) {
                     toolCallId
                 )
             },
-            renderCall: renderSpawnCall,
-            renderResult: renderSpawnResult,
+            outputSchema: SpawnAgentOutput,
+            ...(renderers
+                ? {
+                      renderCall: renderSpawnCall,
+                      renderResult: renderSpawnResult,
+                  }
+                : {}),
         },
         {
             name: TOOL_SEND_MESSAGE,
             label: 'Send Message',
             ...COLLABORATION_TOOL_PROMPTS.send_message,
+            exposure: 'direct',
+            namespace: collaborationNamespace,
+            annotations: additiveHints,
             parameters: SendMessageParams,
             async execute(
                 toolCallId: string,
@@ -523,13 +619,21 @@ export function buildRootToolDefinitions(manager: SubagentCoordinator) {
             ) {
                 return handlers.send(resolveCaller(ctx), params, toolCallId)
             },
-            renderCall: renderMessageCall('send_message'),
-            renderResult: renderMessageResult,
+            outputSchema: DeliveryOutput,
+            ...(renderers
+                ? {
+                      renderCall: renderMessageCall('send_message'),
+                      renderResult: renderMessageResult,
+                  }
+                : {}),
         },
         {
             name: TOOL_FOLLOWUP_TASK,
             label: 'Followup Task',
             ...COLLABORATION_TOOL_PROMPTS.followup_task,
+            exposure: 'direct',
+            namespace: collaborationNamespace,
+            annotations: additiveHints,
             parameters: FollowupTaskParams,
             async execute(
                 toolCallId: string,
@@ -540,35 +644,46 @@ export function buildRootToolDefinitions(manager: SubagentCoordinator) {
             ) {
                 return handlers.followup(resolveCaller(ctx), params, toolCallId)
             },
-            renderCall: renderMessageCall('followup_task'),
-            renderResult: renderMessageResult,
+            outputSchema: DeliveryOutput,
+            ...(renderers
+                ? {
+                      renderCall: renderMessageCall('followup_task'),
+                      renderResult: renderMessageResult,
+                  }
+                : {}),
         },
         {
             name: TOOL_WAIT_AGENT,
             label: 'Wait Agent',
             ...COLLABORATION_TOOL_PROMPTS.wait_agent,
+            exposure: 'direct',
+            namespace: collaborationNamespace,
+            annotations: readOnlyHints,
             parameters: waitAgentParams,
+            outputSchema: WaitAgentOutput,
             async execute(
                 _toolCallId: string,
                 params: { timeout_ms?: number },
-                _signal: AbortSignal | undefined,
+                signal: AbortSignal | undefined,
                 _onUpdate: undefined,
                 ctx: ToolContextLike
             ) {
-                return handlers.wait(resolveCaller(ctx), params)
+                return handlers.wait(resolveCaller(ctx), params, signal)
             },
-            renderCall: (args: unknown, theme: ThemeLike) =>
-                new Text(
-                    `${theme.fg('toolTitle', theme.bold('wait_agent '))}${theme.fg('muted', formatTimeout(asRecord(args).timeout_ms))}`,
-                    0,
-                    0
-                ),
-            renderResult: renderWaitResult,
+            ...(renderers
+                ? {
+                      renderCall: renderWaitCall,
+                      renderResult: renderWaitResult,
+                  }
+                : {}),
         },
         {
             name: TOOL_INTERRUPT_AGENT,
             label: 'Interrupt Agent',
             ...COLLABORATION_TOOL_PROMPTS.interrupt_agent,
+            exposure: 'direct',
+            namespace: collaborationNamespace,
+            annotations: interruptHints,
             parameters: InterruptAgentParams,
             async execute(
                 toolCallId: string,
@@ -583,18 +698,21 @@ export function buildRootToolDefinitions(manager: SubagentCoordinator) {
                     toolCallId
                 )
             },
-            renderCall: (args: unknown, theme: ThemeLike) =>
-                new Text(
-                    `${theme.fg('toolTitle', theme.bold('interrupt_agent '))}${theme.fg('accent', oneLine(asRecord(args).target, 48))}`,
-                    0,
-                    0
-                ),
-            renderResult: renderInterruptResult,
+            outputSchema: InterruptAgentOutput,
+            ...(renderers
+                ? {
+                      renderCall: renderInterruptCall,
+                      renderResult: renderInterruptResult,
+                  }
+                : {}),
         },
         {
             name: TOOL_LIST_AGENTS,
             label: 'List Agents',
             ...COLLABORATION_TOOL_PROMPTS.list_agents,
+            exposure: 'direct',
+            namespace: collaborationNamespace,
+            annotations: readOnlyHints,
             parameters: ListAgentsParams,
             async execute(
                 _toolCallId: string,
@@ -605,25 +723,23 @@ export function buildRootToolDefinitions(manager: SubagentCoordinator) {
             ) {
                 return handlers.list(resolveCaller(ctx), params)
             },
-            renderCall: (args: unknown, theme: ThemeLike) => {
-                const prefix = oneLine(asRecord(args).path_prefix, 40)
-                const head = theme.fg('toolTitle', theme.bold('list_agents'))
-                return new Text(
-                    prefix
-                        ? `${head} ${theme.fg('muted', `prefix “${prefix}”`)}`
-                        : head,
-                    0,
-                    0
-                )
-            },
-            renderResult: renderListResult,
+            outputSchema: ListAgentsOutput,
+            ...(renderers
+                ? { renderCall: renderListCall, renderResult: renderListResult }
+                : {}),
         },
     ]
-    return (config.waitAgentEnabled
+    return config.waitAgentEnabled
         ? tools
-        : tools.filter(
-              (tool) => tool.name !== TOOL_WAIT_AGENT
-          )) as unknown as PiToolDefinition[]
+        : tools.filter((tool) => tool.name !== TOOL_WAIT_AGENT)
+}
+
+/** Root tool definitions for pi.registerTool (caller from the session). */
+export function buildRootToolDefinitions(manager: SubagentCoordinator) {
+    return buildToolDefinitions(manager, {
+        resolveCaller: (ctx) => callerOf(manager, ctx),
+        renderers: true,
+    })
 }
 
 /** Child SDK tools with a fixed caller (recursive spawn support). */
@@ -631,93 +747,7 @@ export function buildChildToolDefinitions(
     manager: SubagentCoordinator,
     caller: AgentPath
 ) {
-    const handlers = buildToolHandlers(manager)
-    const config = manager.getConfig()
-    const spawnAgentParams = buildSpawnAgentParams(config)
-    const waitAgentParams = buildWaitAgentParams(config)
-    const tools = [
-        {
-            name: TOOL_SPAWN_AGENT,
-            label: 'Spawn Agent',
-            ...COLLABORATION_TOOL_PROMPTS.spawn_agent,
-            parameters: spawnAgentParams,
-            async execute(
-                toolCallId: string,
-                params: {
-                    message: string
-                    task_name: string
-                    agent_type?: string
-                    model?: string
-                    reasoning_effort?: string
-                    fork_turns?: string
-                }
-            ) {
-                return handlers.spawn(caller, params, undefined, toolCallId)
-            },
-        },
-        {
-            name: TOOL_SEND_MESSAGE,
-            label: 'Send Message',
-            ...COLLABORATION_TOOL_PROMPTS.send_message,
-            parameters: SendMessageParams,
-            async execute(
-                toolCallId: string,
-                params: { target: string; message: string }
-            ) {
-                return handlers.send(caller, params, toolCallId)
-            },
-        },
-        {
-            name: TOOL_FOLLOWUP_TASK,
-            label: 'Followup Task',
-            ...COLLABORATION_TOOL_PROMPTS.followup_task,
-            parameters: FollowupTaskParams,
-            async execute(
-                toolCallId: string,
-                params: { target: string; message: string }
-            ) {
-                return handlers.followup(caller, params, toolCallId)
-            },
-        },
-        {
-            name: TOOL_WAIT_AGENT,
-            label: 'Wait Agent',
-            ...COLLABORATION_TOOL_PROMPTS.wait_agent,
-            parameters: waitAgentParams,
-            async execute(
-                _toolCallId: string,
-                params: { timeout_ms?: number }
-            ) {
-                return handlers.wait(caller, params)
-            },
-        },
-        {
-            name: TOOL_INTERRUPT_AGENT,
-            label: 'Interrupt Agent',
-            ...COLLABORATION_TOOL_PROMPTS.interrupt_agent,
-            parameters: InterruptAgentParams,
-            async execute(toolCallId: string, params: { target: string }) {
-                return handlers.interrupt(caller, params, toolCallId)
-            },
-        },
-        {
-            name: TOOL_LIST_AGENTS,
-            label: 'List Agents',
-            ...COLLABORATION_TOOL_PROMPTS.list_agents,
-            parameters: ListAgentsParams,
-            async execute(
-                _toolCallId: string,
-                params: { path_prefix?: string }
-            ) {
-                return handlers.list(caller, params)
-            },
-        },
-    ]
-    return (config.waitAgentEnabled
-        ? tools
-        : tools.filter(
-              (tool) => tool.name !== TOOL_WAIT_AGENT
-          )) as unknown as PiToolDefinition[]
+    return buildToolDefinitions(manager, { resolveCaller: () => caller })
 }
 
 /** Validate the planned family before registration. */

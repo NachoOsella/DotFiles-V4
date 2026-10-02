@@ -4,13 +4,13 @@ import type { Theme } from '@earendil-works/pi-coding-agent'
 import { visibleWidth } from '@earendil-works/pi-tui'
 import type { AgentRecord } from './src/agent-record.ts'
 import type { AgentPath } from './src/ids.ts'
-import type { ListedAgent } from './src/manager.ts'
+import type { ListedAgent } from './src/coordinator.ts'
 import {
+    agentDepth,
     buildAgentsDashboardLines,
-    buildAgentsModalLines,
     collapseRedundant,
     type DashboardState,
-    type ModalState,
+    shortAgentName,
     type RenderEntry,
 } from './src/agents-modal.ts'
 import type { ActivityEntry } from './src/activity-feed.ts'
@@ -29,12 +29,9 @@ function listedAgent(overrides: Partial<ListedAgent> = {}): ListedAgent {
         parentPath: '/root' as AgentPath,
         hasPendingMail: false,
         running: true,
+        waiting: false,
         ...overrides,
     } as ListedAgent
-}
-
-function state(overrides: Partial<ModalState> = {}): ModalState {
-    return { selected: 0, expanded: new Set(), detailed: false, ...overrides }
 }
 
 const emptyReader = {
@@ -61,6 +58,7 @@ test('full-screen dashboard fills wide and narrow terminal dimensions', () => {
         followTail: true,
         narrowPanel: 'agents',
         hiddenKinds: new Set(),
+        taskExpanded: false,
         seenByPath: new Map(),
     }
     for (const [width, height] of [
@@ -101,6 +99,28 @@ test('timeline merges tool completion and drops message shadowed by final', () =
     assert.equal(collapsed[2]?.kind, 'tool_result')
 })
 
+test('timeline pairs look-alike parallel calls by call id', () => {
+    const at = Date.now()
+    const entry = (
+        id: number,
+        kind: ActivityEntry['kind'],
+        summary: string,
+        toolCallId?: string
+    ): ActivityEntry => ({ id, at, kind, summary, toolCallId })
+    const collapsed = collapseRedundant([
+        entry(1, 'tool', 'read path="a"', 'call-1'),
+        entry(2, 'tool', 'read path="b"', 'call-2'),
+        entry(3, 'tool_result', 'read completed', 'call-2'),
+        entry(4, 'tool_result', 'read completed', 'call-1'),
+    ])
+
+    assert.equal(collapsed.length, 2)
+    assert.equal(collapsed[0]?.summary, 'read path="a"')
+    assert.ok(collapsed[0]?.doneAt !== undefined)
+    assert.equal(collapsed[1]?.summary, 'read path="b"')
+    assert.ok(collapsed[1]?.doneAt !== undefined)
+})
+
 test('dashboard wraps long stories instead of truncating every line', () => {
     const reader = {
         ...emptyReader,
@@ -124,6 +144,7 @@ test('dashboard wraps long stories instead of truncating every line', () => {
             followTail: true,
             narrowPanel: 'activity',
             hiddenKinds: new Set(),
+            taskExpanded: false,
             seenByPath: new Map(),
         },
         100,
@@ -166,6 +187,7 @@ test('tool blocks show shell commands plainly with durations', () => {
             followTail: true,
             narrowPanel: 'activity',
             hiddenKinds: new Set(),
+            taskExpanded: false,
             seenByPath: new Map(),
         },
         100,
@@ -180,6 +202,52 @@ test('tool blocks show shell commands plainly with durations', () => {
     assert.match(body, /done in 2s/)
     assert.ok(body.includes('THINK'))
     assert.ok(body.includes('│'))
+})
+
+test('nested tool calls are marked in the timeline', () => {
+    const at = Date.now()
+    const reader = {
+        ...emptyReader,
+        getActivity: (_path: AgentPath): RenderEntry[] => [
+            {
+                id: 1,
+                at,
+                kind: 'tool' as const,
+                summary: 'codemode',
+                doneAt: at + 900,
+            },
+            {
+                id: 2,
+                at,
+                kind: 'tool' as const,
+                summary: 'read path="src/index.ts"',
+                toolCallId: 'call-1',
+                nested: true,
+                doneAt: at + 400,
+            },
+        ],
+    }
+    const lines = buildAgentsDashboardLines(
+        [listedAgent()],
+        reader,
+        {
+            selected: 0,
+            focus: 'activity',
+            scroll: 0,
+            followTail: true,
+            narrowPanel: 'activity',
+            hiddenKinds: new Set(),
+            taskExpanded: false,
+            seenByPath: new Map(),
+        },
+        100,
+        24,
+        stubTheme
+    )
+    const body = lines.join('\n')
+    assert.ok(body.includes('codemode'))
+    assert.equal(body.match(/nested/g)?.length, 1)
+    assert.match(body, /read.*nested/)
 })
 
 test('agent rows show status, thinking and elapsed without truncation', () => {
@@ -208,6 +276,7 @@ test('agent rows show status, thinking and elapsed without truncation', () => {
             followTail: true,
             narrowPanel: 'agents',
             hiddenKinds: new Set(),
+            taskExpanded: false,
             seenByPath: new Map(),
         },
         120,
@@ -246,6 +315,7 @@ test('dashboard pins the spawn prompt above the activity', () => {
         followTail: true,
         narrowPanel: 'activity',
         hiddenKinds: new Set(),
+        taskExpanded: false,
         seenByPath: new Map(),
     }
     const lines = buildAgentsDashboardLines(
@@ -274,106 +344,210 @@ test('dashboard pins the spawn prompt above the activity', () => {
     assert.ok(!withoutTask.join('\n').includes('◆ TASK'))
 })
 
-test('every modal line spans the full width (no terminal ghosting)', () => {
-    const agents = [
-        listedAgent(),
-        listedAgent({
-            path: '/root/worker/nested' as AgentPath,
-            status: 'Completed',
-            parentPath: '/root/worker' as AgentPath,
-            running: false,
-        }),
-        listedAgent({
-            path: '/root/other' as AgentPath,
-            status: 'Errored',
-            parentPath: '/root' as AgentPath,
-            running: false,
-        }),
-    ]
-    for (const width of [40, 62]) {
-        const lines = buildAgentsModalLines(
-            agents,
-            emptyReader,
-            state(),
-            width,
-            stubTheme
-        )
-        assert.ok(lines.length > 5)
-        for (const line of lines) {
-            assert.equal(
-                visibleWidth(line),
-                width,
-                `line is not full width ${width}: ${line}`
-            )
-        }
-    }
-})
-
-test('modal frame carries stats chrome and selection', () => {
-    const agents = [listedAgent(), listedAgent()]
-    const lines = buildAgentsModalLines(
-        agents,
-        emptyReader,
-        state({ selected: 1 }),
-        62,
-        stubTheme
-    )
-    assert.ok(lines[0]?.startsWith('╭') && lines[0]?.endsWith('╮'))
-    assert.ok(
-        lines[lines.length - 1]?.startsWith('╰') &&
-            lines[lines.length - 1]?.endsWith('╯')
-    )
-    assert.ok(lines.some((line) => line.includes('SUBAGENTS')))
-    assert.ok(lines.some((line) => line.includes('2 total')))
-    assert.ok(lines.some((line) => line.includes('▸')))
-    assert.ok(lines.some((line) => line.includes('worker')))
-    assert.ok(
-        lines.some((line) => line.includes('j/k move')),
-        'footer hints are visible'
-    )
-})
-
-test('expanded rows show record detail inside the frame', () => {
-    const agents = [listedAgent()]
+test('clamps long spawn prompts until t expands them', () => {
+    const task = Array.from(
+        { length: 12 },
+        (_, index) => `task line ${index + 1}`
+    ).join('\n')
     const reader = {
         getRecordByPath: (_path: AgentPath) =>
-            ({
-                usage: {
-                    provider: 'test',
-                    modelId: 'test-model',
-                    input: 100,
-                    output: 50,
-                    cacheRead: 0,
-                    cacheWrite: 0,
-                    cost: 0.02,
-                    userMessages: 1,
-                    assistantMessages: 2,
-                    toolResults: 1,
-                    toolCalls: [{ name: 'bash', count: 3 }],
-                },
-                status: { _tag: 'Running' },
-                lastActivityAt: Date.now(),
-            }) as unknown as AgentRecord,
-        getRecentTurns: (_path: AgentPath) =>
-            Array.from({ length: 12 }, (_, index) => ({
-                role: index % 2 === 0 ? 'user' : 'assistant',
-                text: `turn ${index + 1}`,
-            })).slice(-10),
+            ({ task }) as unknown as AgentRecord,
+        getActivity: (_path: AgentPath): ActivityEntry[] => [
+            {
+                id: 1,
+                at: Date.now(),
+                kind: 'final' as const,
+                summary: 'done',
+            },
+        ],
     }
-    const lines = buildAgentsModalLines(
-        agents,
+    const collapsed = buildAgentsDashboardLines(
+        [listedAgent()],
         reader,
-        state({ expanded: new Set(['/root/worker']) }),
-        62,
+        dashboardStateFor(),
+        100,
+        24,
+        stubTheme
+    ).join('\n')
+    assert.ok(collapsed.includes('task line 5'))
+    assert.ok(!collapsed.includes('task line 6'))
+    assert.match(collapsed, /\+7 more lines/)
+    assert.ok(collapsed.includes('FINAL'))
+
+    const expanded = buildAgentsDashboardLines(
+        [listedAgent()],
+        reader,
+        dashboardStateFor({ taskExpanded: true }),
+        100,
+        24,
+        stubTheme
+    ).join('\n')
+    assert.ok(expanded.includes('task line 12'))
+})
+
+test('shortens agent paths below /root', () => {
+    assert.equal(shortAgentName('/root'), '/root')
+    assert.equal(shortAgentName('/root/worker'), 'worker')
+    assert.equal(shortAgentName('/root/worker/nested'), 'worker/nested')
+})
+
+test('computes nesting depth below /root', () => {
+    assert.equal(agentDepth('/root'), 0)
+    assert.equal(agentDepth('/root/worker'), 0)
+    assert.equal(agentDepth('/root/worker/nested'), 1)
+    assert.equal(agentDepth('/root/worker/nested/deep'), 2)
+})
+
+function dashboardStateFor(
+    overrides: Partial<DashboardState> = {}
+): DashboardState {
+    return {
+        selected: 0,
+        focus: 'activity',
+        scroll: 0,
+        followTail: true,
+        narrowPanel: 'activity',
+        hiddenKinds: new Set(),
+        taskExpanded: false,
+        seenByPath: new Map(),
+        ...overrides,
+    }
+}
+
+test('activity panel notes which kinds are hidden', () => {
+    const reader = {
+        ...emptyReader,
+        getActivity: (_path: AgentPath): RenderEntry[] => [
+            { id: 1, at: Date.now(), kind: 'tool' as const, summary: 'read' },
+        ],
+    }
+    const lines = buildAgentsDashboardLines(
+        [listedAgent()],
+        reader,
+        dashboardStateFor({ hiddenKinds: new Set(['thinking', 'message']) }),
+        100,
+        24,
         stubTheme
     )
-    for (const line of lines) {
-        assert.equal(visibleWidth(line), 62)
+    assert.match(lines.join('\n'), /hidden: thinking,message/)
+})
+
+test('narrow dashboards use the compact key hint', () => {
+    const reader = { ...emptyReader, getActivity: () => [] }
+    const narrow = buildAgentsDashboardLines(
+        [listedAgent()],
+        reader,
+        dashboardStateFor(),
+        60,
+        24,
+        stubTheme
+    ).join('\n')
+    assert.match(narrow, /1-5/)
+    assert.ok(!narrow.includes('top/bottom'))
+
+    const wide = buildAgentsDashboardLines(
+        [listedAgent()],
+        reader,
+        dashboardStateFor(),
+        120,
+        24,
+        stubTheme
+    ).join('\n')
+    assert.match(wide, /top\/bottom/)
+})
+
+test('failed tools show the error text, not a bare failure', () => {
+    const reader = {
+        ...emptyReader,
+        getActivity: (_path: AgentPath): RenderEntry[] => [
+            {
+                id: 1,
+                at: Date.now(),
+                kind: 'tool_result' as const,
+                summary: 'read failed: ENOENT: no such file',
+            },
+        ],
     }
-    assert.ok(lines.some((line) => line.includes('bash×3')))
-    assert.ok(lines.some((line) => line.includes('test-model')))
-    assert.ok(lines.some((line) => line.includes('last 10 turns')))
-    assert.ok(lines.some((line) => line.includes('turn 3')))
-    assert.ok(lines.some((line) => line.includes('turn 12')))
-    assert.ok(!lines.some((line) => line.includes('turn 2')))
+    const body = buildAgentsDashboardLines(
+        [listedAgent()],
+        reader,
+        dashboardStateFor(),
+        100,
+        24,
+        stubTheme
+    ).join('\n')
+    assert.match(body, /FAILED/)
+    assert.match(body, /ENOENT: no such file/)
+    assert.ok(!body.includes('read failed: ENOENT'))
+})
+
+test('waiting agents are marked in the list', () => {
+    const reader = { ...emptyReader, getActivity: () => [] }
+    const body = buildAgentsDashboardLines(
+        [listedAgent({ waiting: true })],
+        reader,
+        dashboardStateFor({ focus: 'agents', narrowPanel: 'agents' }),
+        100,
+        24,
+        stubTheme
+    ).join('\n')
+    assert.match(body, /waiting/)
+    assert.match(body, /◐/)
+})
+
+test('settled agents without activity show their last turns', () => {
+    const reader = {
+        ...emptyReader,
+        getActivity: () => [],
+        getRecentTurns: () => [
+            { role: 'user', text: 'do the thing' },
+            { role: 'assistant', text: 'did the thing' },
+        ],
+    }
+    const body = buildAgentsDashboardLines(
+        [listedAgent({ status: 'Completed', running: false })],
+        reader,
+        dashboardStateFor(),
+        100,
+        24,
+        stubTheme
+    ).join('\n')
+    assert.match(body, /last turns/)
+    assert.match(body, /do the thing/)
+    assert.ok(!body.includes('No activity yet.'))
+})
+
+test('the selected agent subtitle carries tokens and cost', () => {
+    const reader = {
+        ...emptyReader,
+        getRecordByPath: (_path: AgentPath) =>
+            ({
+                thinkingLevel: 'high',
+                model: 'provider/model',
+                usage: {
+                    provider: 'provider',
+                    modelId: 'model',
+                    input: 1200,
+                    output: 300,
+                    cacheRead: 0,
+                    cacheWrite: 0,
+                    cost: 0.0123,
+                    userMessages: 1,
+                    assistantMessages: 1,
+                    toolResults: 0,
+                    toolCalls: [],
+                },
+            }) as unknown as AgentRecord,
+        getActivity: () => [],
+    }
+    const body = buildAgentsDashboardLines(
+        [listedAgent()],
+        reader,
+        dashboardStateFor(),
+        100,
+        24,
+        stubTheme
+    ).join('\n')
+    assert.match(body, /1\.5K tok/)
+    assert.match(body, /\$0\.0123/)
 })

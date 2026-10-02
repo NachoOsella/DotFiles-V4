@@ -4,6 +4,8 @@ import type { ThinkingLevel } from '@earendil-works/pi-agent-core'
 import type { ModelRegistry } from '@earendil-works/pi-coding-agent'
 import {
     createAgentSession,
+    createCodemodeExtension,
+    createToolSearchExtension,
     DefaultResourceLoader,
     getAgentDir,
     SessionManager,
@@ -50,6 +52,8 @@ interface SessionFactoryOptions {
     readonly rootSessionDir: () => string
     readonly getModelRegistry: () => ModelRegistry
     readonly buildTools: (path: AgentRecord['path']) => readonly unknown[]
+    /** Agent directory for child settings and resources. Defaults to this process's. */
+    readonly agentDir?: string
     readonly onActivity?: (
         path: AgentRecord['path'],
         activity: LiveActivity
@@ -172,6 +176,14 @@ export class SessionFactory implements SubagentSessionFactory {
             tools,
             excludeTools: disallowedCollaborationTools,
         })
+        try {
+            // Emits session_start for the child's own extensions. Without it,
+            // built-ins such as codemode never finish wiring themselves up.
+            await session.bindExtensions({})
+        } catch (error) {
+            session.dispose()
+            throw error
+        }
         return makeAgentRuntime({
             path: record.path,
             session,
@@ -186,6 +198,7 @@ export class SessionFactory implements SubagentSessionFactory {
         record: AgentRecord
     ): Promise<DefaultResourceLoader> {
         const role = resolveRole(this.options.config, record.role)
+        const agentDir = this.options.agentDir ?? getAgentDir()
         const rolePrompt = [
             assembleChildPrompt({
                 config: this.options.config,
@@ -207,9 +220,27 @@ export class SessionFactory implements SubagentSessionFactory {
 
         const loader = new DefaultResourceLoader({
             cwd,
-            agentDir: getAgentDir(),
-            settingsManager: SettingsManager.create(cwd, getAgentDir()),
+            agentDir,
+            settingsManager: SettingsManager.create(cwd, agentDir),
             noThemes: true,
+            // Local tool orchestration only: codemode and tool search load as the
+            // host's built-ins, so an `extensions` entry such as
+            // `-builtin:codemode` still disables them. MCP is deliberately absent
+            // so children never read mcp.json or open a server.
+            extensionFactories: [
+                {
+                    name: 'codemode',
+                    factory: createCodemodeExtension(),
+                    builtin: true,
+                    replaceable: true,
+                },
+                {
+                    name: 'tool-search',
+                    factory: createToolSearchExtension(),
+                    builtin: true,
+                    replaceable: true,
+                },
+            ],
             extensionsOverride: (base) => ({
                 ...base,
                 extensions: base.extensions.filter(

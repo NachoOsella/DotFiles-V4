@@ -8,7 +8,7 @@
  */
 
 import type { ThinkingLevel } from '@earendil-works/pi-agent-core'
-import type { SessionToolCallCount } from './host.ts'
+import type { FinalAnswerMeta } from './communication.ts'
 import type { AgentId, AgentPath, CommunicationId } from './ids.ts'
 import type { AgentResidency, AgentStatus } from './agent-status.ts'
 
@@ -18,6 +18,13 @@ export interface PendingCompletion {
     readonly author: AgentPath
     readonly recipient: AgentPath
     readonly payload: string
+    readonly meta?: FinalAnswerMeta
+}
+
+/** Tool call count by name, for the inspector's top-tools row. */
+export interface SessionToolCallCount {
+    readonly name: string
+    readonly count: number
 }
 
 /** Accumulated usage totals for one logical agent (plain data). */
@@ -36,35 +43,6 @@ export interface AgentUsageTotals {
 }
 
 /** Add one turn delta into accumulated totals (identity from latest). */
-export function addUsageDelta(
-    totals: AgentUsageTotals | undefined,
-    delta: AgentUsageTotals
-): AgentUsageTotals {
-    if (!totals) return delta
-    const counts = new Map<string, number>()
-    for (const entry of totals.toolCalls) counts.set(entry.name, entry.count)
-    for (const entry of delta.toolCalls) {
-        counts.set(entry.name, (counts.get(entry.name) ?? 0) + entry.count)
-    }
-    const toolCalls = [...counts.entries()]
-        .filter(([, count]) => count > 0)
-        .map(([name, count]) => ({ name, count }))
-        .sort((left, right) => left.name.localeCompare(right.name))
-    return {
-        provider: delta.provider,
-        modelId: delta.modelId,
-        input: totals.input + delta.input,
-        output: totals.output + delta.output,
-        cacheRead: totals.cacheRead + delta.cacheRead,
-        cacheWrite: totals.cacheWrite + delta.cacheWrite,
-        cost: totals.cost + delta.cost,
-        userMessages: totals.userMessages + delta.userMessages,
-        assistantMessages: totals.assistantMessages + delta.assistantMessages,
-        toolResults: totals.toolResults + delta.toolResults,
-        toolCalls,
-    }
-}
-
 export interface AgentRecord {
     readonly id: AgentId
     readonly path: AgentPath
@@ -85,6 +63,8 @@ export interface AgentRecord {
     readonly activeTools?: readonly string[]
     readonly thinkingLevel?: ThinkingLevel
     readonly runSequence?: number
+    /** Runtime-only start of the current run; never serialized. */
+    readonly runStartedAt?: number
     readonly lastDeliveredRunSequence?: number
     readonly pendingCompletions?: readonly PendingCompletion[]
     readonly legacyUnresumable?: boolean
@@ -114,6 +94,8 @@ export interface AgentRecordInit {
     readonly activeTools?: readonly string[]
     readonly thinkingLevel?: ThinkingLevel
     readonly runSequence?: number
+    /** Runtime-only start of the current run; never serialized. */
+    readonly runStartedAt?: number
     readonly lastDeliveredRunSequence?: number
     readonly pendingCompletions?: readonly PendingCompletion[]
     readonly legacyUnresumable?: boolean

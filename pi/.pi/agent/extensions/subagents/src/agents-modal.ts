@@ -1,19 +1,18 @@
 /**
  * Interactive `/agents` modal: tree overview with per-agent drill-down.
  * Thin UI layer over SubagentCoordinator.list + getRecordByPath; no
- * orchestration lives here. Compact by default, `t` toggles density.
+ * orchestration lives here. The spawn prompt is clamped; `t` expands it.
  */
 
-import type {
-    ExtensionCommandContext,
-    Theme,
-} from '@earendil-works/pi-coding-agent'
+import type { ExtensionContext, Theme } from '@earendil-works/pi-coding-agent'
 import {
     matchesKey,
     truncateToWidth,
     visibleWidth,
     wrapTextWithAnsi,
 } from '@earendil-works/pi-tui'
+import type { TuiMouseEvent } from '@earendil-works/pi-tui'
+import { formatDuration, formatTokens } from './format.ts'
 import type { AgentRecord } from './agent-record.ts'
 import type { ActivityEntry, ActivityKind } from './activity-feed.ts'
 import type { AgentPath } from './ids.ts'
@@ -22,18 +21,13 @@ import type {
     ListedAgent,
     SubagentCoordinator,
 } from './coordinator.ts'
-import { agentDepth, shortAgentName } from './widget.ts'
 
 const PREVIEW_CHARS = 120
-const VISIBLE_COUNT = 10
+const TASK_PREVIEW_LINES = 5
+const FULL_FOOTER =
+    'tab panel · j/k move · g/G top/bottom · ^u/^d page · 1-5 filter · t task · q close'
+const COMPACT_FOOTER = 'tab · j/k · ^u/^d · 1-5 · t · q'
 
-export interface ModalState {
-    selected: number
-    expanded: Set<string>
-    detailed: boolean
-}
-
-/** Minimal reader so the frame stays pure and testable. */
 export interface AgentRecordReader {
     getRecordByPath(path: AgentPath): AgentRecord | undefined
     getRecentTurns?(path: AgentPath): readonly AgentTurnPreview[]
@@ -46,6 +40,7 @@ export interface DashboardState {
     followTail: boolean
     narrowPanel: 'agents' | 'activity'
     hiddenKinds: Set<ActivityKind>
+    taskExpanded: boolean
     seenByPath: Map<string, number>
 }
 
@@ -56,17 +51,21 @@ const dashboardState: DashboardState = {
     followTail: true,
     narrowPanel: 'agents',
     hiddenKinds: new Set(),
+    taskExpanded: false,
     seenByPath: new Map(),
 }
 
 /** Open a full-screen live inspector. No-op with a notice outside TUI. */
 export async function showAgentsModal(
     manager: SubagentCoordinator,
-    ctx: ExtensionCommandContext
+    ctx: ExtensionContext
 ): Promise<void> {
     const agents = manager.list('/root' as AgentPath)
     if (agents.length === 0) {
-        ctx.ui.notify('No subagents.', 'info')
+        ctx.ui.notify(
+            'No subagents yet. spawn_agent starts one; /agents inspects them.',
+            'info'
+        )
         return
     }
     if (ctx.mode !== 'tui' || !ctx.hasUI) {
@@ -74,7 +73,7 @@ export async function showAgentsModal(
         return
     }
 
-    await ctx.ui.custom<void>((tui, theme, _keybindings, done) => {
+    await ctx.ui.custom<void>((tui, theme, keybindings, done) => {
         let closed = false
         const unsubscribe = manager.onEvent(() => tui.requestRender())
         const close = () => {
@@ -93,7 +92,7 @@ export async function showAgentsModal(
                         Math.max(0, live.length - 1)
                     )
                 )
-                const height = Math.max(12, (process.stdout.rows ?? 24) - 1)
+                const height = Math.max(12, tui.terminal.rows - 1)
                 return buildAgentsDashboardLines(
                     live,
                     manager,
@@ -104,13 +103,35 @@ export async function showAgentsModal(
                 )
             },
             invalidate(): void {},
+            handleMouse(event: TuiMouseEvent) {
+                const delta = event.wheelDelta
+                if (!delta) return undefined
+                if (dashboardState.focus === 'agents') {
+                    const live = manager.list('/root' as AgentPath)
+                    const next = Math.min(
+                        dashboardState.selected + (delta > 0 ? 1 : -1),
+                        Math.max(0, live.length - 1)
+                    )
+                    dashboardState.selected = Math.max(0, next)
+                    dashboardState.scroll = 0
+                    dashboardState.followTail = true
+                } else {
+                    dashboardState.scroll = Math.max(
+                        0,
+                        dashboardState.scroll - delta
+                    )
+                    dashboardState.followTail = dashboardState.scroll === 0
+                }
+                tui.requestRender()
+                return { handled: true }
+            },
             handleInput(data: string): void {
                 const live = manager.list('/root' as AgentPath)
-                const page = Math.max(
-                    4,
-                    Math.floor((process.stdout.rows ?? 24) / 2)
-                )
-                if (matchesKey(data, 'escape') || data.toLowerCase() === 'q') {
+                const page = Math.max(4, Math.floor(tui.terminal.rows / 2))
+                if (
+                    keybindings.matches(data, 'tui.select.cancel') ||
+                    data.toLowerCase() === 'q'
+                ) {
                     close()
                     return
                 }
@@ -126,6 +147,12 @@ export async function showAgentsModal(
                     toggleKind(dashboardState.hiddenKinds, 'tool')
                 } else if (data === '3') {
                     toggleKind(dashboardState.hiddenKinds, 'tool_result')
+                } else if (data === '4') {
+                    toggleKind(dashboardState.hiddenKinds, 'message')
+                } else if (data === '5') {
+                    toggleKind(dashboardState.hiddenKinds, 'final')
+                } else if (data === 't') {
+                    dashboardState.taskExpanded = !dashboardState.taskExpanded
                 } else if (dashboardState.focus === 'agents') {
                     if (data === 'j' || matchesKey(data, 'down')) {
                         dashboardState.selected = Math.min(
@@ -211,24 +238,32 @@ export function buildAgentsDashboardLines(
         `${agents.length} total · ${active} active · ${state.followTail ? 'following' : 'paused'}`
     )
     const header = fillBetween(title, headerRight, width)
-    const footer = theme.fg(
-        'dim',
-        'tab panel · j/k move · g/G top/bottom · ^u/^d page · 1/2/3 filter · q close'
-    )
+    const footerHint =
+        visibleWidth(FULL_FOOTER) <= width ? FULL_FOOTER : COMPACT_FOOTER
+    const footer = theme.fg('dim', footerHint)
     const rule = theme.fg('borderMuted', '─'.repeat(width))
     const record = selectedPath
         ? reader.getRecordByPath(selectedPath)
         : undefined
     const task = record?.task?.trim() ? record.task.trim() : ''
+    const usage = record?.usage
+    const tokens = usage
+        ? usage.input + usage.output + usage.cacheRead + usage.cacheWrite
+        : 0
     const subtitle = record
         ? [
               record.model,
               record.thinkingLevel ? `thinking:${record.thinkingLevel}` : '',
               selected?.residency ?? '',
+              tokens > 0 ? `${formatTokens(tokens)} tok` : '',
+              usage && usage.cost > 0 ? `$${usage.cost.toFixed(4)}` : '',
           ]
               .filter(Boolean)
               .join(' · ')
         : ''
+    const recentTurns = selectedPath
+        ? (reader.getRecentTurns?.(selectedPath) ?? [])
+        : []
 
     let body: string[]
     if (narrow) {
@@ -250,7 +285,8 @@ export function buildAgentsDashboardLines(
                       state,
                       width,
                       contentHeight,
-                      theme
+                      theme,
+                      recentTurns
                   )
     } else {
         const leftWidth = Math.max(28, Math.min(38, Math.floor(width * 0.3)))
@@ -271,7 +307,8 @@ export function buildAgentsDashboardLines(
             state,
             rightWidth,
             contentHeight,
-            theme
+            theme,
+            recentTurns
         )
         body = Array.from(
             { length: contentHeight },
@@ -324,19 +361,24 @@ function renderAgentPanel(
         const seen = state.seenByPath.get(agent.path as string) ?? 0
         const unread = entries.filter((entry) => entry.id > seen).length
         const record = reader.getRecordByPath(agent.path)
-        const elapsed = record?.lastActivityAt
+        const silence = record?.lastActivityAt
             ? shortElapsed(record.lastActivityAt)
             : ''
-        // Meta stays short on purpose: status, thinking, elapsed always fit
+        // Meta stays short on purpose: status, thinking and silence always fit
         // the 28-38 column panel. The full model lives in the detail title.
         const marker = selected ? theme.fg('accent', '▸') : ' '
-        const glyph = modalStatusGlyph(agent, theme)
+        const glyph = statusGlyph(agent, theme)
         const badge = unread > 0 ? theme.fg('warning', ` +${unread}`) : ''
         const name = shortAgentName(agent.path as string)
         const nameStyled = selected
             ? theme.fg('accent', theme.bold(name))
             : name
-        const meta = [agent.status, record?.thinkingLevel, elapsed]
+        const meta = [
+            agent.status,
+            agent.waiting ? 'waiting' : '',
+            record?.thinkingLevel,
+            silenceLabel(agent, silence),
+        ]
             .filter(Boolean)
             .join(' · ')
         rows.push(
@@ -362,12 +404,15 @@ function renderActivityPanel(
     state: DashboardState,
     width: number,
     height: number,
-    theme: Theme
+    theme: Theme,
+    recentTurns: readonly AgentTurnPreview[] = []
 ): string[] {
     const collapsed = collapseRedundant(activity)
+    const hidden = [...state.hiddenKinds]
+    const filterNote = hidden.length > 0 ? ` · hidden: ${hidden.join(',')}` : ''
     const title = agent
-        ? `${shortAgentName(agent.path as string)} · ${agent.status}${agent.running ? ' ●' : ''}`
-        : 'ACTIVITY'
+        ? `${shortAgentName(agent.path as string)} · ${agent.status}${agent.running ? ' ●' : ''}${filterNote}`
+        : `ACTIVITY${filterNote}`
     const rows = [
         theme.fg(
             state.focus === 'activity' ? 'accent' : 'muted',
@@ -381,8 +426,18 @@ function renderActivityPanel(
         rows.push(theme.fg('accent', theme.bold('◆ TASK')))
         const taskWidth = Math.max(20, width - 2)
         const rail = theme.fg('accent', '│')
-        for (const line of wrapTextWithAnsi(task, taskWidth)) {
+        const wrapped = wrapTextWithAnsi(task, taskWidth)
+        const cap = state.taskExpanded ? wrapped.length : TASK_PREVIEW_LINES
+        for (const line of wrapped.slice(0, cap)) {
             rows.push(`${rail} ${line}`)
+        }
+        if (wrapped.length > cap) {
+            rows.push(
+                theme.fg(
+                    'dim',
+                    `${rail} … +${wrapped.length - cap} more lines · t`
+                )
+            )
         }
         rows.push('')
     }
@@ -395,7 +450,29 @@ function renderActivityPanel(
     const end = Math.max(0, eventRows.length - state.scroll)
     const start = Math.max(0, end - available)
     rows.push(...eventRows.slice(start, end))
-    if (eventRows.length === 0) rows.push(theme.fg('dim', 'No activity yet.'))
+    if (eventRows.length === 0) {
+        // Nothing filtered in: show the last turns instead of a dead panel, so a
+        // settled agent still says what it did.
+        if (recentTurns.length > 0) {
+            rows.push(theme.fg('dim', 'last turns'))
+            for (const turn of recentTurns) {
+                const text =
+                    turn.text.length > PREVIEW_CHARS
+                        ? `${turn.text.slice(0, PREVIEW_CHARS)}…`
+                        : turn.text
+                rows.push(
+                    truncateToWidth(
+                        `${theme.fg('muted', `${turn.role}:`)} ${text}`,
+                        width,
+                        '…',
+                        false
+                    )
+                )
+            }
+        } else {
+            rows.push(theme.fg('dim', 'No activity yet.'))
+        }
+    }
     return padRows(rows, height, width)
 }
 
@@ -405,9 +482,9 @@ export interface RenderEntry extends ActivityEntry {
 }
 
 /**
- * Merge a `tool X` call with its immediately following `X completed` result,
- * and drop an identical message shadowed by its terminal `final` payload.
- * Pure so the timeline stays truthful without showing the same text twice.
+ * Merge a `tool X` call with its `X completed` result, and drop an identical
+ * message shadowed by its terminal `final` payload. Pure so the timeline stays
+ * truthful without showing the same text twice.
  */
 export function collapseRedundant(
     entries: readonly ActivityEntry[]
@@ -426,25 +503,45 @@ export function collapseRedundant(
             }
             continue
         }
-        if (
-            last &&
-            last.kind === 'tool' &&
-            entry.kind === 'tool_result' &&
-            toolNameOf(last.summary) === toolNameOf(entry.summary) &&
-            /completed\s*$/.test(entry.summary)
-        ) {
-            out[out.length - 1] = { ...last, doneAt: entry.at }
-            continue
-        }
-        if (
-            entry.kind === 'tool_result' &&
-            /completed\s*$/.test(entry.summary)
-        ) {
-            continue
+        if (entry.kind === 'tool_result') {
+            const callIndex = matchToolCall(out, entry)
+            if (callIndex !== -1) {
+                out[callIndex] = { ...out[callIndex]!, doneAt: entry.at }
+                continue
+            }
+            if (/completed\s*$/.test(entry.summary)) continue
         }
         out.push({ ...entry })
     }
     return out
+}
+
+/**
+ * Find the call a completed result belongs to. Results that carry an id match
+ * only that id, so parallel look-alike calls never absorb each other's outcome
+ * and completions may arrive out of order; entries without an id keep the
+ * name-based fallback.
+ */
+function matchToolCall(
+    out: readonly RenderEntry[],
+    result: ActivityEntry
+): number {
+    if (!/completed\s*$/.test(result.summary)) return -1
+    for (let index = out.length - 1; index >= 0; index--) {
+        const call = out[index]!
+        if (call.kind !== 'tool' || call.doneAt !== undefined) continue
+        if (result.toolCallId !== undefined) {
+            if (call.toolCallId === result.toolCallId) return index
+            continue
+        }
+        if (
+            call.toolCallId === undefined &&
+            toolNameOf(call.summary) === toolNameOf(result.summary)
+        ) {
+            return index
+        }
+    }
+    return -1
 }
 
 function toolNameOf(summary: string): string {
@@ -479,9 +576,10 @@ function renderActivityEntry(
                       ` → done in ${formatDuration(entry.doneAt - entry.at)}`
                   )
                 : theme.fg('warning', ' → running')
+            const nested = entry.nested ? theme.fg('dim', ' · nested') : ''
             const rows = [
                 padLine(
-                    `${theme.fg('dim', 'TOOL ·')} ${theme.fg('toolTitle', theme.bold(toolName))} ${theme.fg('dim', `· ${time}`)}${live}`,
+                    `${theme.fg('dim', 'TOOL ·')} ${theme.fg('toolTitle', theme.bold(toolName))}${nested} ${theme.fg('dim', `· ${time}`)}${live}`,
                     width
                 ),
             ]
@@ -499,13 +597,16 @@ function renderActivityEntry(
             return rows
         }
         case 'tool_result': {
-            const toolName = toolNameOf(String(entry.summary))
+            const summary = String(entry.summary)
+            const toolName = toolNameOf(summary)
+            // The header already names the tool; show only the error text.
+            const body = summary.split(' failed: ')[1] ?? summary
             return [
                 padLine(
                     `${theme.fg('error', theme.bold('! FAILED'))} ${theme.fg('toolTitle', theme.bold(toolName))} ${theme.fg('dim', `· ${time}`)}`,
                     width
                 ),
-                ...guttered('error', String(entry.summary)),
+                ...guttered('error', body),
                 '',
             ]
         }
@@ -555,14 +656,6 @@ function renderActivityEntry(
     }
 }
 
-function formatDuration(ms: number): string {
-    if (!Number.isFinite(ms) || ms < 0) return '—'
-    if (ms < 1000) return `${Math.max(1, Math.round(ms))}ms`
-    const seconds = Math.floor(ms / 1000)
-    if (seconds < 60) return `${seconds}s`
-    return `${Math.floor(seconds / 60)}m ${seconds % 60}s`
-}
-
 function formatClock(at: number): string {
     const date = new Date(at)
     const hours = String(date.getHours()).padStart(2, '0')
@@ -607,119 +700,23 @@ function fillBetween(left: string, right: string, width: number): string {
 }
 
 /**
- * Pure modal frame in the session-stats style. Every returned line is
- * exactly `width` columns wide (padded, ANSI-aware) so no terminal
- * ghosting bleeds through the overlay.
+ * `lastActivityAt` is the last signal, not the run start. Label it so a quiet
+ * agent reads as quiet and a settled one reads as finished, instead of both
+ * reading as an elapsed time.
  */
-export function buildAgentsModalLines(
-    agents: readonly ListedAgent[],
-    reader: AgentRecordReader,
-    state: ModalState,
-    width: number,
-    theme: Theme
-): string[] {
-    const frameWidth = Math.max(40, width)
-    const budget = frameWidth - 4
-    const border = (text: string) => theme.fg('border', text)
-    const fit = (styled: string) => truncateToWidth(styled, budget, '…', false)
-    const row = (styled: string) => {
-        const fitted = fit(styled)
-        const padding = ' '.repeat(Math.max(0, budget - visibleWidth(fitted)))
-        return `${border('│')} ${fitted}${padding} ${border('│')}`
-    }
-
-    const lines: string[] = [
-        theme.fg('borderAccent', `╭${'─'.repeat(frameWidth - 2)}╮`),
-    ]
-    const active = agents.filter((a) => a.status === 'Running').length
-    const scopePlain = `${agents.length} total · ${active} active · ${state.detailed ? 'detailed' : 'compact'}`
-    const titleGap = Math.max(
-        1,
-        budget - visibleWidth('SUBAGENTS') - visibleWidth(scopePlain) - 1
-    )
-    lines.push(
-        row(
-            `${theme.fg('accent', 'SUBAGENTS')} ${' '.repeat(titleGap)}${theme.fg('muted', scopePlain)}`
-        )
-    )
-
-    const start = Math.max(
-        0,
-        Math.min(
-            state.selected - Math.floor(VISIBLE_COUNT / 2),
-            Math.max(0, agents.length - VISIBLE_COUNT)
-        )
-    )
-    const end = Math.min(agents.length, start + VISIBLE_COUNT)
-    const windowAgents = agents.slice(start, end)
-    const statusCol = Math.max(
-        1,
-        ...windowAgents.map((agent) => modalStatusText(agent).length)
-    )
-    if (start > 0) lines.push(row(theme.fg('dim', '… more above')))
-    for (let i = start; i < end; i += 1) {
-        const agent = agents[i]
-        if (!agent) continue
-        const selected = i === state.selected
-        const marker = selected ? theme.fg('accent', '▸') : ' '
-        const indent = '  '.repeat(
-            Math.min(2, agentDepth(agent.path as string))
-        )
-        const nameBudget = Math.max(
-            4,
-            budget - 4 - indent.length - statusCol - 1
-        )
-        const namePlain = truncateToWidth(
-            `${indent}${shortAgentName(agent.path as string)}`,
-            nameBudget,
-            '…',
-            false
-        )
-        const name = selected
-            ? theme.fg('accent', namePlain)
-            : theme.fg('text', namePlain)
-        const mail = agent.hasPendingMail ? theme.fg('warning', ' ✉') : ''
-        const status = theme.fg(
-            'muted',
-            modalStatusText(agent).padStart(statusCol)
-        )
-        const left = `${marker} ${modalStatusGlyph(agent, theme)} ${name}${mail}`
-        const rowGap = Math.max(1, budget - visibleWidth(left) - statusCol)
-        lines.push(row(`${left}${' '.repeat(rowGap)}${status}`))
-
-        if (state.expanded.has(agent.path as string) || state.detailed) {
-            for (const detail of agentDetailRows(
-                agent,
-                agents,
-                reader,
-                state.detailed,
-                state.expanded.has(agent.path as string)
-            )) {
-                lines.push(row(theme.fg('dim', `  ${detail}`)))
-            }
-        }
-    }
-    if (end < agents.length) lines.push(row(theme.fg('dim', '… more below')))
-    lines.push(
-        row(
-            theme.fg(
-                'dim',
-                'j/k move · enter detail · t density · e expand · q close'
-            )
-        )
-    )
-    lines.push(theme.fg('borderAccent', `╰${'─'.repeat(frameWidth - 2)}╯`))
-    return lines
+function silenceLabel(
+    agent: Pick<ListedAgent, 'status' | 'waiting' | 'running'>,
+    silence: string
+): string {
+    if (agent.waiting || !silence || silence === 'now') return ''
+    return agent.status === 'Running' ? `quiet ${silence}` : `idle ${silence}`
 }
 
-function modalStatusText(agent: Pick<ListedAgent, 'status'>): string {
-    return agent.status === 'PendingInit' ? 'Starting' : agent.status
-}
-
-function modalStatusGlyph(
-    agent: Pick<ListedAgent, 'status'>,
+function statusGlyph(
+    agent: Pick<ListedAgent, 'status' | 'waiting'>,
     theme: Theme
 ): string {
+    if (agent.waiting) return theme.fg('warning', '◐')
     switch (agent.status) {
         case 'Running':
             return theme.fg('accent', '●')
@@ -732,95 +729,17 @@ function modalStatusGlyph(
     }
 }
 
-/** Plain-text detail rows; the caller dims and pads them. */
-function agentDetailRows(
-    agent: ListedAgent,
-    all: readonly ListedAgent[],
-    reader: AgentRecordReader,
-    detailed: boolean,
-    showTurns: boolean
-): string[] {
-    const rows: string[] = []
-    const record = reader.getRecordByPath(agent.path)
-    const children = all.filter((a) => a.parentPath === agent.path).length
-    const meta = [
-        agent.model !== 'root' ? agent.model : '',
-        agent.residency,
-        children > 0 ? `${children} child${children === 1 ? '' : 'ren'}` : '',
-    ]
-        .filter(Boolean)
-        .join(' · ')
-    if (meta) rows.push(meta)
-
-    if (record?.usage) {
-        const u = record.usage
-        const tokens = u.input + u.output + u.cacheRead + u.cacheWrite
-        const tools = [...u.toolCalls]
-            .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name))
-            .slice(0, detailed ? 5 : 3)
-            .map((t) => `${t.name}×${t.count}`)
-            .join(' ')
-        const usageLine = [
-            tokens > 0 ? `${formatNumber(tokens)} tokens` : '',
-            u.cost > 0 ? `$${u.cost.toFixed(4)}` : '',
-            tools,
-        ]
-            .filter(Boolean)
-            .join(' · ')
-        if (usageLine) rows.push(usageLine)
-    }
-    const preview = statusPreview(record?.status ?? null)
-    if (preview) rows.push(`“${preview}”`)
-    if (record) {
-        const age = relativeTime(record.lastActivityAt)
-        if (age) rows.push(`active ${age}`)
-    }
-    if (showTurns) {
-        const turns = reader.getRecentTurns?.(agent.path) ?? []
-        if (turns.length > 0) rows.push('last 10 turns')
-        for (const turn of turns) {
-            const text =
-                turn.text.length > PREVIEW_CHARS
-                    ? `${turn.text.slice(0, PREVIEW_CHARS)}…`
-                    : turn.text
-            rows.push(`${turn.role}: ${text}`)
-        }
-    }
-    return rows
+/** Short display name: `/root/worker/nested` -> `worker/nested`. */
+export function shortAgentName(path: string): string {
+    const stripped = path.replace(/^\/root\/?/, '')
+    return stripped === '' ? '/root' : stripped
 }
 
-function statusPreview(
-    status: { _tag: string; message?: string | null; error?: string } | null
-): string | undefined {
-    if (!status) return undefined
-    const raw =
-        status._tag === 'Completed'
-            ? (status.message ?? '')
-            : status._tag === 'Errored'
-              ? (status.error ?? '')
-              : ''
-    const single = raw.trim().replace(/\s+/g, ' ')
-    if (!single) return undefined
-    return single.length > PREVIEW_CHARS
-        ? `${single.slice(0, PREVIEW_CHARS)}…`
-        : single
-}
-
-function relativeTime(timestamp: number): string | undefined {
-    if (!Number.isFinite(timestamp) || timestamp <= 0) return undefined
-    const diff = Date.now() - timestamp
-    if (diff < 5000) return 'just now'
-    const seconds = Math.floor(diff / 1000)
-    if (seconds < 60) return `${seconds}s ago`
-    const minutes = Math.floor(seconds / 60)
-    if (minutes < 60) return `${minutes}m ago`
-    return `${Math.floor(minutes / 60)}h ago`
-}
-
-function formatNumber(value: number): string {
-    if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`
-    if (value >= 1000) return `${(value / 1000).toFixed(1)}K`
-    return String(value)
+/** Nesting depth below /root (top-level = 0). */
+export function agentDepth(path: string): number {
+    const stripped = path.replace(/^\/root\/?/, '').replace(/\/$/, '')
+    if (!stripped) return 0
+    return stripped.split('/').filter(Boolean).length - 1
 }
 
 function renderPlainList(agents: ListedAgent[]): string {

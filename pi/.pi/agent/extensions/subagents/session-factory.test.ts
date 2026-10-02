@@ -1,4 +1,7 @@
 import assert from 'node:assert/strict'
+import { mkdtempSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import test from 'node:test'
 import { Type } from 'typebox'
 import type { Model } from '@earendil-works/pi-ai'
@@ -85,6 +88,9 @@ function createFactory(
     return new SessionFactory({
         rootSessionId: () => 'root-session',
         rootSessionDir: () => '',
+        // Isolate child sessions from the developer's own agent directory, so
+        // tests never load real extensions or settings.
+        agentDir: mkdtempSync(join(tmpdir(), 'subagents-factory-agent-')),
         getModelRegistry: () => ({ find: () => MODEL }) as never,
         buildTools: () => COLLABORATION_TOOLS.map(customTool),
         config,
@@ -123,6 +129,35 @@ test('child sessions retain inherited tools and activate permitted collaboration
             `${name} should be configured`
         )
     }
+})
+
+test('children inherit codemode and tool search as registered built-ins', async () => {
+    const inherited = ['read', 'bash', 'codemode', 'tool_search']
+    const result = await activeTools(
+        createFactory(),
+        record('/root/child', inherited),
+        parent(inherited)
+    )
+
+    for (const name of inherited) {
+        assert.ok(result.active.includes(name), `${name} should be active`)
+        assert.ok(
+            result.configured.includes(name),
+            `${name} should be configured`
+        )
+    }
+})
+
+test('children do not receive codemode when the parent never had it', async () => {
+    const result = await activeTools(
+        createFactory(),
+        record('/root/child', ['read']),
+        parent(['read'])
+    )
+
+    assert.ok(!result.active.includes('codemode'))
+    assert.ok(!result.configured.includes('codemode'))
+    assert.ok(!result.configured.includes('tool_search'))
 })
 
 test('children at the nesting limit cannot receive spawn_agent', async () => {

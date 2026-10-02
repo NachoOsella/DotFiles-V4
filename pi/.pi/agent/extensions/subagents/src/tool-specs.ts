@@ -181,6 +181,72 @@ export const ListAgentsParams = Type.Object(
     { additionalProperties: false }
 )
 
+export const SpawnAgentOutput = Type.Object(
+    {
+        task_name: Type.String({
+            description: 'Canonical path of the new agent.',
+        }),
+        agent_type: Type.Optional(Type.String()),
+        model: Type.Optional(
+            Type.String({ description: 'Resolved provider/model-id.' })
+        ),
+        thinking_level: Type.Optional(Type.String()),
+        fork_turns: Type.Optional(Type.String()),
+    },
+    { additionalProperties: false }
+)
+
+export const DeliveryOutput = Type.Object(
+    { delivered: Type.Boolean() },
+    { additionalProperties: false }
+)
+
+export const WaitAgentOutput = Type.Object(
+    {
+        message: Type.String({
+            description:
+                'Synchronization note; child output arrives through the transcript.',
+        }),
+        timed_out: Type.Boolean(),
+    },
+    { additionalProperties: false }
+)
+
+export const InterruptAgentOutput = Type.Object(
+    {
+        status: Type.String({
+            description: 'Agent status after the interrupt.',
+        }),
+    },
+    { additionalProperties: false }
+)
+
+export const ListAgentsOutput = Type.Object(
+    {
+        agents: Type.Array(
+            Type.Object(
+                {
+                    agent_name: Type.String(),
+                    agent_status: Type.String(),
+                    residency: Type.String(),
+                    role: Type.Optional(Type.String()),
+                    model: Type.String(),
+                    thinking_level: Type.Optional(Type.String()),
+                    parent_path: Type.Union([Type.String(), Type.Null()]),
+                    has_pending_mail: Type.Boolean(),
+                    running: Type.Boolean(),
+                    waiting: Type.Boolean({
+                        description:
+                            'Blocked in wait_agent right now, waiting for activity.',
+                    }),
+                },
+                { additionalProperties: false }
+            )
+        ),
+    },
+    { additionalProperties: false }
+)
+
 export const FORBIDDEN_V1_TOOLS = [
     'send_input',
     'resume_agent',

@@ -18,9 +18,11 @@ import {
     SUBAGENTS_COMMUNICATION_CUSTOM_TYPE,
 } from './src/transport.ts'
 import { renderSubagentCommunication } from './src/final-answer-renderer.ts'
+import { renderSubagentsState } from './src/state-renderer.ts'
 import { resolveConfiguredMode } from './src/mode.ts'
 import {
     findLatestState,
+    LEGACY_SUBAGENTS_STATE_CUSTOM_TYPE,
     SUBAGENTS_STATE_CUSTOM_TYPE,
 } from './src/persistence.ts'
 import { assembleRootPrompt } from './src/prompts.ts'
@@ -108,6 +110,14 @@ export default function subagentsExtension(pi: ExtensionAPI) {
         SUBAGENTS_COMMUNICATION_CUSTOM_TYPE,
         renderSubagentCommunication
     )
+    pi.registerEntryRenderer(
+        SUBAGENTS_STATE_CUSTOM_TYPE,
+        renderSubagentsState
+    )
+    pi.registerEntryRenderer(
+        LEGACY_SUBAGENTS_STATE_CUSTOM_TYPE,
+        renderSubagentsState
+    )
 
     let coordinator: SubagentCoordinator | undefined
     let latestCtx: ExtensionContext | undefined
@@ -183,6 +193,13 @@ export default function subagentsExtension(pi: ExtensionAPI) {
     pi.registerCommand('agents', {
         description: 'Inspect subagents',
         handler: async (_args, ctx) => {
+            await showAgentsModal(getCoordinator(), ctx)
+        },
+    })
+
+    pi.registerShortcut('alt+a', {
+        description: 'Inspect subagents',
+        handler: async (ctx) => {
             await showAgentsModal(getCoordinator(), ctx)
         },
     })

@@ -16,6 +16,9 @@ followup_task steers a running session and starts an idle session.
 FINAL_ANSWER goes only to the direct parent, delivered as a steer
 (triggerTurn=true) so a running parent ingests it mid-run.
 wait_agent synchronizes only; it never consumes or returns message content.
+wait_agent follows the caller's abort signal; cancelling a wait never cancels a child.
+Children load codemode and tool search, never MCP.
+Collaboration tools publish an outputSchema and structuredContent, not only JSON text.
 Interrupted != destroyed.
 Completed != destroyed.
 Forks copy structured AgentMessage values, never a text baseline prompt.
@@ -24,6 +27,8 @@ Agent-count capacity != execution capacity.
 Execution capacity applies to every child run, including follow-ups.
 Nested agents share one coordinator and one execution limiter.
 UI activity never enters a parent model context.
+The /agents inspector reads state; it never mutates an agent or its run.
+Completion card metadata (role, model, tokens, cost, duration) is UI-only.
 ```
 
 ## Runtime shape
@@ -48,6 +53,13 @@ SubagentCoordinator
 session plus run bookkeeping and is disposable. The coordinator admits one
 operation at a time per agent with `AgentMutex`; it never creates a second
 queue or waits for a child from inside the spawning tool call.
+
+`SessionFactory` registers the `codemode` and `tool-search` built-ins through
+`DefaultResourceLoader.extensionFactories` and calls `session.bindExtensions({})`
+before the child's first run, so a child reaches the same local tool
+orchestration the parent has. MCP is not registered. The factory takes its agent
+directory as an option instead of reading the process default, which keeps child
+settings and resources explicit and makes tests hermetic.
 
 ## Communication
 
@@ -89,9 +101,10 @@ chatter and subagent communications, preserves compaction/branch summaries,
 and copies structured user/final-assistant messages. `fork_turns=N` counts
 logical turns, not raw entries.
 
-## Remaining legacy code
+## Compatibility
 
-`manager.ts`, `host.ts`, and `host-live.ts` remain temporarily for the old unit
-test adapter while V3 integration coverage is built. They are not imported by
-`index.ts` and are scheduled for removal after the native-session integration
-suite replaces those tests.
+`pi-api-drift.test.ts` asserts the Pi surface this extension reads: the entry
+points it imports, the `AgentSession` methods and getters it calls, the
+`SessionStats` fields it snapshots, tool-exposure semantics, and that
+`bindExtensions()` emits `session_start`. A Pi upgrade that renames or removes
+any of them fails the suite instead of silently disabling a capability.

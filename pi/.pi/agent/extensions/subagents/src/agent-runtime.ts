@@ -8,6 +8,10 @@ export interface LiveActivity {
     readonly action: 'push' | 'update' | 'commit'
     readonly kind?: ActivityKind
     readonly summary?: string
+    /** Tool call this activity describes, when it describes one. */
+    readonly toolCallId?: string
+    /** True when another tool, such as a codemode script, made the call. */
+    readonly nested?: boolean
 }
 
 export interface AgentRuntime {
@@ -75,6 +79,8 @@ export function makeAgentRuntime(args: {
                 kind: 'tool',
                 summary:
                     `${event.toolName} ${formatToolMetadata(event.args)}`.trim(),
+                toolCallId: event.toolCallId,
+                nested: event.parentToolCallId !== undefined,
             })
             return
         }
@@ -82,7 +88,11 @@ export function makeAgentRuntime(args: {
             args.onActivity?.({
                 action: 'push',
                 kind: 'tool_result',
-                summary: `${event.toolName} ${event.isError ? 'failed' : 'completed'}`,
+                summary: event.isError
+                    ? `${event.toolName} failed: ${formatToolError(event.result)}`
+                    : `${event.toolName} completed`,
+                toolCallId: event.toolCallId,
+                nested: event.parentToolCallId !== undefined,
             })
         }
     })
@@ -132,6 +142,34 @@ function extractAssistantContent(message: unknown): {
         }
     }
     return { thinking: thinking.join('\n'), text: text.join('\n') }
+}
+
+/**
+ * First line of a failed tool result, bounded for the activity feed. The
+ * inspector shows this instead of a bare "failed", which is the part that
+ * tells you what to do next.
+ */
+function formatToolError(result: unknown): string {
+    const compact = extractResultText(result).trim().replace(/\s+/g, ' ')
+    if (!compact) return 'no error text'
+    return compact.length > 200 ? `${compact.slice(0, 200)}…` : compact
+}
+
+function extractResultText(result: unknown): string {
+    if (!result || typeof result !== 'object') return ''
+    const content = (result as { content?: unknown }).content
+    if (typeof content === 'string') return content
+    if (!Array.isArray(content)) return ''
+    return content
+        .map((part) =>
+            part &&
+            typeof part === 'object' &&
+            (part as { type?: unknown }).type === 'text'
+                ? String((part as { text?: unknown }).text ?? '')
+                : ''
+        )
+        .filter(Boolean)
+        .join(' ')
 }
 
 function formatToolMetadata(args: unknown): string {

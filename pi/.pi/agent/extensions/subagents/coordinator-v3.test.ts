@@ -30,11 +30,15 @@ class Deferred<T> {
 class FakeSession {
     readonly sessionId: string
     readonly sessionFile: string
+    readonly entries: unknown[] = []
     readonly sessionManager = {
         getCwd: () => '/repo',
         buildContextEntries: () => [],
+        getEntries: () => this.entries,
     }
     readonly model: { provider: string; id: string }
+    /** Physical model that answered; set when the selection is virtual. */
+    routedModel?: { model: { provider: string; id: string } }
     readonly thinkingLevel: AgentRecord['thinkingLevel']
     readonly activeTools: string[]
     readonly customMessages: unknown[] = []
@@ -42,7 +46,10 @@ class FakeSession {
     isStreaming = false
     runCalls = 0
     disposed = false
-    private readonly runResolvers: Array<() => void> = []
+    private readonly runs: Array<{
+        finish: () => void
+        fail: (error: unknown) => void
+    }> = []
 
     constructor(id: string, record: AgentRecord) {
         this.sessionId = `session-${id}`
@@ -70,17 +77,27 @@ class FakeSession {
         if (options?.triggerTurn && !this.isStreaming) {
             this.isStreaming = true
             this.runCalls += 1
-            await new Promise<void>((resolve) => {
-                this.runResolvers.push(() => {
-                    this.isStreaming = false
-                    resolve()
+            await new Promise<void>((resolve, reject) => {
+                this.runs.push({
+                    finish: () => {
+                        this.isStreaming = false
+                        resolve()
+                    },
+                    fail: (error) => {
+                        this.isStreaming = false
+                        reject(error)
+                    },
                 })
             })
         }
     }
 
     finishRun(): void {
-        this.runResolvers.shift()?.()
+        this.runs.shift()?.finish()
+    }
+
+    failRun(error: unknown = new Error('run failed')): void {
+        this.runs.shift()?.fail(error)
     }
 
     abort(): Promise<void> {
@@ -654,6 +671,258 @@ test('followup wakes a child blocked in wait_agent', async () => {
         timedOut: false,
     })
     session.finishRun()
+    await harness.coordinator.shutdown()
+})
+
+test('aborting a wait leaves the waiting agent untouched', async () => {
+    const harness = createHarness()
+    await harness.coordinator.spawn({
+        caller: ROOT_PATH,
+        taskName: 'a',
+        message: 'start',
+    })
+    const controller = new AbortController()
+    const waiting = harness.coordinator.wait({
+        caller: '/root/a' as AgentPath,
+        signal: controller.signal,
+    })
+    controller.abort()
+    await assert.rejects(waiting, /Wait cancelled/)
+    assert.equal(
+        harness.coordinator.getRecordByPath('/root/a' as AgentPath)?.status
+            ._tag,
+        'Running'
+    )
+    harness.sessions.get('/root/a')?.finishRun()
+    await harness.coordinator.shutdown()
+})
+
+test('shutdown cancels a pending wait instead of waiting for its timeout', async () => {
+    const harness = createHarness()
+    await harness.coordinator.spawn({
+        caller: ROOT_PATH,
+        taskName: 'a',
+        message: 'start',
+    })
+    const waiting = harness.coordinator.wait({
+        caller: '/root/a' as AgentPath,
+        timeoutMs: 3_600_000,
+    })
+    const shutdown = harness.coordinator.shutdown()
+    await assert.rejects(waiting, /Wait cancelled/)
+    await shutdown
+})
+
+test('spawn rejects invalid forks, empty messages, and bad task names', async () => {
+    const harness = createHarness()
+    await assert.rejects(
+        harness.coordinator.spawn({
+            caller: ROOT_PATH,
+            taskName: 'a',
+            message: '   ',
+        }),
+        /Message must not be empty/
+    )
+    await assert.rejects(
+        harness.coordinator.spawn({
+            caller: ROOT_PATH,
+            taskName: 'Bad Name',
+            message: 'x',
+        }),
+        /Invalid task_name/
+    )
+    await assert.rejects(
+        harness.coordinator.spawn({
+            caller: ROOT_PATH,
+            taskName: 'a',
+            message: 'x',
+            forkTurns: '0',
+        }),
+        /Invalid fork_turns/
+    )
+    await harness.coordinator.shutdown()
+})
+
+test('followup cannot target /root', async () => {
+    const harness = createHarness()
+    await assert.rejects(
+        harness.coordinator.followup({
+            caller: ROOT_PATH,
+            target: '/root',
+            message: 'x',
+        }),
+        /cannot target \/root/
+    )
+    await harness.coordinator.shutdown()
+})
+
+test('interrupt preserves identity and allows a later followup', async () => {
+    const harness = createHarness()
+    await harness.coordinator.spawn({
+        caller: ROOT_PATH,
+        taskName: 'a',
+        message: 'start',
+    })
+    const status = await harness.coordinator.interrupt({
+        caller: ROOT_PATH,
+        target: '/root/a',
+    })
+    assert.equal(status._tag, 'Interrupted')
+    assert.equal(
+        harness.coordinator.getRecordByPath('/root/a' as AgentPath)?.status
+            ._tag,
+        'Interrupted'
+    )
+    const followup = harness.coordinator.followup({
+        caller: ROOT_PATH,
+        target: '/root/a',
+        message: 'again',
+    })
+    await new Promise((resolve) => setImmediate(resolve))
+    harness.sessions.get('/root/a')?.finishRun()
+    await followup
+    assert.equal(harness.sessions.get('/root/a')?.runCalls, 2)
+    await harness.coordinator.shutdown()
+})
+
+test('usage follows the physical model and lists the tools that ran', async () => {
+    const harness = createHarness()
+    await harness.coordinator.spawn({
+        caller: ROOT_PATH,
+        taskName: 'virtual',
+        message: 'start',
+    })
+    await harness.coordinator.spawn({
+        caller: ROOT_PATH,
+        taskName: 'physical',
+        message: 'start',
+    })
+    const virtual = harness.sessions.get('/root/virtual')!
+    virtual.routedModel = {
+        model: { provider: 'physical-provider', id: 'physical-model' },
+    }
+    virtual.entries.push(
+        {
+            type: 'message',
+            message: {
+                role: 'assistant',
+                content: [
+                    { type: 'toolCall', name: 'read' },
+                    { type: 'toolCall', name: 'bash' },
+                ],
+            },
+        },
+        {
+            type: 'message',
+            message: {
+                role: 'assistant',
+                content: [{ type: 'toolCall', name: 'read' }],
+            },
+        },
+        { type: 'message', message: { role: 'user', content: 'text' } }
+    )
+    for (const path of ['/root/virtual', '/root/physical']) {
+        harness.sessions.get(path)?.finishRun()
+    }
+    await new Promise((resolve) => setImmediate(resolve))
+
+    const routed = harness.coordinator.getRecordByPath(
+        '/root/virtual' as AgentPath
+    )?.usage
+    assert.equal(routed?.provider, 'physical-provider')
+    assert.equal(routed?.modelId, 'physical-model')
+    assert.deepEqual(routed?.toolCalls, [
+        { name: 'read', count: 2 },
+        { name: 'bash', count: 1 },
+    ])
+
+    // Without a routed model the selection is what the snapshot reports.
+    const selected = harness.coordinator.getRecordByPath(
+        '/root/physical' as AgentPath
+    )?.usage
+    assert.equal(selected?.provider, 'test-provider')
+    assert.equal(selected?.modelId, 'test-model')
+    assert.deepEqual(selected?.toolCalls, [])
+    await harness.coordinator.shutdown()
+})
+
+test('list reports which agents are blocked in wait_agent', async () => {
+    const harness = createHarness()
+    await harness.coordinator.spawn({
+        caller: ROOT_PATH,
+        taskName: 'a',
+        message: 'start',
+    })
+    const listed = () => harness.coordinator.list(ROOT_PATH)
+    assert.equal(listed()[0]?.waiting, false)
+
+    const controller = new AbortController()
+    const waiting = harness.coordinator.wait({
+        caller: '/root/a' as AgentPath,
+        signal: controller.signal,
+    })
+    assert.equal(listed()[0]?.waiting, true)
+
+    controller.abort()
+    await assert.rejects(waiting, /Wait cancelled/)
+    assert.equal(listed()[0]?.waiting, false)
+    harness.sessions.get('/root/a')?.finishRun()
+    await harness.coordinator.shutdown()
+})
+
+test('completions carry transcript metadata for the card', async () => {
+    const harness = createHarness()
+    await harness.coordinator.spawn({
+        caller: ROOT_PATH,
+        taskName: 'done',
+        message: 'start',
+    })
+    await harness.coordinator.spawn({
+        caller: ROOT_PATH,
+        taskName: 'broken',
+        message: 'start',
+    })
+    harness.sessions.get('/root/done')?.finishRun()
+    harness.sessions.get('/root/broken')?.failRun(new Error('compile error'))
+    await new Promise((resolve) => setImmediate(resolve))
+
+    const results = harness.rootMessages.filter(
+        (message) => message.kind === 'result'
+    )
+    const completed = results.find((message) => message.author === '/root/done')
+    assert.equal(completed?.meta?.model, 'test-provider/test-model')
+    assert.equal(completed?.meta?.tokens, 2)
+    assert.equal(completed?.meta?.failed, undefined)
+    assert.equal(typeof completed?.meta?.durationMs, 'number')
+
+    const failed = results.find((message) => message.author === '/root/broken')
+    assert.equal(failed?.meta?.failed, true)
+    assert.match(String(failed?.payload), /Agent errored/)
+    await harness.coordinator.shutdown()
+})
+
+test('recent turns are captured for the inspector', async () => {
+    const harness = createHarness()
+    await harness.coordinator.spawn({
+        caller: ROOT_PATH,
+        taskName: 'a',
+        message: 'start',
+    })
+    const session = harness.sessions.get('/root/a')!
+    session.messages.push(
+        { role: 'user', content: 'do the thing' },
+        {
+            role: 'assistant',
+            content: [{ type: 'text', text: 'did the thing' }],
+        }
+    )
+    session.finishRun()
+    await new Promise((resolve) => setImmediate(resolve))
+
+    const turns = harness.coordinator.getRecentTurns('/root/a' as AgentPath)
+    assert.ok(turns.some((turn) => turn.text === 'do the thing'))
+    assert.equal(turns.at(-1)?.text, 'did the thing')
+    assert.equal(turns.at(-1)?.role, 'assistant')
     await harness.coordinator.shutdown()
 })
 

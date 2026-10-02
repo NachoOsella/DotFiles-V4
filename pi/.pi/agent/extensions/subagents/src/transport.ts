@@ -32,6 +32,7 @@ function customMessage(comm: InterAgentCommunication) {
             payload: comm.payload,
             sourceCallId: comm.sourceCallId,
             initiatingTurnId: comm.initiatingTurnId,
+            meta: comm.meta,
         },
     }
 }

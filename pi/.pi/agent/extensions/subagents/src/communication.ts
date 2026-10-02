@@ -15,6 +15,16 @@ export type InterAgentMessageType = 'NEW_TASK' | 'MESSAGE' | 'FINAL_ANSWER'
 
 export type CommunicationKind = 'spawn' | 'message' | 'followup' | 'result'
 
+/** Transcript metadata for a terminal child result; never sent to the model. */
+export interface FinalAnswerMeta {
+    readonly role?: string
+    readonly model: string
+    readonly durationMs?: number
+    readonly tokens?: number
+    readonly cost?: number
+    readonly failed?: boolean
+}
+
 export interface InterAgentCommunication {
     readonly id: CommunicationId
     readonly kind: CommunicationKind
@@ -25,6 +35,7 @@ export interface InterAgentCommunication {
     readonly triggerTurn: boolean
     readonly sourceCallId?: ToolCallId
     readonly initiatingTurnId?: TurnId
+    readonly meta?: FinalAnswerMeta
 }
 
 export type ForkTurns =
@@ -112,6 +123,7 @@ function makeCommunication(args: {
     triggerTurn: boolean
     sourceCallId?: ToolCallId
     initiatingTurnId?: TurnId
+    meta?: FinalAnswerMeta
 }): InterAgentCommunication {
     return {
         id: newCommunicationId(),
@@ -123,6 +135,7 @@ function makeCommunication(args: {
         triggerTurn: args.triggerTurn,
         sourceCallId: args.sourceCallId,
         initiatingTurnId: args.initiatingTurnId,
+        meta: args.meta,
     }
 }
 
@@ -176,6 +189,7 @@ export function finalAnswerCommunication(args: {
     author: AgentPath
     recipient: AgentPath
     payload: string
+    meta?: FinalAnswerMeta
 }): InterAgentCommunication {
     return makeCommunication({
         kind: 'result',
@@ -184,6 +198,7 @@ export function finalAnswerCommunication(args: {
         recipient: args.recipient,
         payload: args.payload,
         triggerTurn: true,
+        meta: args.meta,
     })
 }
 
