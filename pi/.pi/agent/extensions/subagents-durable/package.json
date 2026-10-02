@@ -1,0 +1,19 @@
+{
+    "name": "subagents-durable",
+    "private": true,
+    "version": "0.0.0",
+    "type": "module",
+    "scripts": {
+        "build": "npm run clean && tsc -p tsconfig.json",
+        "check": "tsc --noEmit -p tsconfig.json",
+        "test": "npm run build && node --test \".build/test/**/*.test.js\"",
+        "clean": "rm -rf .build"
+    },
+    "peerDependencies": {
+        "@earendil-works/chord": "*",
+        "@earendil-works/pi-ai": "*",
+        "@earendil-works/pi-durable": "1.0.0",
+        "@earendil-works/pi-tui": "*",
+        "typebox": "*"
+    }
+}
