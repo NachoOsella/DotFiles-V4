@@ -3,7 +3,7 @@
 ## Core
 
 - Never use emojis in responses, code, comments, commit messages, documentation, or generated files.
-- Write all code, comments, documentation, commit messages, and generated project text in English.
+- Write all code, comments, documentation, commit messages, and generated project text in English when the user's does not specify a language.
 - Prefer the smallest clear, correct change that fully solves the task.
 - Read and understand the relevant code before editing.
 - Reuse existing code, standard library features, platform features, and installed dependencies before adding new implementations.
@@ -21,7 +21,6 @@
 - For bug fixes, inspect relevant callers and sibling paths.
 - Delete code made obsolete by the change, but do not optimize for fewer lines or smaller diffs at the cost of readability.
 - If a file becomes meaningfully harder to maintain, split it along an existing responsibility boundary, not an arbitrary line limit.
-- Mark deliberate shortcuts with a `ponytail` comment describing the limitation and intended upgrade path.
 
 ## Tests
 

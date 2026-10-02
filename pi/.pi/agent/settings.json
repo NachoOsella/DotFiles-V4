@@ -1,12 +1,9 @@
 {
-  "lastChangelogVersion": "0.85.1",
+  "lastChangelogVersion": "1.0.0",
   "theme": "gruvbox-material-dark-hard",
   "hideThinkingBlock": false,
-  "quietStartup": true,
+  "quietStartup": false,
   "enableSkillCommands": true,
-  "extensions": [
-    "!extensions/subagents/**"
-  ],
   "skills": [
     "!skills/subagent-orchestration/**"
   ],
@@ -28,8 +25,9 @@
   "modelThinkingLevels": {
     "openai-codex/gpt-5.6-terra": "high"
   },
-  "defaultProvider": "openai-codex",
-  "defaultModel": "gpt-5.6-luna",
-  "defaultThinkingLevel": "xhigh",
-  "followUpMode": "one-at-a-time"
+  "defaultProvider": "opencode-go",
+  "defaultModel": "deepseek-v4.1-flash",
+  "defaultThinkingLevel": "max",
+  "followUpMode": "one-at-a-time",
+  "deviceId": "96101397-f7f0-46b9-bb6f-19c0e93b89a5"
 }
