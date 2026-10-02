@@ -303,13 +303,13 @@ export async function showChangedFiles(
       function styleDiffLine(line: string) {
         const expanded = sanitizeDiffLine(line);
         if (expanded.startsWith("Timed out")) {
-          return theme.fg("warning", theme.bold(expanded));
+          return theme.style(expanded, { fg: "warning", bold: true });
         }
         if (
           expanded.startsWith("diff --git") ||
           expanded.startsWith("index ")
         ) {
-          return theme.fg("accent", theme.bold(expanded));
+          return theme.style(expanded, { fg: "accent", bold: true });
         }
         if (expanded.startsWith("@@")) return theme.fg("mdHeading", expanded);
         if (expanded.startsWith("---") || expanded.startsWith("+++")) {

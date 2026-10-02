@@ -70,6 +70,38 @@ export function formatSummary(report: InspectionReport): string {
   return lines.join("\n");
 }
 
+// Compact, English summary for the model-facing `inspect_prompt` tool result.
+export function formatToolSummary(report: InspectionReport): string {
+  const lines: string[] = [];
+  if (report.model) {
+    lines.push(`Model: ${report.model.provider}/${report.model.id}`);
+  }
+  lines.push(
+    `System prompt: ${fmt(report.breakdown.totalChars)} chars ~${fmt(report.breakdown.totalTokens)} tokens`,
+  );
+  lines.push(
+    `Active tools: ${report.tools.length} -- ${fmt(report.toolsJsonChars)} chars ~${fmt(report.toolsTokens)} tokens`,
+  );
+  lines.push(
+    `Skills: ${report.skills.length} -- context files: ${report.contextFiles.length}`,
+  );
+  lines.push(
+    `Messages: ${report.messageCount} ~${fmt(report.messagesTokens)} tokens (estimated)`,
+  );
+  if (report.contextUsage) {
+    const u = report.contextUsage;
+    lines.push(
+      `Context: ${u.tokens !== null ? fmt(u.tokens) : "n/a"} / ${fmt(u.contextWindow)} (${fmtPercent(u.percent)})`,
+    );
+  } else {
+    lines.push(
+      `Context: ~${fmt(report.totalEstimatedTokens)} tokens (estimated)`,
+    );
+  }
+  lines.push(`CWD: ${report.cwd}`);
+  return lines.join("\n");
+}
+
 export function formatDetailed(report: InspectionReport): string {
   const lines: string[] = [];
   lines.push(formatSummary(report));

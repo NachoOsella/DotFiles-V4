@@ -63,17 +63,22 @@ export function color(
     token: Parameters<Theme['fg']>[0],
     text: string
 ): string {
-    return theme ? theme.fg(token, text) : text
+    return theme ? theme.style(text, { fg: token }) : text
 }
 
 /** Apply bold styling when a theme is available. */
 export function bold(theme: Theme | undefined, text: string): string {
-    return theme ? theme.bold(text) : text
+    return theme ? theme.style(text, { bold: true }) : text
 }
 
 /** Pad a possibly styled string to a visible width. */
 export function padRightVisible(text: string, width: number): string {
     return text + ' '.repeat(Math.max(0, width - visibleWidth(text)))
+}
+
+/** Empty progress-bar cell, brighter on light themes where faint shading is hard to see. */
+export function progressTrackGlyph(theme?: Theme): string {
+    return theme?.appearance === 'light' ? '▒' : '░'
 }
 
 /** Build a simple horizontal progress bar. */
@@ -89,7 +94,11 @@ export function progressBar(
     const filled = Math.round(ratio * width)
     return (
         color(theme, fillToken, '█'.repeat(filled)) +
-        color(theme, 'dim', '░'.repeat(Math.max(0, width - filled)))
+        color(
+            theme,
+            'dim',
+            progressTrackGlyph(theme).repeat(Math.max(0, width - filled))
+        )
     )
 }
 

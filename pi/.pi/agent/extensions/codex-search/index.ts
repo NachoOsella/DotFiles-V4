@@ -5,7 +5,7 @@ import {
   type ExtensionContext,
   type Theme,
 } from "@earendil-works/pi-coding-agent";
-import type { Static } from "@earendil-works/pi-ai";
+import type { JsonValue, Static } from "@earendil-works/pi-ai";
 import { Text } from "@earendil-works/pi-tui";
 import {
   assertSupportedStandaloneCombination,
@@ -91,6 +91,64 @@ interface WebSearchDetails {
   total?: number;
   elapsedMs?: number;
 }
+
+const CodexCitationOutputSchema = Type.Object({
+  title: Type.Optional(Type.String()),
+  url: Type.String(),
+  startIndex: Type.Optional(Type.Number()),
+  endIndex: Type.Optional(Type.Number()),
+});
+
+const CodexSearchCallOutputSchema = Type.Object({
+  id: Type.Optional(Type.String()),
+  status: Type.Optional(Type.String()),
+  query: Type.Optional(Type.String()),
+  url: Type.Optional(Type.String()),
+  actionType: Type.Optional(Type.String()),
+  refId: Type.Optional(Type.String()),
+});
+
+const QuerySuccessOutputSchema = Type.Object({
+  query: Type.String(),
+  text: Type.String(),
+  citations: Type.Array(CodexCitationOutputSchema),
+  searchCalls: Type.Array(CodexSearchCallOutputSchema),
+  refIds: Type.Optional(Type.Record(Type.String(), Type.String())),
+  responseId: Type.Optional(Type.String()),
+  usage: Type.Optional(
+    Type.Object({
+      inputTokens: Type.Optional(Type.Number()),
+      outputTokens: Type.Optional(Type.Number()),
+      totalTokens: Type.Optional(Type.Number()),
+    }),
+  ),
+});
+
+const QueryFailureOutputSchema = Type.Object({
+  query: Type.String(),
+  kind: Type.String(),
+  message: Type.String(),
+});
+
+/** Shape of the structured result for programmatic callers such as codemode scripts. */
+const WebSearchOutputSchema = Type.Object({
+  model: Type.String(),
+  api: Type.String(),
+  freshness: Type.String(),
+  searchContextSize: Type.String(),
+  queryCount: Type.Number(),
+  queries: Type.Array(Type.String()),
+  failedQueryCount: Type.Number(),
+  successes: Type.Array(QuerySuccessOutputSchema),
+  failures: Type.Array(QueryFailureOutputSchema),
+  failure: Type.Optional(
+    Type.Object({ kind: Type.String(), message: Type.String() }),
+  ),
+  partial: Type.Optional(Type.Boolean()),
+  completed: Type.Optional(Type.Number()),
+  total: Type.Optional(Type.Number()),
+  elapsedMs: Type.Optional(Type.Number()),
+});
 
 function buildToolDescription(config: ResolvedConfig): string {
   const toolName = config.toolName;
@@ -271,6 +329,15 @@ function buildTool(config: ResolvedConfig) {
             "Do not ask the user for an access token; the tool uses pi's configured OpenAI Codex subscription.",
           ],
     parameters: buildToolParameters(config),
+    // Reach the network; the external web is an open world and the call
+    // itself does not modify the environment.
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: true,
+    },
+    outputSchema: WebSearchOutputSchema,
 
     async execute(_toolCallId, params: ToolParameters, signal, onUpdate, ctx) {
       const queries = params.queries?.map((q) => q.trim()).filter((q) => q.length > 0) ?? [];
@@ -480,18 +547,30 @@ function buildTool(config: ResolvedConfig) {
               : `All ${failures.length} ${config.toolName} standalone actions failed: ${failures
                   .map((f, i) => `${i + 1}. [${f.kind}] ${f.message}`)
                   .join("; ")}`;
-          const err = new CodexError(primary?.kind ?? "unknown", summary) as CodexError & {
-            failures?: QueryFailure[];
-          };
-          err.failures = failures;
-          throw err;
+          return buildFailureResult(
+            config,
+            model,
+            freshness,
+            searchContextSize,
+            failures,
+            summary,
+            startedAt,
+          );
         }
 
+        const details = buildDetails(
+          config,
+          model,
+          freshness,
+          searchContextSize,
+          successes,
+          failures,
+          { elapsedMs: Date.now() - startedAt },
+        );
         return {
           content: [{ type: "text", text: formatToolText(successes, failures) }],
-          details: buildDetails(config, model, freshness, searchContextSize, successes, failures, {
-            elapsedMs: Date.now() - startedAt,
-          }),
+          details,
+          structuredContent: toStructuredContent(details),
         };
       }
 
@@ -607,18 +686,30 @@ function buildTool(config: ResolvedConfig) {
             : `All ${failures.length} ${config.toolName} queries failed: ${failures
                 .map((f, i) => `${i + 1}. [${f.kind}] ${f.message}`)
                 .join("; ")}`;
-        const err = new CodexError(primary?.kind ?? "unknown", summary) as CodexError & {
-          failures?: QueryFailure[];
-        };
-        err.failures = failures;
-        throw err;
+        return buildFailureResult(
+          config,
+          model,
+          freshness,
+          searchContextSize,
+          failures,
+          summary,
+          startedAt,
+        );
       }
 
+      const details = buildDetails(
+        config,
+        model,
+        freshness,
+        searchContextSize,
+        successes,
+        failures,
+        { elapsedMs: Date.now() - startedAt },
+      );
       return {
         content: [{ type: "text", text: formatToolText(successes, failures) }],
-        details: buildDetails(config, model, freshness, searchContextSize, successes, failures, {
-          elapsedMs: Date.now() - startedAt,
-        }),
+        details,
+        structuredContent: toStructuredContent(details),
       };
     },
 
@@ -781,6 +872,32 @@ function buildDetails(
 
 function formatProgress(completed: number, total: number): string {
   return `Searching ${completed}/${total} ${completed === total ? "complete" : "in progress"}`;
+}
+
+/** Total-failure result: model-facing text stays the same as the previous thrown error. */
+function buildFailureResult(
+  config: ResolvedConfig,
+  model: string,
+  freshness: Freshness,
+  searchContextSize: SearchContextSize,
+  failures: QueryFailure[],
+  summary: string,
+  startedAt: number,
+) {
+  const details = buildDetails(config, model, freshness, searchContextSize, [], failures, {
+    elapsedMs: Date.now() - startedAt,
+  });
+  return {
+    content: [{ type: "text" as const, text: summary }],
+    details,
+    structuredContent: toStructuredContent(details),
+    isError: true,
+  };
+}
+
+/** WebSearchDetails is JSON data by construction; the output schema mirrors it. */
+function toStructuredContent(details: WebSearchDetails): JsonValue {
+  return details as unknown as JsonValue;
 }
 
 export function formatToolText(successes: QuerySuccess[], failures: QueryFailure[]): string {

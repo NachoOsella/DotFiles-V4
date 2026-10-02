@@ -107,6 +107,9 @@ export interface SessionEntryLike {
     parentSession?: unknown
     message?: unknown
     usage?: unknown
+    provider?: unknown
+    model?: unknown
+    kind?: unknown
     customType?: unknown
     data?: unknown
 }

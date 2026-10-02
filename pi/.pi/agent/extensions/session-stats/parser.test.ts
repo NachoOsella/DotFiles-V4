@@ -228,6 +228,91 @@ test('parseCurrentBranch includes nested tool and compaction usage', () => {
     assert.equal(stats.totalTokens.cost.total, 0.03)
 })
 
+test('parseCurrentBranch counts nested tool calls recorded on tool results', () => {
+    const stats = parseCurrentBranch(
+        [
+            {
+                type: 'message',
+                message: {
+                    role: 'assistant',
+                    content: [{ type: 'toolCall', name: 'codemode' }],
+                },
+            },
+            {
+                type: 'message',
+                message: {
+                    role: 'toolResult',
+                    nestedCalls: {
+                        calls: [
+                            { name: 'read', status: 'ok' },
+                            { name: 'read', status: 'ok' },
+                            { name: 'bash', status: 'error', error: 'failed' },
+                        ],
+                        complete: true,
+                    },
+                },
+            },
+        ],
+        'ephemeral'
+    )
+
+    assert.deepEqual(stats.toolCalls, [
+        { name: 'read', count: 2 },
+        { name: 'bash', count: 1 },
+        { name: 'codemode', count: 1 },
+    ])
+})
+
+test('parseCurrentBranch includes attributed usage entries without a response', () => {
+    const stats = parseCurrentBranch(
+        [
+            {
+                type: 'usage',
+                provider: 'anthropic',
+                model: 'cache-model',
+                kind: 'cache_warm',
+                usage: {
+                    input: 0,
+                    output: 0,
+                    cacheRead: 50_000,
+                    cacheWrite: 0,
+                    totalTokens: 50_000,
+                    cost: { total: 0.015 },
+                },
+            },
+        ],
+        'ephemeral'
+    )
+
+    assert.equal(stats.assistantMessages, 0)
+    assert.equal(stats.totalTokens.cacheRead, 50_000)
+    assert.equal(stats.totalTokens.totalTokens, 50_000)
+    assert.equal(stats.totalTokens.cost.total, 0.015)
+    assert.equal(stats.models[0]?.modelId, 'cache-model')
+    assert.equal(stats.models[0]?.count, 0)
+})
+
+test('parseCurrentBranch attributes usage entries without a model as unattributed', () => {
+    const stats = parseCurrentBranch(
+        [
+            {
+                type: 'usage',
+                kind: 'cache_warm',
+                usage: {
+                    input: 10,
+                    output: 5,
+                    totalTokens: 15,
+                    cost: { total: 0 },
+                },
+            },
+        ],
+        'ephemeral'
+    )
+
+    assert.equal(stats.totalTokens.totalTokens, 15)
+    assert.deepEqual(stats.models, [])
+})
+
 test('parseSessionFile counts billed usage across all branches', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'session-stats-'))
     const file = join(directory, 'session.jsonl')

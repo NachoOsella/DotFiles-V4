@@ -2,8 +2,8 @@
 
 import type {
   BuildSystemPromptOptions,
-  ExtensionCommandContext,
   ExtensionAPI,
+  ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import {
   estimateCharsTokens,
@@ -79,7 +79,9 @@ function getToolsJsonForEstimation(
   // Prefer actual tool definitions from pi
   try {
     const all = pi.getAllTools();
-    const activeNames = new Set(options.selectedTools ?? []);
+    const activeNames = new Set(
+      options.selectedTools ?? pi.getActiveTools(),
+    );
     const active =
       activeNames.size > 0
         ? all.filter((t) => activeNames.has(t.name))
@@ -100,12 +102,27 @@ function getToolsJsonForEstimation(
   }
 }
 
+type SystemPromptOptionsContext = ExtensionContext & {
+  getSystemPromptOptions?: () => BuildSystemPromptOptions;
+};
+
+// Command contexts expose the full prompt construction options. Tool contexts
+// only expose the rendered prompt, so fall back to the fields available there.
+function resolveSystemPromptOptions(
+  ctx: ExtensionContext,
+): BuildSystemPromptOptions {
+  const provider = ctx as SystemPromptOptionsContext;
+  return typeof provider.getSystemPromptOptions === "function"
+    ? provider.getSystemPromptOptions()
+    : { cwd: ctx.cwd };
+}
+
 export function buildInspectionReport(
-  ctx: ExtensionCommandContext,
+  ctx: ExtensionContext,
   pi: ExtensionAPI,
 ): InspectionReport {
   const systemPrompt = ctx.getSystemPrompt();
-  const options = ctx.getSystemPromptOptions();
+  const options = resolveSystemPromptOptions(ctx);
   const breakdown = buildBreakdown(systemPrompt, options);
 
   const toolsJson = getToolsJsonForEstimation(pi, options);

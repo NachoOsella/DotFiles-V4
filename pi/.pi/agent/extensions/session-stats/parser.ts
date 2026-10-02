@@ -223,6 +223,10 @@ function collectEntry(
             collectUnattributedUsage(stats, collectors, entry.usage)
         return
     }
+    if (entry.type === 'usage') {
+        collectUsageEntry(stats, collectors, entry, pricing)
+        return
+    }
     if (entry.type === 'custom_message') {
         stats.customMessages += 1
         return
@@ -242,6 +246,7 @@ function collectEntry(
             if (isRecord(message.usage)) {
                 collectUnattributedUsage(stats, collectors, message.usage)
             }
+            collectNestedToolCalls(collectors.toolCalls, message.nestedCalls)
             break
         case 'custom':
             stats.customMessages += 1
@@ -257,45 +262,21 @@ function collectAssistantMessage(
 ): void {
     stats.assistantMessages += 1
     const modelId = effectiveModelId(message)
-    const model = ensureMessageModel(collectors.models, message, modelId)
-    const usage = isRecord(message.usage) ? message.usage : undefined
+    const provider =
+        typeof message.provider === 'string' ? message.provider : undefined
+    const model = ensureModel(collectors.models, provider, modelId)
+    if (model) model.count += 1
 
-    if (usage) {
-        const input = finiteNumber(usage.input)
-        const output = finiteNumber(usage.output)
-        const cacheRead = finiteNumber(usage.cacheRead)
-        const cacheWrite = finiteNumber(usage.cacheWrite)
-        const cacheWrite1h = finiteNumber(usage.cacheWrite1h)
-        const provider =
-            typeof message.provider === 'string' ? message.provider : undefined
-        const pricing =
-            provider && modelId
-                ? pricingResolver?.(provider, modelId)
-                : undefined
-        const cost = classifyUsageCost(
-            usage,
-            { input, output, cacheRead, cacheWrite, cacheWrite1h },
-            pricing
+    if (isRecord(message.usage)) {
+        collectUsage(
+            stats,
+            collectors,
+            message.usage,
+            provider,
+            modelId,
+            model,
+            pricingResolver
         )
-
-        addUsageTotals(stats, collectors, usage, cost)
-        if (model) {
-            model.input += input
-            model.output += output
-            model.cacheRead += cacheRead
-            model.cacheWrite += cacheWrite
-            model.cost += cost.actual
-            model.reportedCost = (model.reportedCost ?? 0) + cost.reported
-            model.catalogCost = (model.catalogCost ?? 0) + cost.catalog
-            model.estimatedCost = (model.estimatedCost ?? 0) + cost.estimated
-            model.unknownTokens =
-                (model.unknownTokens ?? 0) + cost.unknownTokens
-            model.pricedTokens = (model.pricedTokens ?? 0) + cost.pricedTokens
-            model.pricingSource = combinePricingSources(
-                model.pricingSource,
-                cost.source
-            )
-        }
     }
 
     if (!Array.isArray(message.content)) return
@@ -310,6 +291,93 @@ function collectAssistantMessage(
             block.name,
             (collectors.toolCalls.get(block.name) ?? 0) + 1
         )
+    }
+}
+
+/**
+ * Persisted usage that is not an assistant message, such as cache warming.
+ * Pi records these entries with their provider and model so they stay
+ * attributable; they count toward totals without adding a model response.
+ */
+function collectUsageEntry(
+    stats: SessionStats,
+    collectors: Collectors,
+    entry: SessionEntryLike,
+    pricingResolver?: ModelPricingResolver
+): void {
+    if (!isRecord(entry.usage)) return
+    const provider =
+        typeof entry.provider === 'string' ? entry.provider : undefined
+    const modelId = typeof entry.model === 'string' ? entry.model : undefined
+    if (!provider || !modelId) {
+        collectUnattributedUsage(stats, collectors, entry.usage)
+        return
+    }
+    const model = ensureModel(collectors.models, provider, modelId)
+    collectUsage(
+        stats,
+        collectors,
+        entry.usage,
+        provider,
+        modelId,
+        model,
+        pricingResolver
+    )
+}
+
+function collectUsage(
+    stats: SessionStats,
+    collectors: Collectors,
+    usage: Record<string, unknown>,
+    provider: string | undefined,
+    modelId: string | undefined,
+    model: ModelUsage | undefined,
+    pricingResolver?: ModelPricingResolver
+): void {
+    const input = finiteNumber(usage.input)
+    const output = finiteNumber(usage.output)
+    const cacheRead = finiteNumber(usage.cacheRead)
+    const cacheWrite = finiteNumber(usage.cacheWrite)
+    const cacheWrite1h = finiteNumber(usage.cacheWrite1h)
+    const pricing =
+        provider && modelId ? pricingResolver?.(provider, modelId) : undefined
+    const cost = classifyUsageCost(
+        usage,
+        { input, output, cacheRead, cacheWrite, cacheWrite1h },
+        pricing
+    )
+
+    addUsageTotals(stats, collectors, usage, cost)
+    if (!model) return
+    model.input += input
+    model.output += output
+    model.cacheRead += cacheRead
+    model.cacheWrite += cacheWrite
+    model.cost += cost.actual
+    model.reportedCost = (model.reportedCost ?? 0) + cost.reported
+    model.catalogCost = (model.catalogCost ?? 0) + cost.catalog
+    model.estimatedCost = (model.estimatedCost ?? 0) + cost.estimated
+    model.unknownTokens = (model.unknownTokens ?? 0) + cost.unknownTokens
+    model.pricedTokens = (model.pricedTokens ?? 0) + cost.pricedTokens
+    model.pricingSource = combinePricingSources(
+        model.pricingSource,
+        cost.source
+    )
+}
+
+/**
+ * Count nested tool calls (for example from codemode scripts) in the Tools
+ * section. Pi keeps this bounded record on the calling tool's result because
+ * nested calls never become transcript tool-call entries.
+ */
+function collectNestedToolCalls(
+    toolCalls: Map<string, number>,
+    nestedCalls: unknown
+): void {
+    if (!isRecord(nestedCalls) || !Array.isArray(nestedCalls.calls)) return
+    for (const call of nestedCalls.calls) {
+        if (!isRecord(call) || typeof call.name !== 'string') continue
+        toolCalls.set(call.name, (toolCalls.get(call.name) ?? 0) + 1)
     }
 }
 
@@ -435,23 +503,20 @@ function effectiveModelId(
     return typeof message.model === 'string' ? message.model : undefined
 }
 
-function ensureMessageModel(
+function ensureModel(
     models: Map<string, ModelUsage>,
-    message: Record<string, unknown>,
+    provider: string | undefined,
     modelId: string | undefined
 ): ModelUsage | undefined {
-    if (typeof message.provider !== 'string' || !modelId) return undefined
-    const key = `${message.provider}/${modelId}`
+    if (!provider || !modelId) return undefined
+    const key = `${provider}/${modelId}`
     const existing = models.get(key)
-    if (existing) {
-        existing.count += 1
-        return existing
-    }
+    if (existing) return existing
 
     const model: ModelUsage = {
-        provider: message.provider,
+        provider,
         modelId,
-        count: 1,
+        count: 0,
         input: 0,
         output: 0,
         cacheRead: 0,

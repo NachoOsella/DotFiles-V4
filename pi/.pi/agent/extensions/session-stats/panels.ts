@@ -7,6 +7,7 @@ import {
     formatNumber,
     formatPercent,
     padRightVisible,
+    progressTrackGlyph,
 } from './format.ts'
 import type { AggregatedModelUsage, ToolUsage } from './types.ts'
 
@@ -52,7 +53,14 @@ export function buildToolRows(
                 theme,
                 tool.name === 'Other' ? 'muted' : 'accent',
                 '█'.repeat(filled)
-            ) + color(theme, 'dim', '░'.repeat(Math.max(0, barWidth - filled)))
+            ) +
+            color(
+                theme,
+                'dim',
+                progressTrackGlyph(theme).repeat(
+                    Math.max(0, barWidth - filled)
+                )
+            )
         const count = formatNumber(tool.count).padStart(countWidth)
         const percent = formatPercent((tool.count / total) * 100).padStart(
             percentWidth

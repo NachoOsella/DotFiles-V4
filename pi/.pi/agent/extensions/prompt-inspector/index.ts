@@ -12,14 +12,17 @@
  * Modular: delega estimacion, inspeccion y formateo a src/*.
  */
 
+import { defineTool } from "@earendil-works/pi-coding-agent";
 import type {
   ExtensionAPI,
   ExtensionCommandContext,
 } from "@earendil-works/pi-coding-agent";
+import { Type } from "typebox";
 import { buildInspectionReport } from "./src/inspector.js";
 import {
   formatForFile,
   formatSummary,
+  formatToolSummary,
 } from "./src/formatter.js";
 import {
   defaultDumpPath,
@@ -176,7 +179,35 @@ async function handlePromptCommand(
 
 
 
+/**
+ * Model-facing inspection tool. It only reads session state, so it is declared
+ * read-only and closed-world. `codemode` exposure makes it callable from
+ * scripts without adding it to the model's default tool set.
+ */
+function buildInspectPromptTool(pi: ExtensionAPI) {
+  return defineTool({
+    name: "inspect_prompt",
+    label: "Inspect Prompt",
+    description:
+      "Inspect the current prompt: system prompt and tool token estimates, skills, context files, and context usage. Read-only.",
+    promptSnippet:
+      "Inspect the current prompt's token breakdown and context usage",
+    parameters: Type.Object({}),
+    exposure: "codemode",
+    annotations: { readOnlyHint: true, openWorldHint: false },
+    async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
+      const report = buildInspectionReport(ctx, pi);
+      return {
+        content: [{ type: "text" as const, text: formatToolSummary(report) }],
+        details: undefined,
+      };
+    },
+  });
+}
+
 export default function promptInspectorExtension(pi: ExtensionAPI) {
+  pi.registerTool(buildInspectPromptTool(pi));
+
   pi.registerCommand("prompt", {
     description:
       "Inspecciona el prompt enviado al provider. /prompt | /prompt full | /prompt save [ruta]",

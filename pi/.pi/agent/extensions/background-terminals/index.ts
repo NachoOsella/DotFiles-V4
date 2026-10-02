@@ -57,6 +57,31 @@ import { openTerminalPicker } from "./src/ui/ps.ts";
 
 const WIDGET_KEY = "background-terminals";
 
+const BACKGROUND_TERMINALS_NAMESPACE = {
+  name: "background-terminals",
+  description:
+    "Start, inspect, and stop long-running background shell processes.",
+};
+
+const BG_STATUS_OUTPUT_SCHEMA = Type.Object({
+  id: Type.String(),
+  status: Type.String(),
+  pid: Type.Optional(Type.Number()),
+  exitCode: Type.Optional(Type.Number()),
+  signal: Type.Optional(Type.String()),
+});
+
+const BG_LIST_OUTPUT_SCHEMA = Type.Object({
+  terminals: Type.Array(
+    Type.Object({
+      id: Type.String(),
+      title: Type.String(),
+      status: Type.String(),
+      pid: Type.Optional(Type.Number()),
+    }),
+  ),
+});
+
 export default function (pi: ExtensionAPI) {
   let runtime: TerminalRuntime | undefined;
   let managerPromise: Promise<TerminalManagerShape> | undefined;
@@ -209,6 +234,13 @@ export default function (pi: ExtensionAPI) {
     description: BG_START_TOOL_DESCRIPTION,
     promptSnippet: BG_START_PROMPT_SNIPPET,
     promptGuidelines: BG_START_PROMPT_GUIDELINES,
+    namespace: BACKGROUND_TERMINALS_NAMESPACE,
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
     parameters: Type.Object({
       command: Type.String({
         description: BG_START_PARAMETER_DESCRIPTIONS.command,
@@ -253,6 +285,14 @@ export default function (pi: ExtensionAPI) {
     name: "bg_status",
     label: "Check Background Terminal",
     description: BG_STATUS_TOOL_DESCRIPTION,
+    namespace: BACKGROUND_TERMINALS_NAMESPACE,
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+    outputSchema: BG_STATUS_OUTPUT_SCHEMA,
     parameters: Type.Object({
       id: Type.String({ description: BG_STATUS_PARAMETER_DESCRIPTIONS.id }),
     }),
@@ -270,15 +310,24 @@ export default function (pi: ExtensionAPI) {
       // follow-up for the same settle would be a duplicate.
       if (snap.status !== "running") resultDelivery.consume([snap.id]);
 
+      const details = {
+        id: snap.id,
+        status: snap.status,
+        pid: snap.pid,
+        exitCode: snap.exitCode,
+        signal: snap.signal,
+      };
+      const structuredContent = {
+        id: snap.id,
+        status: snap.status,
+        ...(snap.pid === undefined ? {} : { pid: snap.pid }),
+        ...(snap.exitCode === undefined ? {} : { exitCode: snap.exitCode }),
+        ...(snap.signal === undefined ? {} : { signal: snap.signal }),
+      };
       return {
         content: [{ type: "text", text: buildStatusResult(snap) }],
-        details: {
-          id: snap.id,
-          status: snap.status,
-          pid: snap.pid,
-          exitCode: snap.exitCode,
-          signal: snap.signal,
-        },
+        details,
+        structuredContent,
       };
     },
   });
@@ -287,6 +336,14 @@ export default function (pi: ExtensionAPI) {
     name: "bg_list",
     label: "List Background Terminals",
     description: BG_LIST_TOOL_DESCRIPTION,
+    namespace: BACKGROUND_TERMINALS_NAMESPACE,
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+    outputSchema: BG_LIST_OUTPUT_SCHEMA,
     parameters: Type.Object({}),
     async execute() {
       const manager = await getManager();
@@ -295,16 +352,26 @@ export default function (pi: ExtensionAPI) {
         terminals.length === 0
           ? "No background terminals."
           : terminals.map((snap) => describeTerminal(snap)).join("\n");
+      const details = {
+        terminals: terminals.map((snap) => ({
+          id: snap.id,
+          title: snap.title,
+          status: snap.status,
+          pid: snap.pid,
+        })),
+      };
+      const structuredContent = {
+        terminals: terminals.map((snap) => ({
+          id: snap.id,
+          title: snap.title,
+          status: snap.status,
+          ...(snap.pid === undefined ? {} : { pid: snap.pid }),
+        })),
+      };
       return {
         content: [{ type: "text", text }],
-        details: {
-          terminals: terminals.map((snap) => ({
-            id: snap.id,
-            title: snap.title,
-            status: snap.status,
-            pid: snap.pid,
-          })),
-        },
+        details,
+        structuredContent,
       };
     },
   });
@@ -313,6 +380,13 @@ export default function (pi: ExtensionAPI) {
     name: "bg_kill",
     label: "Kill Background Terminals",
     description: BG_KILL_TOOL_DESCRIPTION,
+    namespace: BACKGROUND_TERMINALS_NAMESPACE,
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
     parameters: Type.Object({
       ids: Type.Array(Type.String(), {
         description: BG_KILL_PARAMETER_DESCRIPTIONS.ids,

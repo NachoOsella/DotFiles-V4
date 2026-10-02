@@ -77,6 +77,19 @@ function branchSummary(id: string, total: number | undefined) {
   } as unknown as SessionEntry;
 }
 
+function usageEntry(id: string, total: number) {
+  return {
+    type: "usage",
+    id,
+    parentId: null,
+    timestamp: "2024-12-03T14:08:00.000Z",
+    kind: "cache_warm",
+    provider: "anthropic",
+    model: "claude-sonnet-4-5",
+    usage: usage(total),
+  } as unknown as SessionEntry;
+}
+
 describe("computeActiveBranchCost", () => {
   it("sums assistant messages on the active branch", () => {
     assert.equal(
@@ -97,6 +110,11 @@ describe("computeActiveBranchCost", () => {
       branchSummary("b1", 0.25),
     ];
     assert.equal(computeActiveBranchCost(branch), 1.5);
+  });
+
+  it("includes model-attributed usage entries such as cache warming", () => {
+    const branch = [assistant("a1", 1), usageEntry("u1", 0.25)];
+    assert.equal(computeActiveBranchCost(branch), 1.25);
   });
 
   it("differs from the old assistant-only total on a mixed fixture", () => {

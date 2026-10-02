@@ -70,6 +70,15 @@ export default function askUser(pi: ExtensionAPI) {
         promptGuidelines: ASK_USER_PROMPT_GUIDELINES,
         parameters: AskUserParams,
         executionMode: 'sequential',
+        // Ask-the-user must never run from another tool (for example a codemode
+        // script calling ctx.executeTool), only from the model directly.
+        exposure: 'model-only',
+        annotations: {
+            readOnlyHint: true,
+            destructiveHint: false,
+            idempotentHint: false,
+            openWorldHint: false,
+        },
         prepareArguments(args) {
             if (!args || typeof args !== 'object') return args as AskUserInput
             const input = args as {

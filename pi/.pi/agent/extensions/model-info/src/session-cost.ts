@@ -22,6 +22,8 @@ function entryUsage(entry: SessionEntry): Usage | undefined {
   if (entry.type === "compaction" || entry.type === "branch_summary") {
     return entry.usage;
   }
+  // Model-attributed usage without an assistant message, such as cache warming.
+  if (entry.type === "usage") return entry.usage;
   return undefined;
 }
 
@@ -29,11 +31,12 @@ function entryUsage(entry: SessionEntry): Usage | undefined {
  * Active-branch cost accounting.
  *
  * Sums every usage-bearing entry on the active branch exactly once: assistant
- * messages, tool-result usage, compaction summary usage, and branch-summary
- * usage. Scope is deliberately the active branch (footer "current branch"
- * semantics), NOT lifetime billing across all entries, and NOT child-branch
- * totals. Compaction `retainedTail` is never traversed as separately billed
- * messages. Non-finite cost totals are ignored.
+ * messages, tool-result usage, model-attributed usage entries (e.g. cache
+ * warming), compaction summary usage, and branch-summary usage. Scope is
+ * deliberately the active branch (footer "current branch" semantics), NOT
+ * lifetime billing across all entries, and NOT child-branch totals. Compaction
+ * `retainedTail` is never traversed as separately billed messages. Non-finite
+ * cost totals are ignored.
  */
 export function computeActiveBranchCost(
   entries: readonly SessionEntry[],
