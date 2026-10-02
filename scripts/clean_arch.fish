@@ -191,7 +191,7 @@ function ui_settings_panel
     if test -n "$REPORT_JSON_PATH"
         set report "$REPORT_JSON_PATH"
     end
-    printf "  %s╭─%s%s╮%s\n" $D " Run plan " (string repeat -n (math "$inner - 10") "─") $R
+    printf "  %s╭─%s%s╮%s\n" $D " Run plan " (string repeat -n (math "$inner - 11") "─") $R
     printf "  %s│%s %s%s│%s\n" $D $R (pad_plain "Mode: $mode" (math "$inner - 1")) $D $R
     printf "  %s│%s %s%s│%s\n" $D $R (pad_plain "Profile: $PROFILE   Journal: $JOURNAL_RETENTION   Temp age: $TEMP_FILE_AGE days" (math "$inner - 1")) $D $R
     printf "  %s│%s %s%s│%s\n" $D $R (pad_plain "Pacman keep: $PACMAN_VERSIONS_KEEP   Zed node keep: $ZED_NODE_VERSIONS_KEEP   Docker: $docker" (math "$inner - 1")) $D $R
@@ -203,7 +203,7 @@ end
 function ui_safety_panel
     set -l w (ui_width)
     set -l inner (math "$w - 2")
-    printf "  %s╭─%s%s╮%s\n" $D " Safety boundaries " (string repeat -n (math "$inner - 19") "─") $R
+    printf "  %s╭─%s%s╮%s\n" $D " Safety boundaries " (string repeat -n (math "$inner - 20") "─") $R
     printf "  %s│%s %s%s│%s\n" $D $R (pad_plain "Deletes disposable caches, build artifacts, old temp files and logs." (math "$inner - 1")) $D $R
     printf "  %s│%s %s%s│%s\n" $D $R (pad_plain "Keeps logins, cookies, app profiles, storage, preferences, Steam games and Docker volumes." (math "$inner - 1")) $D $R
     printf "  %s╰%s╯%s\n" $D (string repeat -n $inner "─") $R
@@ -462,6 +462,7 @@ end
 
 function load_config
     set -l path "$argv[1]"
+    set -l phase "$argv[2]"
     if test -z "$path"
         return
     end
@@ -485,18 +486,30 @@ function load_config
         set -l value (string trim -- "$kv[2]")
         switch $key
             case PROFILE
-                set -g PROFILE "$value"
+                if test "$phase" = profile
+                    set -g PROFILE "$value"
+                end
             case JOURNAL_RETENTION TEMP_FILE_AGE PACMAN_VERSIONS_KEEP ZED_NODE_VERSIONS_KEEP DOCKER_PRUNE_ALL MAX_DELETE_GB
-                set -g $key "$value"
+                if test "$phase" = settings
+                    set -g $key "$value"
+                end
             case PRESERVE_USER_CACHE
-                for cache_name in (string split ',' -- "$value")
-                    set cache_name (string trim -- "$cache_name")
-                    test -n "$cache_name"; and set -ga PRESERVE_USER_CACHE "$cache_name"
+                if test "$phase" = settings
+                    for cache_name in (string split ',' -- "$value")
+                        set cache_name (string trim -- "$cache_name")
+                        if test -n "$cache_name"
+                            contains -- "$cache_name" $PRESERVE_USER_CACHE; or set -ga PRESERVE_USER_CACHE "$cache_name"
+                        end
+                    end
                 end
             case NO_SPINNER FORCE_YES DRY_RUN USER_ONLY
-                set -g $key "$value"
+                if test "$phase" = settings
+                    set -g $key "$value"
+                end
             case DO_ORPHANS DO_CACHES DO_DOCKER DO_LOGS DO_TEMPS DO_TRASH DO_EXTRAS
-                set -g (string lower $key) "$value"
+                if test "$phase" = settings
+                    set -g (string lower $key) "$value"
+                end
         end
     end <"$path"
 end
@@ -564,8 +577,12 @@ function run_task
 
     if test $enabled -eq 0
         set -g CURRENT_TASK "$title"
+        set -l reason "disabled by flags/config"
+        if test $USER_ONLY -eq 1; and contains -- "$key" orphans pacman yay docker system_cache journal coredumps var_log temps
+            set reason "requires root; skipped in user-only mode"
+        end
         end_task_skip
-        append_task_result "$key" skip 0 "disabled by flags/config" 0
+        append_task_result "$key" skip 0 "$reason" 0
         return
     end
 
@@ -627,27 +644,52 @@ function ui_task_table
     if test $n -eq 0
         return
     end
-    printf "  %s╭─%s%s╮%s\n" $D " Task report " (string repeat -n (math "$inner - 15") "─") $R
-    printf "  %s│%s %s%s│%s\n" $D $R (pad_plain "TASK                 STATUS      FREED       TIME" (math "$inner - 1")) $D $R
+    printf "  %s╭─%s%s╮%s\n" $D " Task report " (string repeat -n (math "$inner - 14") "─") $R
+    printf "  %s│%s %s%s│%s\n" $D $D (pad_plain "TASK                 STATUS          FREED   TIME" (math "$inner - 1")) $D $R
     printf "  %s├%s┤%s\n" $D (string repeat -n $inner "─") $R
     for i in (seq 1 $n)
         set -l name "$TASK_NAMES[$i]"
         set -l task_status "$TASK_STATUSES[$i]"
         set -l freed (format_bytes "$TASK_FREED_BYTES[$i]")
         set -l dur (fmt_duration_ms "$TASK_DURATIONS_MS[$i]")
-        set -l row (printf "%-20s %-10s %10s   %s" "$name" "$task_status" "$freed" "$dur")
-        set -l color $R
+        set -l marker "·"
+        set -l color $D
         switch $task_status
             case ok
+                set marker "◆"
                 set color $GREEN
             case fail
+                set marker "×"
                 set color $RED
             case skip
-                set color $D
+                set marker "◇"
         end
-        printf "  %s│%s %s%s│%s\n" $D $color (pad_plain "$row" (math "$inner - 1")) $D $R
+        set -l tail (string repeat -n (math "max(0, $inner - 56)") " ")
+        printf "  %s│%s %s%s%s %-20s %s%-10s%s %10s   %-8s%s%s│%s\n" \
+            $D $R $color $marker $R "$name" $color "$task_status" $R "$freed" "$dur" "$tail" $D $R
     end
     printf "  %s╰%s╯%s\n" $D (string repeat -n $inner "─") $R
+end
+
+function task_summary
+    set -l target "$argv[1]"
+    for i in (seq 1 (count $TASK_NAMES))
+        if test "$TASK_NAMES[$i]" = "$target"
+            echo "$TASK_STATUSES[$i]|$TASK_NOTES[$i]"
+            return
+        end
+    end
+    echo "unknown|not reported"
+end
+
+function failed_task_names
+    set -l names
+    for i in (seq 1 (count $TASK_NAMES))
+        if test "$TASK_STATUSES[$i]" = fail
+            set -a names "$TASK_NAMES[$i]"
+        end
+    end
+    string join ", " $names
 end
 
 function send_desktop_notification
@@ -1237,12 +1279,19 @@ if set -q _flag_help
     exit 0
 end
 
+set -l config_path ""
+set -q _flag_config; and set config_path "$_flag_config"
+load_config "$config_path" profile
+set -q _flag_profile; and set -g PROFILE "$_flag_profile"
+apply_profile
+load_config "$config_path" settings
+
+# CLI options have the final say over profile and config values.
 set -q _flag_dry_run; and set -g DRY_RUN 1
 set -q _flag_yes; and set -g FORCE_YES 1
 set -q _flag_no_spinner; and set -g NO_SPINNER 1
 set -q _flag_no_notify; and set -g NO_NOTIFY 1
 set -q _flag_user_only; and set -g USER_ONLY 1
-set -q _flag_profile; and set -g PROFILE "$_flag_profile"
 set -q _flag_report_json; and set -g REPORT_JSON_PATH "$_flag_report_json"
 set -q _flag_include_task; and set -g INCLUDE_TASKS $_flag_include_task
 set -q _flag_exclude_task; and set -g EXCLUDE_TASKS $_flag_exclude_task
@@ -1263,9 +1312,6 @@ set -q _flag_no_logs; and set do_logs 0
 set -q _flag_no_temps; and set do_temps 0
 set -q _flag_no_trash; and set do_trash 0
 set -q _flag_no_extras; and set do_extras 0
-
-set -q _flag_config; and load_config "$_flag_config"
-apply_profile
 
 if test $USER_ONLY -eq 1
     set -g ROOT_TASKS_ENABLED 0
@@ -1323,7 +1369,7 @@ run_task user_cache "Cleaning ~/.cache with state safeguards" clean_user_cache $
 run_task sandbox_caches "Cleaning sandboxed app caches" clean_sandbox_caches $do_caches
 run_task app_caches "Cleaning app/browser caches" clean_app_caches $do_caches
 run_task steam_cache "Cleaning Steam caches" clean_steam_cache $do_caches
-run_task flatpak "Removing unused Flatpak runtimes" clean_flatpak $do_privileged_caches
+run_task flatpak "Removing unused Flatpak runtimes" clean_flatpak $do_caches
 run_task journal "Vacuuming journal logs" clean_journal $do_privileged_logs
 run_task coredumps "Cleaning system coredumps" clean_coredumps $do_privileged_logs
 run_task var_log "Truncating /var/log" clean_var_log $do_privileged_logs
@@ -1352,11 +1398,35 @@ set -l skip_count (count_status skip)
 set -l fail_count (count_status fail)
 set -l w (ui_width)
 set -l inner (math "$w - 2")
-set -l final_bar (progress_bar $TASK_INDEX $TASK_TOTAL 24)
-printf "  %s╭─%s%s╮%s\n" $D " Summary " (string repeat -n (math "$inner - 11") "─") $R
-printf "  %s│%s %s%s│%s\n" $D $R (pad_plain "Progress: $final_bar" (math "$inner - 1")) $D $R
-printf "  %s│%s %s%s│%s\n" $D $R (pad_plain "Results: $ok_count ok   $skip_count skip   $fail_count fail" (math "$inner - 1")) $D $R
-printf "  %s│%s %s%s│%s\n" $D $R (pad_plain "Freed: "(format_bytes $TOTAL_FREED_BYTES)"   Duration: "$duration"s" (math "$inner - 1")) $D $R
+set -l final_bar (progress_bar $TASK_INDEX $TASK_TOTAL 30)
+set -l summary_title " Cleanup complete "
+set -l summary_color $GREEN
+if test $fail_count -gt 0
+    set summary_title " Completed with issues "
+    set summary_color $RED
+else if test $DRY_RUN -eq 1
+    set summary_title " Preview complete "
+    set summary_color $MAGENTA
+end
+set -l journal_result (string split -m 1 '|' -- (task_summary journal))
+set -l journal_line "Journal: $journal_result[1]"
+if test "$journal_result[1]" = ok
+    set journal_line "$journal_line · retention $JOURNAL_RETENTION"
+else if test -n "$journal_result[2]"
+    set journal_line "$journal_line · $journal_result[2]"
+end
+
+printf "  %s╭─%s%s%s%s╮%s\n" $D $summary_color "$summary_title" $D (string repeat -n (math "$inner - "(string length -- "$summary_title")" - 1") "─") $R
+printf "  %s│%s%s%s%s│%s\n" $D $B$summary_color (pad_plain "  "(format_bytes $TOTAL_FREED_BYTES)" reclaimed" $inner) $R$D $R
+set -l progress_line "$final_bar  100% · $TASK_INDEX/$TASK_TOTAL tasks"
+printf "  %s│%s%s%s%s│%s\n" $D $summary_color (pad_plain " $progress_line" $inner) $R$D $R
+printf "  %s├%s┤%s\n" $D (string repeat -n $inner "─") $R
+set -l result_line "◆  $ok_count completed   $skip_count skipped   $fail_count failed"
+printf "  %s│%s%s%s%s│%s\n" $D $summary_color (pad_plain " $result_line" $inner) $R$D $R
+printf "  %s│%s %s%s│%s\n" $D $R (pad_plain "Elapsed: "$duration"s · $journal_line" (math "$inner - 1")) $D $R
+if test $fail_count -gt 0
+    printf "  %s│%s %s%s│%s\n" $D $RED (pad_plain "Needs attention: "(failed_task_names) (math "$inner - 1")) $D $R
+end
 if test $STOP_FOR_BUDGET -eq 1
     printf "  %s│%s %s%s│%s\n" $D $YELLOW (pad_plain "Stopped after reaching max-delete budget." (math "$inner - 1")) $D $R
 end
