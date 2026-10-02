@@ -1,6 +1,9 @@
-import { parseCurrentBranch } from '../../../session-stats/parser.ts'
-import { createModelPricingResolver } from '../../../session-stats/pricing-resolver.ts'
-import type { ModelPricingResolver } from '../../../session-stats/types.ts'
+import {
+    createModelPricingResolver,
+    parseSessionUsage,
+    type ModelPricingResolver,
+} from '../../../shared/usage.ts'
+import type { PromptTokens } from '../../../shared/dashboard-state.ts'
 import {
     InvalidTaskNameError,
     isRootPath,
@@ -603,6 +606,23 @@ export class SubagentCoordinator {
         return serializeAgentRecords(this.records.values(), rootSessionId)
     }
 
+    /**
+     * Cumulative child billing, excluding the parent. Costs already carry
+     * catalog pricing for children whose provider reported none.
+     */
+    usageTotals(): PromptTokens & { cost: number } {
+        const totals = { cost: 0, input: 0, cacheRead: 0, cacheWrite: 0 }
+        for (const record of this.records.values()) {
+            const usage = record.usage
+            if (!usage) continue
+            totals.cost += usage.cost
+            totals.input += usage.input
+            totals.cacheRead += usage.cacheRead
+            totals.cacheWrite += usage.cacheWrite
+        }
+        return totals
+    }
+
     restore(state: unknown): void {
         for (const record of restoreAgentRecords(
             state,
@@ -895,7 +915,7 @@ export class SubagentCoordinator {
                           { type: 'message', message: finalizedMessage },
                       ]
                     : entries
-            const parsed = parseCurrentBranch(
+            const parsed = parseSessionUsage(
                 reportedEntries,
                 runtime.session.sessionFile ?? 'ephemeral',
                 undefined,

@@ -12,7 +12,7 @@ import {
     calculateAllSessionTotals,
 } from './output.ts'
 import { buildModelRows, compactToolUsage } from './panels.ts'
-import type { SessionStats } from './types.ts'
+import type { SessionStats } from '../shared/usage.ts'
 
 function session(overrides: Partial<SessionStats> = {}): SessionStats {
     return {

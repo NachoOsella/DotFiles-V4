@@ -49,6 +49,7 @@ Preserve:
 - Do not create helper directories with `index.ts` unless the directory should be auto-loaded as an extension.
 - Prefer no-op/fallback behavior over throwing during startup.
 - Check `ctx.hasUI` before using interactive UI surfaces.
+- Put cross-extension contracts in `extensions/shared/` instead of importing one extension from another. `dashboard-state.ts` carries the footer event channels and their state shapes; `usage.ts` owns the single definition of how session usage becomes tokens and cost.
 
 ## Allowed offline test scope
 

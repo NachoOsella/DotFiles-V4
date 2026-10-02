@@ -2,22 +2,18 @@ import { readFile, stat } from 'node:fs/promises'
 import { Data, Effect } from 'effect'
 import {
     SUBAGENTS_STATE_CUSTOM_TYPE,
-    SUBAGENT_META_CUSTOM_TYPE,
     findLatestState,
     type PersistedState,
 } from '../subagents/src/persistence/session-state.ts'
 import { mergeSessionStats } from './aggregate.ts'
-import { finalizeTotalTokens } from './format.ts'
-import { calculateUsageCost, combinePricingSources } from './pricing.ts'
 import { buildStatsFromSnapshotData } from './subagent-snapshot.ts'
-import type {
-    ModelPricingResolver,
-    ModelUsage,
-    PricingSource,
-    SessionEntryLike,
-    SessionStats,
-    ToolUsage,
-} from './types.ts'
+import {
+    createEmptyStats,
+    parseSessionUsage,
+    type ModelPricingResolver,
+    type SessionEntryLike,
+    type SessionStats,
+} from '../shared/usage.ts'
 
 /** Identifies a session file that could not be read. */
 export class SessionReadError extends Data.TaggedError('SessionReadError')<{
@@ -34,35 +30,6 @@ interface CachedSessionStats {
 }
 
 const sessionStatsCache = new Map<string, CachedSessionStats>()
-
-/** Create an empty stats object for a session source. */
-export function createEmptyStats(file: string, name?: string): SessionStats {
-    return {
-        file,
-        name,
-        totalTokens: {
-            input: 0,
-            output: 0,
-            cacheRead: 0,
-            cacheWrite: 0,
-            totalTokens: 0,
-            cost: {
-                total: 0,
-                reported: 0,
-                catalog: 0,
-                estimated: 0,
-                unknownTokens: 0,
-                pricedTokens: 0,
-            },
-        },
-        userMessages: 0,
-        assistantMessages: 0,
-        toolResults: 0,
-        toolCalls: [],
-        models: [],
-        customMessages: 0,
-    }
-}
 
 /** Parse a persisted JSONL session as a composable Effect. */
 export function parseSessionFileEffect(
@@ -81,12 +48,11 @@ export function parseSessionFileEffect(
                 cached.pricing !== pricing
             ) {
                 const content = await readFile(filePath, 'utf8')
-                const parsed = parseSessionText(content, filePath, pricing)
                 cached = {
                     modifiedMs: fileStats.mtimeMs,
                     size: fileStats.size,
                     pricing,
-                    ...parsed,
+                    ...parseSessionText(content, filePath, pricing),
                 }
                 sessionStatsCache.set(filePath, cached)
             }
@@ -120,9 +86,10 @@ export function parseSessionFile(
 }
 
 /**
- * Parse the supplied in-memory session history.
- * Callers may pass every persisted entry so billed abandoned-branch usage is retained;
- * live context occupancy is reported separately by Pi's getContextUsage().
+ * Parse in-memory session history for the current branch view.
+ *
+ * Usage accumulation itself lives in `shared/usage`; this wrapper only keeps
+ * the historical name used by the stats command.
  */
 export function parseCurrentBranch(
     entries: readonly SessionEntryLike[],
@@ -130,109 +97,54 @@ export function parseCurrentBranch(
     name?: string,
     pricing?: ModelPricingResolver
 ): SessionStats {
-    const stats = createEmptyStats(file, name)
-    const collectors = createCollectors()
-    let firstTimestamp: number | undefined
-    let lastTimestamp: number | undefined
+    return parseSessionUsage(entries, file, name, pricing)
+}
 
-    const metadata = entries.find(
-        (entry) =>
-            entry.type === 'custom' &&
-            entry.customType === SUBAGENT_META_CUSTOM_TYPE
-    )
-    if (isRecord(metadata?.data) && typeof metadata.data.path === 'string')
-        stats.agentPath = metadata.data.path
-    for (const entry of ownSessionEntries(entries)) {
-        const timestamp = parseTimestamp(entry.timestamp)
-        firstTimestamp ??= timestamp
-        if (timestamp !== undefined) lastTimestamp = timestamp
-        if (
-            entry.type === 'session' &&
-            typeof entry.parentSession === 'string'
-        ) {
-            stats.parentSessionPath = entry.parentSession
-        }
-        if (entry.type !== 'session')
-            collectEntry(stats, collectors, entry, pricing)
-    }
-
-    if (firstTimestamp !== undefined)
-        stats.startTime = new Date(firstTimestamp).toISOString()
-    if (firstTimestamp !== undefined && lastTimestamp !== undefined) {
-        stats.durationMs = Math.max(0, lastTimestamp - firstTimestamp)
-    }
-    finishCollectors(stats, collectors)
-    return stats
+interface ParsedFile {
+    readonly stats: SessionStats
+    readonly snapshot?: PersistedState
 }
 
 function parseSessionText(
     content: string,
     filePath: string,
     pricing?: ModelPricingResolver
-): { stats: SessionStats; snapshot?: PersistedState } {
-    let stats = createEmptyStats(filePath)
-    let collectors = createCollectors()
-    let firstTimestamp: number | undefined
-    let lastTimestamp: number | undefined
-    let hasAgentMetadata = false
+): ParsedFile {
+    const entries: SessionEntryLike[] = []
     const snapshots: SessionEntryLike[] = []
+    const headers = createEmptyStats(filePath)
 
     for (const line of content.split(/\r?\n/)) {
         const entry = parseEntry(line)
         if (!entry) continue
-        const timestamp = parseTimestamp(entry.timestamp)
-        firstTimestamp ??= timestamp
-        if (timestamp !== undefined) lastTimestamp = timestamp
-        if (entry.type === 'session_info' && typeof entry.name === 'string')
-            stats.name = entry.name
+        if (entry.type === 'session_info' && typeof entry.name === 'string') {
+            headers.name = entry.name
+        }
         if (entry.type === 'session') {
-            if (typeof entry.cwd === 'string') stats.project = entry.cwd
-            if (typeof entry.parentSession === 'string')
-                stats.parentSessionPath = entry.parentSession
-        } else if (
-            entry.type === 'custom' &&
-            entry.customType === SUBAGENT_META_CUSTOM_TYPE &&
-            !hasAgentMetadata
-        ) {
-            // Imported fork history is context, not work performed by this child.
-            const { project, parentSessionPath } = stats
-            stats = {
-                ...createEmptyStats(filePath),
-                project,
-                parentSessionPath,
+            if (typeof entry.cwd === 'string') headers.project = entry.cwd
+            if (typeof entry.parentSession === 'string') {
+                headers.parentSessionPath = entry.parentSession
             }
-            if (isRecord(entry.data) && typeof entry.data.path === 'string') {
-                stats.agentPath = entry.data.path
-                stats.name = entry.data.path
-            }
-            collectors = createCollectors()
-            snapshots.length = 0
-            hasAgentMetadata = true
         } else if (
             entry.type === 'custom' &&
             entry.customType === SUBAGENTS_STATE_CUSTOM_TYPE
         ) {
             snapshots.push(entry)
-        } else collectEntry(stats, collectors, entry, pricing)
+        }
+        entries.push(entry)
     }
-    if (firstTimestamp !== undefined)
-        stats.startTime = new Date(firstTimestamp).toISOString()
-    if (firstTimestamp !== undefined && lastTimestamp !== undefined)
-        stats.durationMs = Math.max(0, lastTimestamp - firstTimestamp)
-    finishCollectors(stats, collectors)
-    return { stats, snapshot: findLatestState(snapshots) }
-}
 
-/** Exclude the imported fork prefix while preserving all subsequently billed branches. */
-export function ownSessionEntries<T extends SessionEntryLike>(
-    entries: readonly T[]
-): readonly T[] {
-    const boundary = entries.findIndex(
-        (entry) =>
-            entry.type === 'custom' &&
-            entry.customType === SUBAGENT_META_CUSTOM_TYPE
-    )
-    return boundary < 0 ? entries : entries.slice(boundary + 1)
+    // parseSessionUsage drops the imported fork prefix at the ownership marker.
+    const parsed = parseSessionUsage(entries, filePath, undefined, pricing)
+    const stats: SessionStats = {
+        ...parsed,
+        project: headers.project ?? parsed.project,
+        name: headers.name ?? parsed.name,
+        parentSessionPath:
+            headers.parentSessionPath ?? parsed.parentSessionPath,
+    }
+    const snapshot = findLatestState(snapshots)
+    return snapshot === undefined ? { stats } : { stats, snapshot }
 }
 
 /** Resolve each logical child once, preferring its transcript over aggregate fallback data. */
@@ -261,8 +173,9 @@ export async function loadSubagentStats(
                     !stats ||
                     transcript.totalTokens.totalTokens >=
                         stats.totalTokens.totalTokens
-                )
+                ) {
                     stats = transcript
+                }
             } catch {
                 // Missing, evicted, or unreadable files retain their last reported usage.
             }
@@ -277,371 +190,6 @@ export async function loadSubagentStats(
     return result
 }
 
-interface Collectors {
-    readonly toolCalls: Map<string, number>
-    readonly models: Map<string, ModelUsage>
-    reportedTotalTokens: number
-    reportedTotalCount: number
-}
-
-function createCollectors(): Collectors {
-    return {
-        toolCalls: new Map(),
-        models: new Map(),
-        reportedTotalTokens: 0,
-        reportedTotalCount: 0,
-    }
-}
-
-function collectEntry(
-    stats: SessionStats,
-    collectors: Collectors,
-    entry: SessionEntryLike,
-    pricing?: ModelPricingResolver
-): void {
-    if (entry.type === 'compaction' || entry.type === 'branch_summary') {
-        if (isRecord(entry.usage))
-            collectUnattributedUsage(stats, collectors, entry.usage)
-        return
-    }
-    if (entry.type === 'usage') {
-        collectUsageEntry(stats, collectors, entry, pricing)
-        return
-    }
-    if (entry.type === 'custom_message') {
-        stats.customMessages += 1
-        return
-    }
-    if (entry.type !== 'message' || !isRecord(entry.message)) return
-    const message = entry.message
-
-    switch (message.role) {
-        case 'user':
-            stats.userMessages += 1
-            break
-        case 'assistant':
-            collectAssistantMessage(stats, collectors, message, pricing)
-            break
-        case 'toolResult':
-            stats.toolResults += 1
-            if (isRecord(message.usage)) {
-                collectUnattributedUsage(stats, collectors, message.usage)
-            }
-            collectNestedToolCalls(collectors.toolCalls, message.nestedCalls)
-            break
-        case 'custom':
-            stats.customMessages += 1
-            break
-    }
-}
-
-function collectAssistantMessage(
-    stats: SessionStats,
-    collectors: Collectors,
-    message: Record<string, unknown>,
-    pricingResolver?: ModelPricingResolver
-): void {
-    stats.assistantMessages += 1
-    const modelId = effectiveModelId(message)
-    const provider =
-        typeof message.provider === 'string' ? message.provider : undefined
-    const model = ensureModel(collectors.models, provider, modelId)
-    if (model) model.count += 1
-
-    if (isRecord(message.usage)) {
-        collectUsage(
-            stats,
-            collectors,
-            message.usage,
-            provider,
-            modelId,
-            model,
-            pricingResolver
-        )
-    }
-
-    if (!Array.isArray(message.content)) return
-    for (const block of message.content) {
-        if (
-            !isRecord(block) ||
-            block.type !== 'toolCall' ||
-            typeof block.name !== 'string'
-        )
-            continue
-        collectors.toolCalls.set(
-            block.name,
-            (collectors.toolCalls.get(block.name) ?? 0) + 1
-        )
-    }
-}
-
-/**
- * Persisted usage that is not an assistant message, such as cache warming.
- * Pi records these entries with their provider and model so they stay
- * attributable; they count toward totals without adding a model response.
- */
-function collectUsageEntry(
-    stats: SessionStats,
-    collectors: Collectors,
-    entry: SessionEntryLike,
-    pricingResolver?: ModelPricingResolver
-): void {
-    if (!isRecord(entry.usage)) return
-    const provider =
-        typeof entry.provider === 'string' ? entry.provider : undefined
-    const modelId = typeof entry.model === 'string' ? entry.model : undefined
-    if (!provider || !modelId) {
-        collectUnattributedUsage(stats, collectors, entry.usage)
-        return
-    }
-    const model = ensureModel(collectors.models, provider, modelId)
-    collectUsage(
-        stats,
-        collectors,
-        entry.usage,
-        provider,
-        modelId,
-        model,
-        pricingResolver
-    )
-}
-
-function collectUsage(
-    stats: SessionStats,
-    collectors: Collectors,
-    usage: Record<string, unknown>,
-    provider: string | undefined,
-    modelId: string | undefined,
-    model: ModelUsage | undefined,
-    pricingResolver?: ModelPricingResolver
-): void {
-    const input = finiteNumber(usage.input)
-    const output = finiteNumber(usage.output)
-    const cacheRead = finiteNumber(usage.cacheRead)
-    const cacheWrite = finiteNumber(usage.cacheWrite)
-    const cacheWrite1h = finiteNumber(usage.cacheWrite1h)
-    const pricing =
-        provider && modelId ? pricingResolver?.(provider, modelId) : undefined
-    const cost = classifyUsageCost(
-        usage,
-        { input, output, cacheRead, cacheWrite, cacheWrite1h },
-        pricing
-    )
-
-    addUsageTotals(stats, collectors, usage, cost)
-    if (!model) return
-    model.input += input
-    model.output += output
-    model.cacheRead += cacheRead
-    model.cacheWrite += cacheWrite
-    model.cost += cost.actual
-    model.reportedCost = (model.reportedCost ?? 0) + cost.reported
-    model.catalogCost = (model.catalogCost ?? 0) + cost.catalog
-    model.estimatedCost = (model.estimatedCost ?? 0) + cost.estimated
-    model.unknownTokens = (model.unknownTokens ?? 0) + cost.unknownTokens
-    model.pricedTokens = (model.pricedTokens ?? 0) + cost.pricedTokens
-    model.pricingSource = combinePricingSources(
-        model.pricingSource,
-        cost.source
-    )
-}
-
-/**
- * Count nested tool calls (for example from codemode scripts) in the Tools
- * section. Pi keeps this bounded record on the calling tool's result because
- * nested calls never become transcript tool-call entries.
- */
-function collectNestedToolCalls(
-    toolCalls: Map<string, number>,
-    nestedCalls: unknown
-): void {
-    if (!isRecord(nestedCalls) || !Array.isArray(nestedCalls.calls)) return
-    for (const call of nestedCalls.calls) {
-        if (!isRecord(call) || typeof call.name !== 'string') continue
-        toolCalls.set(call.name, (toolCalls.get(call.name) ?? 0) + 1)
-    }
-}
-
-function collectUnattributedUsage(
-    stats: SessionStats,
-    collectors: Collectors,
-    usage: Record<string, unknown>
-): void {
-    const cost = classifyUsageCost(usage, {
-        input: finiteNumber(usage.input),
-        output: finiteNumber(usage.output),
-        cacheRead: finiteNumber(usage.cacheRead),
-        cacheWrite: finiteNumber(usage.cacheWrite),
-    })
-    addUsageTotals(stats, collectors, usage, cost)
-}
-
-interface UsageCost {
-    actual: number
-    reported: number
-    catalog: number
-    estimated: number
-    unknownTokens: number
-    pricedTokens: number
-    source: PricingSource
-}
-
-function classifyUsageCost(
-    usage: Record<string, unknown>,
-    tokens: {
-        input: number
-        output: number
-        cacheRead: number
-        cacheWrite: number
-        cacheWrite1h?: number
-    },
-    pricing?: Parameters<typeof calculateUsageCost>[1]
-): UsageCost {
-    const tokenCount =
-        tokens.input + tokens.output + tokens.cacheRead + tokens.cacheWrite
-    const reportedCost = readReportedCost(usage)
-    if (reportedCost !== undefined && reportedCost > 0) {
-        return {
-            actual: reportedCost,
-            reported: reportedCost,
-            catalog: 0,
-            estimated: 0,
-            unknownTokens: 0,
-            pricedTokens: tokenCount,
-            source: 'reported',
-        }
-    }
-
-    if (pricing) {
-        const calculated = calculateUsageCost(tokens, pricing)
-        if (pricing.source === 'estimated') {
-            return {
-                actual: 0,
-                reported: 0,
-                catalog: 0,
-                estimated: calculated,
-                unknownTokens: 0,
-                pricedTokens: tokenCount,
-                source: 'estimated',
-            }
-        }
-        return {
-            actual: calculated,
-            reported: 0,
-            catalog: calculated,
-            estimated: 0,
-            unknownTokens: 0,
-            pricedTokens: tokenCount,
-            source: 'catalog',
-        }
-    }
-
-    return {
-        actual: 0,
-        reported: 0,
-        catalog: 0,
-        estimated: 0,
-        unknownTokens: tokenCount,
-        pricedTokens: 0,
-        source: 'unknown',
-    }
-}
-
-function addUsageTotals(
-    stats: SessionStats,
-    collectors: Collectors,
-    usage: Record<string, unknown>,
-    cost: UsageCost
-): void {
-    stats.totalTokens.input += finiteNumber(usage.input)
-    stats.totalTokens.output += finiteNumber(usage.output)
-    stats.totalTokens.cacheRead += finiteNumber(usage.cacheRead)
-    stats.totalTokens.cacheWrite += finiteNumber(usage.cacheWrite)
-    stats.totalTokens.cost.total += cost.actual
-    stats.totalTokens.cost.reported =
-        (stats.totalTokens.cost.reported ?? 0) + cost.reported
-    stats.totalTokens.cost.catalog =
-        (stats.totalTokens.cost.catalog ?? 0) + cost.catalog
-    stats.totalTokens.cost.estimated =
-        (stats.totalTokens.cost.estimated ?? 0) + cost.estimated
-    stats.totalTokens.cost.unknownTokens =
-        (stats.totalTokens.cost.unknownTokens ?? 0) + cost.unknownTokens
-    stats.totalTokens.cost.pricedTokens =
-        (stats.totalTokens.cost.pricedTokens ?? 0) + cost.pricedTokens
-    const reportedTotalTokens = readNumber(usage.totalTokens)
-    if (reportedTotalTokens !== undefined) {
-        collectors.reportedTotalTokens += reportedTotalTokens
-        collectors.reportedTotalCount += 1
-    }
-}
-
-function effectiveModelId(
-    message: Record<string, unknown>
-): string | undefined {
-    if (typeof message.responseModel === 'string' && message.responseModel) {
-        return message.responseModel
-    }
-    return typeof message.model === 'string' ? message.model : undefined
-}
-
-function ensureModel(
-    models: Map<string, ModelUsage>,
-    provider: string | undefined,
-    modelId: string | undefined
-): ModelUsage | undefined {
-    if (!provider || !modelId) return undefined
-    const key = `${provider}/${modelId}`
-    const existing = models.get(key)
-    if (existing) return existing
-
-    const model: ModelUsage = {
-        provider,
-        modelId,
-        count: 0,
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        cost: 0,
-        reportedCost: 0,
-        catalogCost: 0,
-        estimatedCost: 0,
-        unknownTokens: 0,
-        pricedTokens: 0,
-    }
-    models.set(key, model)
-    return model
-}
-
-function finishCollectors(stats: SessionStats, collectors: Collectors): void {
-    stats.toolCalls = mapToolUsage(collectors.toolCalls)
-    stats.models = [...collectors.models.values()].sort(
-        (left, right) =>
-            right.cost - left.cost ||
-            right.input +
-                right.output +
-                right.cacheRead +
-                right.cacheWrite -
-                (left.input + left.output + left.cacheRead + left.cacheWrite) ||
-            left.modelId.localeCompare(right.modelId)
-    )
-    finalizeTotalTokens(
-        stats,
-        collectors.reportedTotalCount > 0
-            ? collectors.reportedTotalTokens
-            : undefined
-    )
-}
-
-function mapToolUsage(toolCalls: ReadonlyMap<string, number>): ToolUsage[] {
-    return [...toolCalls.entries()]
-        .map(([name, count]) => ({ name, count }))
-        .sort(
-            (left, right) =>
-                right.count - left.count || left.name.localeCompare(right.name)
-        )
-}
-
 function parseEntry(line: string): SessionEntryLike | undefined {
     if (!line.trim()) return undefined
     try {
@@ -650,26 +198,6 @@ function parseEntry(line: string): SessionEntryLike | undefined {
     } catch {
         return undefined
     }
-}
-
-function parseTimestamp(value: unknown): number | undefined {
-    if (typeof value !== 'string' && typeof value !== 'number') return undefined
-    const timestamp = typeof value === 'number' ? value : Date.parse(value)
-    return Number.isFinite(timestamp) ? timestamp : undefined
-}
-
-function finiteNumber(value: unknown): number {
-    return readNumber(value) ?? 0
-}
-
-function readNumber(value: unknown): number | undefined {
-    return typeof value === 'number' && Number.isFinite(value) && value >= 0
-        ? value
-        : undefined
-}
-
-function readReportedCost(usage: Record<string, unknown>): number | undefined {
-    return isRecord(usage.cost) ? readNumber(usage.cost.total) : undefined
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

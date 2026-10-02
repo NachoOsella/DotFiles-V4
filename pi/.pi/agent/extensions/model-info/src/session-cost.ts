@@ -1,8 +1,8 @@
-import { parseCurrentBranch } from "../../session-stats/parser.ts";
-import type {
-  ModelPricingResolver,
-  SessionEntryLike,
-} from "../../session-stats/types.ts";
+import {
+  parseSessionUsage,
+  type ModelPricingResolver,
+  type SessionEntryLike,
+} from "../../shared/usage.ts";
 
 export interface SessionBilling {
   /** Cumulative cost of every billed entry on this session. */
@@ -20,7 +20,7 @@ export function computeSessionBilling(
   entries: readonly SessionEntryLike[],
   pricing?: ModelPricingResolver,
 ): SessionBilling {
-  const { totalTokens } = parseCurrentBranch(
+  const { totalTokens } = parseSessionUsage(
     entries,
     "footer",
     undefined,

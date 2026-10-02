@@ -8,7 +8,7 @@ import type {
 import { matchesKey } from '@earendil-works/pi-tui'
 import { Effect } from 'effect'
 import { showStatsModal } from './modal.ts'
-import { createModelPricingResolver } from './pricing-resolver.ts'
+import { createModelPricingResolver } from '../shared/usage.ts'
 import { mergeSessionStats } from './aggregate.ts'
 import {
     SUBAGENTS_INFO_CHANNEL,
@@ -32,7 +32,7 @@ import {
     parseSessionFileEffect,
     loadSubagentStats,
 } from './parser.ts'
-import type { SessionEntryLike, SessionStats } from './types.ts'
+import type { SessionEntryLike, SessionStats } from '../shared/usage.ts'
 
 const STATUS_KEY = 'session-stats'
 const MAX_CONCURRENT_READS = 16

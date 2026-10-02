@@ -29,8 +29,6 @@ import {
     SUBAGENTS_INFO_CHANNEL,
     REFRESH_CHANNEL,
 } from '../shared/dashboard-state.ts'
-import { createModelPricingResolver } from '../session-stats/pricing-resolver.ts'
-import { buildStatsFromSnapshotData } from '../session-stats/subagent-snapshot.ts'
 import type { AgentPath } from './src/domain/ids.ts'
 import type { ParentExecutionSnapshot } from './src/domain/parent-snapshot.ts'
 
@@ -123,21 +121,11 @@ export default function subagentsExtension(pi: ExtensionAPI) {
         const ctx = latestCtx
         if (!ctx) return
         const snapshot = manager.serialize(ctx.sessionManager.getSessionId())
-        const agents = buildStatsFromSnapshotData(
-            snapshot,
-            ctx.sessionManager.getSessionFile() ?? 'ephemeral',
-            createModelPricingResolver(ctx)
-        )
-        const sum = (pick: (agent: (typeof agents)[number]) => number) =>
-            agents.reduce((total, agent) => total + pick(agent), 0)
+        const { cost, ...promptTokens } = manager.usageTotals()
         pi.events.emit(SUBAGENTS_INFO_CHANNEL, {
             running,
-            cost: sum((agent) => agent.totalTokens.cost.total),
-            promptTokens: {
-                input: sum((agent) => agent.totalTokens.input),
-                cacheRead: sum((agent) => agent.totalTokens.cacheRead),
-                cacheWrite: sum((agent) => agent.totalTokens.cacheWrite),
-            },
+            cost,
+            promptTokens,
             snapshot,
         })
     }

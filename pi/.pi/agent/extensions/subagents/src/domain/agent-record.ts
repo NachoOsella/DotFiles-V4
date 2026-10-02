@@ -7,7 +7,7 @@
  * session handles here; those live in the runtime store.
  */
 
-import type { ModelUsage } from '../../../session-stats/types.ts'
+import type { ModelUsage } from '../../../shared/usage.ts'
 import type { ThinkingLevel } from '@earendil-works/pi-agent-core'
 import type { FinalAnswerMeta } from './communication.ts'
 import type { AgentId, AgentPath, CommunicationId } from './ids.ts'

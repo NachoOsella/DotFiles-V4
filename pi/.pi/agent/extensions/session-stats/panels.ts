@@ -1,6 +1,6 @@
 import type { Theme } from '@earendil-works/pi-coding-agent'
 import { truncateToWidth } from '@earendil-works/pi-tui'
-import { combinePricingSources } from './pricing.ts'
+import { combinePricingSources, type PricingSource } from '../shared/usage.ts'
 import {
     color,
     fmtCost,
@@ -9,7 +9,7 @@ import {
     padRightVisible,
     progressTrackGlyph,
 } from './format.ts'
-import type { AggregatedModelUsage, ToolUsage } from './types.ts'
+import type { AggregatedModelUsage, ToolUsage } from '../shared/usage.ts'
 
 const MAX_VISIBLE_TOOLS = 5
 const MAX_VISIBLE_MODELS = 5

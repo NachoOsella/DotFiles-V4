@@ -10,6 +10,7 @@ import {
 } from './parser.ts'
 import { buildStatsFromSnapshotData } from './subagent-snapshot.ts'
 import { calculateAllSessionTotals } from './output.ts'
+import type { SessionEntryLike } from '../shared/usage.ts'
 import {
     parsePersistedState,
     isPersistedState,

@@ -9,7 +9,7 @@ import {
     buildSubagentSnapshotStats,
     getSubagentSnapshotAge,
 } from './subagent-snapshot.ts'
-import type { ModelPricingResolver } from './types.ts'
+import type { ModelPricingResolver } from '../shared/usage.ts'
 
 const FILE = '/tmp/parent.jsonl'
 

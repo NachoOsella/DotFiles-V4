@@ -24,7 +24,7 @@ import type {
     AggregatedModelUsage,
     SessionStats,
     TokenTotals,
-} from './types.ts'
+} from '../shared/usage.ts'
 
 const MS_DAY = 24 * 60 * 60 * 1000
 

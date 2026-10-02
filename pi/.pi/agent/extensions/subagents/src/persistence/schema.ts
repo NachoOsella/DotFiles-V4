@@ -1,4 +1,4 @@
-import type { ModelUsage, PricingSource } from '../../../session-stats/types.ts'
+import type { ModelUsage, PricingSource } from '../../../shared/usage.ts'
 import type { ThinkingLevel } from '@earendil-works/pi-agent-core'
 import type {
     AgentUsageTotals,

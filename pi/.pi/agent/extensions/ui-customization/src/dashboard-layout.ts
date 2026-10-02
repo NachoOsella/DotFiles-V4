@@ -1,5 +1,5 @@
 import { truncateToWidth, visibleWidth } from '@earendil-works/pi-tui'
-import { fmtCost } from '../../session-stats/format.ts'
+import { fmtCost } from '../../shared/usage.ts'
 import type { PromptTokens } from '../../shared/dashboard-state.ts'
 
 // Pure dashboard layout helpers (P11).

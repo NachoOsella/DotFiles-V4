@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 import { parseCurrentBranch, parseSessionFile } from './parser.ts'
-import type { SessionEntryLike } from './types.ts'
+import type { SessionEntryLike } from '../shared/usage.ts'
 
 test('parseCurrentBranch aggregates safe usage, models, and tools', () => {
     const entries: SessionEntryLike[] = [

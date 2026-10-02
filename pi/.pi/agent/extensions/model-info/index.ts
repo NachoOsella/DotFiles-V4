@@ -12,7 +12,7 @@ import {
   computeSessionBilling,
   type SessionBilling,
 } from "./src/session-cost.ts";
-import { createModelPricingResolver } from "../session-stats/pricing-resolver.ts";
+import { createModelPricingResolver } from "../shared/usage.ts";
 
 const CHARS_PER_ESTIMATED_TOKEN = 4;
 const LIVE_UPDATE_INTERVAL_MS = 200;
