@@ -1,0 +1,6 @@
+# Al FINAL del compose del equipo (obligatorio, no opcional).
+# Sin esto compose crea <proyecto>_tpi-platform, una red DISTINTA: el micro
+# arranca sano, no lo alcanza nadie y Eureka registra una IP inalcanzable.
+networks:
+  tpi-platform:
+    external: true   # la crea el stack de plataforma (tpi-compose)

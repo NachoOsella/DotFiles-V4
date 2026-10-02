@@ -1,0 +1,43 @@
+# Fusionar en src/main/resources/application.yml (reemplazar <...> antes)
+
+spring:
+  application:
+    name: <SERVICE_ID>
+server:
+  port: ${SERVER_PORT:<PUERTO_APP>}
+management:
+  server:
+    port: ${MANAGEMENT_PORT:<PUERTO_MGMT>}   # convención: app+1 (DEC-28)
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: never
+eureka:
+  client:
+    service-url:
+      defaultZone: ${EUREKA_URL:http://localhost:8761/eureka/}
+    register-with-eureka: true
+    fetch-registry: false         # SOLO el gateway lleva true (único que resuelve lb://)
+    healthcheck:
+      enabled: true               # Eureka publica el readiness de Actuator, no el heartbeat
+  instance:
+    prefer-ip-address: true
+app:
+  api:
+    public-path: /api/<SEGMENTO>/public
+    private-path: /api/<SEGMENTO>
+  client-id: ${APP_CLIENT_ID:<SERVICE_ID>}
+  client-secret: ${APP_CLIENT_SECRET:}
+  gateway-url: ${GATEWAY_URL:http://api-gateway:8080}  # micro-a-micro: siempre el gateway
+  # JWKS (job rev 11): claves PUBLICAS, bootstrap de infra — la UNICA llamada
+  # que NO va por el gateway (excepcion documentada a R2, ver SPEC §7b).
+  jwks-url: ${JWKS_URL:http://users-service:8082/.well-known/jwks.json}
+  jwks-refresh-ms: ${JWKS_REFRESH_MS:300000}
+logging:
+  pattern:
+    level: "%5p [${spring.application.name},%X{traceId:-},%X{requestId:-}]"

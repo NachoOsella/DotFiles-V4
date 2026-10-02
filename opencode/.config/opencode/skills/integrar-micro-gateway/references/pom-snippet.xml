@@ -1,0 +1,63 @@
+<!-- Pegar en el pom.xml del micro. Referencia: echo-service/pom.xml.
+     Definir las versiones que pide el proyecto (ej. Boot 4.1.1 / Cloud 2025.1.3). -->
+<properties>
+  <java.version>21</java.version>
+  <maven.compiler.release>21</maven.compiler.release>
+  <spring-boot.version>4.1.1</spring-boot.version>
+  <spring-cloud.version>2025.1.3</spring-cloud.version>
+  <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+</properties>
+
+<!-- 1) BOMs en <dependencyManagement>, Boot PRIMERO: si Cloud va antes, puede
+     bajar spring-boot-dependencies por debajo de la versión pedida. -->
+<dependencyManagement>
+  <dependencies>
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-dependencies</artifactId>
+      <version>${spring-boot.version}</version>
+      <type>pom</type>
+      <scope>import</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.cloud</groupId>
+      <artifactId>spring-cloud-dependencies</artifactId>
+      <version>${spring-cloud.version}</version>
+      <type>pom</type>
+      <scope>import</scope>
+    </dependency>
+  </dependencies>
+</dependencyManagement>
+
+<!-- 2) Dependencias en <dependencies>. security es OBLIGATORIA: sin ella no
+     existen HttpSecurity, SecurityContextHolder ni SimpleGrantedAuthority y no
+     compila SecurityConfig + GatewayIdentityFilter. -->
+<dependency>
+  <groupId>org.springframework.boot</groupId>
+  <artifactId>spring-boot-starter-web</artifactId>
+</dependency>
+<dependency>
+  <groupId>org.springframework.boot</groupId>
+  <artifactId>spring-boot-starter-security</artifactId>
+</dependency>
+<dependency>
+  <groupId>org.springframework.cloud</groupId>
+  <artifactId>spring-cloud-starter-netflix-eureka-client</artifactId>
+</dependency>
+<dependency>
+  <groupId>org.springframework.boot</groupId>
+  <artifactId>spring-boot-starter-actuator</artifactId>
+</dependency>
+
+<!-- 3) -parameters en maven-compiler-plugin (se importa el BOM en vez de
+     heredar del parent, así que hay que ponerlo a mano). Sin él, cualquier
+     @PathVariable sin nombre explícito tira 500 en runtime. -->
+<plugin>
+  <groupId>org.apache.maven.plugins</groupId>
+  <artifactId>maven-compiler-plugin</artifactId>
+  <configuration>
+    <compilerArgs>
+      <arg>-parameters</arg>
+    </compilerArgs>
+  </configuration>
+</plugin>

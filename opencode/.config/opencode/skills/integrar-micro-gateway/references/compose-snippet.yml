@@ -1,0 +1,28 @@
+# Servicio (pegar en el compose del equipo; reemplazar <...>)
+
+  <SERVICE_ID>:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: tpi-<SEGMENTO>
+    # SIN "ports:" A PROPÓSITO (solo expose:). Con el puerto publicado, un request
+    # con "X-User-Roles: ADMIN" inventado entra sin password, sin token y sin 2FA.
+    expose: ["<PUERTO_APP>", "<PUERTO_MGMT>"]
+    environment:
+      SERVER_PORT: "<PUERTO_APP>"
+      MANAGEMENT_PORT: "<PUERTO_MGMT>"
+      EUREKA_URL: http://eureka:8761/eureka/
+      GATEWAY_URL: http://api-gateway:8080
+      APP_CLIENT_ID: <SERVICE_ID>
+      # Pass-through: el valor real viene del entorno/CI (lo genera Identity &
+      # Users). Sin más indirecciones: la variable se llama igual adentro y afuera.
+      APP_CLIENT_SECRET: ${APP_CLIENT_SECRET:-}
+    depends_on:
+      eureka: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:<PUERTO_MGMT>/actuator/health/readiness | grep -q UP"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 40s
+    networks: [tpi-platform]   # solo esta (+ datos propios si hay BD). Nunca tpi-edge
