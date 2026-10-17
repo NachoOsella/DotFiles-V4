@@ -56,7 +56,7 @@ M.setup = function()
             "-Declipse.product=org.eclipse.jdt.ls.core.product",
             "-Dlog.protocol=false",
             "-Dlog.level=WARN",
-            "-Xms1g",
+            "-Xms256m",
             "--add-modules=ALL-SYSTEM",
             "--add-opens",
             "java.base/java.util=ALL-UNNAMED",

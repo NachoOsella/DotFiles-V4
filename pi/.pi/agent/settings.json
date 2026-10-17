@@ -1,6 +1,8 @@
 {
-  "lastChangelogVersion": "1.0.0",
-  "defaultTools": ["+codemode"],
+  "lastChangelogVersion": "1.3.0",
+  "defaultTools": [
+    "+codemode"
+  ],
   "theme": "gruvbox-material-dark-hard",
   "hideThinkingBlock": false,
   "quietStartup": false,

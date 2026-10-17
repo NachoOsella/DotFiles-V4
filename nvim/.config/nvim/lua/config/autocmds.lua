@@ -76,14 +76,14 @@ vim.api.nvim_create_autocmd("FileType", {
 })
 
 local terminal_group = vim.api.nvim_create_augroup("user_terminal_cleanup", { clear = true })
-vim.api.nvim_create_autocmd("QuitPre", {
+vim.api.nvim_create_autocmd("VimLeavePre", {
     group = terminal_group,
     callback = function()
         for _, buf in ipairs(vim.api.nvim_list_bufs()) do
             if vim.api.nvim_buf_is_valid(buf) and vim.bo[buf].buftype == "terminal" then
                 local chan = vim.bo[buf].channel
                 if chan and chan > 0 then
-                    vim.fn.jobstop(chan)
+                    pcall(vim.fn.jobstop, chan)
                 end
                 vim.api.nvim_buf_delete(buf, { force = true })
             end

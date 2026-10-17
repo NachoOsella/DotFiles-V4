@@ -1,9 +1,8 @@
 return {
     "abecodes/tabout.nvim",
-    lazy = false,
+    event = "InsertEnter",
     dependencies = {
         "nvim-treesitter/nvim-treesitter",
-        "L3MON4D3/LuaSnip", -- if you use snippets
     },
     config = function()
         require("tabout").setup {

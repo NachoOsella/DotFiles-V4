@@ -4,7 +4,6 @@ import type { Theme } from '@earendil-works/pi-coding-agent'
 import { DEFAULT_SUBAGENTS_CONFIG } from '../config/config.ts'
 import { buildRootToolDefinitions } from '../tools/extension-tools.ts'
 import { renderSubagentCommunication } from './final-answer-renderer.ts'
-import { renderSubagentsState } from './state-renderer.ts'
 
 const stubTheme = {
     fg: (_token: string, text: string) => text,
@@ -217,38 +216,6 @@ describe('tool result rendering', () => {
         )
         assert.match(text, /delivered/)
         assert.match(text, /\/root\/worker/)
-    })
-})
-
-describe('subagent state rendering', () => {
-    it('summarizes snapshots and names agents when expanded', () => {
-        const entry = {
-            type: 'custom',
-            customType: 'subagents-v3-state',
-            data: {
-                version: 2,
-                rootSessionId: 'root-session',
-                persistedAt: 1,
-                agents: [
-                    { path: '/root/worker', status: 'Running' },
-                    { path: '/root/other', status: 'Completed' },
-                ],
-            },
-        } as never
-        const compact = textOf(
-            renderSubagentsState(entry, { expanded: false }, stubTheme)
-        )
-        assert.match(compact, /SUBAGENTS/)
-        assert.match(compact, /2 agents/)
-        assert.match(compact, /1 running/)
-        assert.ok(!compact.includes('/root/worker'))
-        const expanded = textOf(
-            renderSubagentsState(entry, { expanded: true }, stubTheme)
-        )
-        assert.match(expanded, /\/root\/worker/)
-        assert.match(expanded, /Running/)
-        assert.match(expanded, /\/root\/other/)
-        assert.match(expanded, /Completed/)
     })
 })
 

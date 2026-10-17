@@ -27,6 +27,15 @@ return {
             opts.picker.sources.explorer = vim.tbl_deep_extend("force", opts.picker.sources.explorer or {}, {
                 hidden = true, -- show .env, .git, etc.
                 ignored = true, -- include files even if gitignored
+                exclude = {
+                    "**/.git",
+                    "**/node_modules",
+                    "**/.angular",
+                    "**/dist",
+                    "**/coverage",
+                    "**/target",
+                    "**/build",
+                },
             })
 
             opts.lazygit = opts.lazygit or {}

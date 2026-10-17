@@ -11,6 +11,7 @@
 - Do not perform unrelated refactors or cleanup.
 - Follow YAGNI. Prefer simple, direct solutions over speculative abstractions, extra flexibility, boilerplate, or dependencies.
 - Make routine implementation decisions without asking. Ask only when reasonable interpretations would materially change the result.
+- For subagents prefer models like `opencode-go/deepseek-v4.1-flash` `high or max` depends of the task.
 
 ## Code
 

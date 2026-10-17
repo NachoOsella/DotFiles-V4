@@ -3,10 +3,56 @@ return {
     opts = {
         servers = {
             jdtls = {},
+            angularls = { workspace_required = true },
+            cssls = {},
+            html = {},
+            jsonls = {},
+            yamlls = {},
+            dockerls = {},
+            docker_compose_language_service = {},
+            pyright = {},
+            ruff = {},
+            eslint = {
+                settings = {
+                    options = {
+                        overrideConfig = {
+                            -- Conform runs Prettier once after ESLint fixes.
+                            rules = { ["prettier/prettier"] = "off" },
+                        },
+                    },
+                },
+            },
+            vtsls = {
+                settings = {
+                    typescript = {
+                        tsserver = {
+                            -- One server handles both syntax and semantic requests.
+                            useSyntaxServer = "never",
+                        },
+                    },
+                },
+            },
         },
         setup = {
             jdtls = function()
                 return true
+            end,
+            eslint = function()
+                LazyVim.format.register(LazyVim.lsp.formatter({
+                    name = "eslint: lsp",
+                    primary = false,
+                    priority = 200,
+                    filter = "eslint",
+                    format = function(buf)
+                        -- The default LSP wrapper also runs Conform's CLI formatters.
+                        require("conform").format({
+                            bufnr = buf,
+                            name = "eslint",
+                            formatters = {},
+                            lsp_format = "always",
+                        })
+                    end,
+                }))
             end,
         },
     },

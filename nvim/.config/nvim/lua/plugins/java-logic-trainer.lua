@@ -1,6 +1,23 @@
 return {
   "NachoOsella/java-logic-trainer.nvim",
-  lazy = false,
+  cmd = {
+    "JavaLogicStart",
+    "JavaLogicCheck",
+    "JavaLogicRunVisible",
+    "JavaLogicNext",
+    "JavaLogicHint",
+    "JavaLogicProgress",
+    "JavaLogicList",
+    "JavaLogicReview",
+    "JavaLogicBeginner",
+    "JavaLogicErrors",
+    "JavaLogicStats",
+    "JavaLogicCurrent",
+    "JavaLogicReset",
+    "JavaLogicResetExercise",
+    "JavaLogicResetProgress",
+    "JavaLogicLastOutput",
+  },
   keys = {
     -- Moved to <leader>J (capital J) to avoid collision with nvim-jdtls maps on <leader>j (jc/jv)
     { "<leader>Js", "<cmd>JavaLogicStart<cr>", desc = "Java Logic: start" },

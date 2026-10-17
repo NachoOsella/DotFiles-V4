@@ -17,7 +17,6 @@ import {
     SUBAGENTS_COMMUNICATION_CUSTOM_TYPE,
 } from './src/core/transport.ts'
 import { renderSubagentCommunication } from './src/ui/final-answer-renderer.ts'
-import { renderSubagentsState } from './src/ui/state-renderer.ts'
 import { resolveConfiguredMode } from './src/config/mode.ts'
 import { plannedToolNames } from './src/tools/tool-specs.ts'
 import {
@@ -109,7 +108,6 @@ export default function subagentsExtension(pi: ExtensionAPI) {
         SUBAGENTS_COMMUNICATION_CUSTOM_TYPE,
         renderSubagentCommunication
     )
-    pi.registerEntryRenderer(SUBAGENTS_STATE_CUSTOM_TYPE, renderSubagentsState)
 
     let coordinator: SubagentCoordinator | undefined
     let latestCtx: ExtensionContext | undefined
