@@ -38,6 +38,7 @@ export type {
 export {
   createTransport,
   normalizeCodexBaseUrl,
+  normalizeOpenAIBaseUrl,
   resolveCodexEndpoint,
   resolveCodexSearchEndpoint,
 } from "./transport.ts";
@@ -54,7 +55,8 @@ export type { FetchLike } from "./cookies.ts";
 
 export interface FetchCodexModelsOptions {
   token: string;
-  accountId: string;
+  accountId?: string;
+  provider?: import("./pi-auth.ts").OpenAIAuthProvider;
   baseUrl?: string;
   clientVersion?: string;
   signal?: AbortSignal;
@@ -75,15 +77,18 @@ export async function fetchCodexModels(
   const transport = createTransport({
     token: options.token,
     accountId: options.accountId,
+    provider: options.provider,
     baseUrl: options.baseUrl,
     fetchImpl: options.fetchImpl as typeof fetch,
   });
 
   const endpoint = new URL(transport.resolveEndpoint("models"));
-  endpoint.searchParams.set(
-    "client_version",
-    options.clientVersion ?? process.env.PI_CODEX_WEB_SEARCH_CLIENT_VERSION ?? "1.0.0",
-  );
+  if (transport.provider === "openai-codex") {
+    endpoint.searchParams.set(
+      "client_version",
+      options.clientVersion ?? process.env.PI_CODEX_WEB_SEARCH_CLIENT_VERSION ?? "1.0.0",
+    );
+  }
 
   const response = await transport.fetch(endpoint.toString(), {
     headers: transport.buildHeaders("application/json"),
@@ -103,7 +108,7 @@ export async function fetchCodexModels(
     const text = formatHttpErrorBody(boundedError, "responses");
     throw new CodexError(
       classifyHttpStatus(status),
-      `Codex models request failed: HTTP ${status}: ${text}`,
+      `OpenAI models request failed: HTTP ${status}: ${text}`,
       status,
     );
   }
@@ -115,7 +120,7 @@ export async function fetchCodexModels(
   if (truncated) {
     throw new CodexError(
       "transport",
-      `Codex models response exceeded the ${MODEL_CATALOG_LIMIT_BYTES} char catalog ` +
+      `OpenAI models response exceeded the ${MODEL_CATALOG_LIMIT_BYTES} char catalog ` +
         `budget. Cancelling the request; partial provider output is not returned as ` +
         `authoritative.`,
     );

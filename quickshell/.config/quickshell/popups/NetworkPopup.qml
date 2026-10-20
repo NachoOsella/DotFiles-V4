@@ -1,5 +1,4 @@
 import QtQuick
-import Quickshell.Networking
 import "../components"
 import "../config"
 import "../services"
@@ -22,7 +21,7 @@ PopupSurface {
         if (!network)
             return;
         connectionError = "";
-        if (network.connected || network.known || network.security === WifiSecurityType.Open) {
+        if (network.connected || network.known || network.type === "open") {
             pendingNetwork = null;
             NetworkService.connectNetwork(network, "");
         } else {
@@ -111,17 +110,11 @@ PopupSurface {
                 icon: NetworkService.wifiIcon(modelData.signalStrength)
                 iconColor: modelData.connected ? Theme.green : Theme.grey2
                 label: modelData.name
-                detail: (modelData.security === WifiSecurityType.Open ? "" : "  ") + Math.round(modelData.signalStrength * 100) + "%"
+                detail: (modelData.type === "open" ? "" : "  ") + Math.round(modelData.signalStrength * 100) + "%"
                 selected: modelData.connected
                 interactive: !modelData.stateChanging
                 onClicked: root.activateNetwork(modelData)
 
-                Connections {
-                    target: modelData
-                    function onConnectionFailed(): void {
-                        root.connectionError = "Connection failed. Check the password or network state and try again.";
-                    }
-                }
             }
         }
 
@@ -194,13 +187,18 @@ PopupSurface {
     }
 
     Connections {
+        target: NetworkService
+        function onConnectionError(message: string): void {
+            root.connectionError = message;
+        }
+    }
+
+    Connections {
         target: root
         function onVisibleChanged(): void {
             if (root.visible)
                 NetworkService.refreshScan();
             else {
-                if (NetworkService.wifiDevice)
-                    NetworkService.wifiDevice.scannerEnabled = false;
                 passwordInput.text = "";
                 root.pendingNetwork = null;
                 root.connectionError = "";

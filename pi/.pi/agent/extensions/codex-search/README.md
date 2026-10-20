@@ -1,7 +1,8 @@
 # Nacho Codex Search
 
 Personal Pi extension adapted from [Leechael/pi-codex-search](https://github.com/Leechael/pi-codex-search).
-It provides `codex_search` using Pi's existing `openai-codex` authentication.
+It provides `codex_search` using Pi's existing `openai` authentication (Sign in with ChatGPT),
+with fallback to the legacy `openai-codex` login.
 
 This local copy is private and maintained directly in the Pi extensions workspace. The original MIT
 license and attribution are preserved in `LICENSE`.
@@ -13,8 +14,8 @@ Web search does not have to be built into Pi. It can be a tool.
 This extension is for Pi workflows that need fresh or source-backed information:
 
 - **Look up current docs and release notes.** Ask the model to check things that changed after its training cutoff.
-- **Get sources with the answer.** Search results include citations when Codex returns them.
-- **Reuse your Codex login.** The tool uses Pi's existing `openai-codex` OAuth credential instead of asking you to paste tokens.
+- **Get sources with the answer.** Search results include citations when OpenAI returns them.
+- **Reuse your ChatGPT login.** The tool uses Pi's stored `openai` OAuth credential, or the legacy `openai-codex` credential when that is the active login, instead of asking you to paste tokens.
 - **Batch related searches in Responses mode.** One `codex_search` call can run related queries together.
 - **Inspect webpages when explicitly enabled.** `codex_standalone_web` sends one standalone action per tool call because `/alpha/search` rejects multi-action batching.
 - **Keep projects in control.** Change defaults, enable the standalone tool, or disable the extension per project.
@@ -25,7 +26,7 @@ This extension is for Pi workflows that need fresh or source-backed information:
 - 1–32 search queries per `codex_search` call, controlled by `batchSize`.
 - Optional `codex_standalone_web` using experimental `/alpha/search` with open, find, click, screenshot, finance, weather, sports, and time commands. It accepts exactly one action per tool call.
 - `live`, `indexed`, or `cached` freshness, plus `low` / `medium` / `high` search context size. Standalone mode disables `low` because Codex returns Cloudflare challenges for low-context standalone requests.
-- Streaming progress while Codex responds.
+- Streaming progress while OpenAI responds.
 - Collapsed result previews in the TUI, with full text and sources available when expanded.
 - Structured details: model, citations, search calls, response ids, usage, and per-query failures.
 - Config files for home and project defaults.
@@ -59,12 +60,20 @@ pi install /tmp/pi-codex-search
 Inside Pi, run:
 
 ```text
+/login openai
+```
+
+Choose `Sign in with ChatGPT` when Pi asks for the login method. Pi stores and refreshes the credential. The extension prefers this official login and calls `https://api.openai.com/v1/responses` directly.
+
+The legacy Codex login still works:
+
+```text
 /login openai-codex
 ```
 
-Choose `ChatGPT Plus/Pro (Codex Subscription)` if Pi asks which provider to use. Pi stores and refreshes the credential.
+Choose `ChatGPT Plus/Pro (Codex Subscription)`. The extension uses the stored `openai-codex` credential when `openai` is not configured, or when the active Pi model already uses `openai-codex`.
 
-The tool is registered by default. If Pi has no `openai-codex` token, or if the ChatGPT account id cannot be found from the stored OAuth credential or decoded access token, the first `codex_search` call fails with an `auth` error that points back to `/login openai-codex`.
+The tool is registered by default. If neither login can provide a credential, the first `codex_search` call fails with an `auth` error that points back to `/login openai`. A legacy Codex credential also needs a ChatGPT account id.
 
 Set `enabled: false` if you want the extension installed but hidden for a project.
 
@@ -123,17 +132,17 @@ Failure `kind` is one of `auth`, `rate_limit`, `transport`, `timeout`, `schema`,
 
 ## Model used for search
 
-The search request needs a Codex model id. The extension chooses it in this order:
+The search request needs a model id that the active login can use. The extension chooses it in this order:
 
 1. `model` from env / project / home config, if set.
-2. The active Pi model, if it comes from the `openai-codex` provider.
-3. The default model from Codex's `/codex/models` response.
+2. The active Pi model, if it comes from the same provider as the resolved login and appears in that provider's model catalog.
+3. The default model from the login's catalog: `https://api.openai.com/v1/models` for `openai`, or `/codex/models` for `openai-codex`.
 
-Most users do not need to set this.
+Most users do not need to set this. Model ids differ between logins; for example, the official `openai` login exposes subscription models such as `gpt-6.1-sol`, while `openai-codex` exposes Codex model ids.
 
 ## Settings
 
-Most users only need `/login openai-codex`. Use settings when you want to enable `codex_standalone_web`, disable the extension for a project, pin a model, or change defaults.
+Most users only need `/login openai`. Use settings when you want to enable `codex_standalone_web`, disable the extension for a project, pin a model, or change defaults.
 
 Open the interactive settings dialog:
 
@@ -164,9 +173,8 @@ Full schema, all fields optional:
 {
   "enabled": true,
   "standaloneEnabled": false,
-  "model": "gpt-5-codex",
-  "baseUrl": "https://chatgpt.com/backend-api",
-  "clientVersion": "1.0.0",
+  "model": "gpt-6.1-sol",
+  "baseUrl": "https://api.openai.com/v1",
   "searchContextSize": "medium",
   "freshness": "live",
   "batchSize": 5
@@ -175,9 +183,11 @@ Full schema, all fields optional:
 
 `enabled: false` skips tool registration entirely. The model will not see `codex_search` or `codex_standalone_web`.
 
-`standaloneEnabled: true` registers `codex_standalone_web`. It posts web commands to `/codex/alpha/search` on `chatgpt.com/backend-api` or `/v1/alpha/search` for `api.openai.com/v1`-style bases, accepts one action per tool call, stores returned ref ids for follow-up open/find/click/screenshot actions, disables `low` search context, and may be blocked by Cloudflare or backend session limits. Use `codex_search` for web search queries.
+`standaloneEnabled: true` registers `codex_standalone_web`. It uses the legacy `openai-codex` login because the official `openai` login does not expose the standalone `/alpha/search` endpoint. It posts web commands to `/codex/alpha/search` on `chatgpt.com/backend-api`, accepts one action per tool call, stores returned ref ids for follow-up open/find/click/screenshot actions, disables `low` search context, and may be blocked by Cloudflare or backend session limits. Use `codex_search` for web search queries.
 
 `searchApi: "standalone"` from older configs is treated as `standaloneEnabled: true` for compatibility.
+
+`clientVersion` only affects the legacy Codex `/codex/models` request. The official `openai` login uses `/v1/models` and ignores it.
 
 Environment variable equivalents:
 
@@ -194,7 +204,7 @@ Environment variable equivalents:
 
 `PI_CODEX_WEB_SEARCH_ENABLED` accepts `true` / `false` (case-insensitive). Any other value fails config loading.
 
-The settings dialog shows a unified `SettingsList` view. The model picker loads available Codex models asynchronously after the dialog opens, so the UI appears immediately even when `/codex/models` is slow. Interactive edits write the selected config file immediately. When you close the dialog, Pi reloads so the tool set and defaults apply without restarting the whole terminal.
+The settings dialog shows a unified `SettingsList` view. The model picker loads models from the resolved login asynchronously after the dialog opens, so the UI appears immediately when the model catalog is slow. Interactive edits write the selected config file immediately. When you close the dialog, Pi reloads so the tool set and defaults apply without restarting the whole terminal.
 
 ## Notes
 
@@ -204,7 +214,7 @@ This does not add browsing to the model provider itself. It adds a Pi tool. The 
 
 ### Account id
 
-Codex requests need both the access token and the ChatGPT account id. The extension first checks Pi's stored OAuth credential. If that does not include an account id, it tries to extract one from the access token.
+Legacy `openai-codex` requests need both the access token and the ChatGPT account id. The extension first checks Pi's stored OAuth credential. If that does not include an account id, it tries to extract one from the access token. The official `openai` login does not use a separate account id header.
 
 ## Troubleshooting
 
@@ -213,14 +223,14 @@ Codex requests need both the access token and the ChatGPT account id. The extens
 Run:
 
 ```text
-/login openai-codex
+/login openai
 ```
 
-If Pi asks for a provider, choose `ChatGPT Plus/Pro (Codex Subscription)`. The extension picks up the refreshed credential on the next call.
+Choose `Sign in with ChatGPT`. If you use the legacy Codex login instead, run `/login openai-codex` and choose `ChatGPT Plus/Pro (Codex Subscription)`. The extension picks up the refreshed credential on the next call.
 
 ### `codex_search` says the account id was not found
 
-The stored OAuth credential did not include an account id, and the extension could not decode one from the access token. Re-run `/login openai-codex` so Pi refreshes the credential.
+This only applies to the legacy `openai-codex` login. The stored OAuth credential did not include an account id, and the extension could not decode one from the access token. Re-run `/login openai-codex` so Pi refreshes the credential, or switch to `/login openai`.
 
 ### The model does not see `codex_search`
 
@@ -234,7 +244,11 @@ Remember that env overrides project, and project overrides home.
 
 ### Search uses the wrong model
 
-Set `model` in your config file, or set `PI_CODEX_WEB_SEARCH_MODEL`, to the Codex model id you want. If unset, the extension uses the active Codex model when possible, then falls back to the default model from `/codex/models`.
+Set `model` in your config file, or set `PI_CODEX_WEB_SEARCH_MODEL`, to a model id from the active login's catalog. If unset, the extension uses the active model when it belongs to the same provider and is present in the catalog, then falls back to the catalog default.
+
+### `codex_standalone_web` fails with the official OpenAI login
+
+The standalone web tool uses the legacy Codex `/alpha/search` endpoint. Run `/login openai-codex` if you need standalone page actions, or keep using `codex_search` with the official `openai` login.
 
 ### A different extension already registers `codex_search`
 

@@ -1,6 +1,11 @@
 -- Keyboard, pointer, touchpad, and per-device input configuration.
 
 hl.config({
+    cursor = {
+        -- Hardware cursors freeze when crossing between these mixed-scale outputs.
+        no_hardware_cursors = 1,
+    },
+
     input = {
         kb_layout = "us, latam",
         kb_variant = "intl,",

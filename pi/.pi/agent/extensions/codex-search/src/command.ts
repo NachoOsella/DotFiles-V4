@@ -27,11 +27,10 @@ import {
   type ResolvedConfig,
   saveConfig,
 } from "./config.ts";
-import { resolveCodexAccountId } from "./pi-auth.ts";
+import { resolvePiAuth } from "./pi-auth.ts";
 
 const COMMAND_NAME = "codex-search-settings";
 const SUBCOMMANDS = ["status", "reset"] as const;
-const OPENAI_CODEX_PROVIDER = "openai-codex";
 
 const DEFAULT_SUFFIX = " (default)";
 const defaultTag = (value: string): string => `${value}${DEFAULT_SUFFIX}`;
@@ -134,7 +133,7 @@ const TEXT_FIELDS: TextField[] = [
   {
     id: "model",
     label: "Model",
-    description: "Pick from models loaded via /codex/models (default = auto-select)",
+    description: "Pick from the active OpenAI login's model catalog (default = auto-select)",
     defaultDisplay: "auto",
     get: (c) => c.model,
     apply: (c, v) => {
@@ -145,7 +144,7 @@ const TEXT_FIELDS: TextField[] = [
   {
     id: "baseUrl",
     label: "Base URL",
-    description: "Codex backend base URL",
+    description: "OpenAI API base URL (default = provider default)",
     defaultDisplay: "built-in",
     get: (c) => c.baseUrl,
     apply: (c, v) => {
@@ -156,7 +155,7 @@ const TEXT_FIELDS: TextField[] = [
   {
     id: "clientVersion",
     label: "Client version",
-    description: "Client version sent to /codex/models",
+    description: "Client version sent to the legacy Codex /codex/models endpoint",
     defaultDisplay: "built-in",
     get: (c) => c.clientVersion,
     apply: (c, v) => {
@@ -374,7 +373,7 @@ async function openSettingsMenu(ctx: ExtensionCommandContext): Promise<void> {
     ];
 
     const modelItem = items.find((i) => i.id === "model");
-    if (modelItem) modelItem.description = "Loading models via /codex/models…";
+    if (modelItem) modelItem.description = "Loading models from the OpenAI login…";
 
     loadModels(ctx, resolved)
       .then((loaded) => {
@@ -382,15 +381,15 @@ async function openSettingsMenu(ctx: ExtensionCommandContext): Promise<void> {
         if (modelItem) {
           modelItem.description =
             loaded.length === 0
-              ? "No models loaded from /codex/models (default = auto-select)"
-              : `Pick from ${loaded.length} model${loaded.length === 1 ? "" : "s"} loaded via /codex/models (default = auto-select)`;
+              ? "No models loaded from the OpenAI login (default = auto-select)"
+              : `Pick from ${loaded.length} model${loaded.length === 1 ? "" : "s"} loaded from the OpenAI login (default = auto-select)`;
         }
         list.invalidate();
       })
       .catch((error: unknown) => {
         if (modelItem) {
           modelItem.description =
-            "Could not load models from /codex/models (default = auto-select)";
+            "Could not load models from the OpenAI login (default = auto-select)";
         }
         list.invalidate();
         ctx.ui.notify(`Could not load model list: ${(error as Error).message}`, "warning");
@@ -434,7 +433,11 @@ function buildModelSelect(
   done: (value?: string) => void,
 ): Component {
   const items: SelectItem[] = [
-    { value: "", label: defaultTag("auto"), description: "Auto-select from /codex/models" },
+    {
+      value: "",
+      label: defaultTag("auto"),
+      description: "Auto-select from the OpenAI model catalog",
+    },
     ...models.map((m): SelectItem => ({ value: m.id, label: m.id, description: m.name })),
   ];
   const select = new SelectList(items, Math.min(items.length, 10), theme);
@@ -449,12 +452,14 @@ async function loadModels(
   ctx: ExtensionCommandContext,
   resolved: ResolvedConfig,
 ): Promise<CodexModel[]> {
-  const token = await ctx.modelRegistry.getApiKeyForProvider(OPENAI_CODEX_PROVIDER);
-  if (!token) return [];
-  const accountId = resolveCodexAccountId(token, ctx.modelRegistry);
-  if (!accountId) return [];
+  const auth = await resolvePiAuth(ctx.modelRegistry, ctx.model?.provider);
+  if (!auth) return [];
 
-  const opts: Parameters<typeof fetchCodexModels>[0] = { token, accountId };
+  const opts: Parameters<typeof fetchCodexModels>[0] = {
+    token: auth.token,
+    provider: auth.provider,
+  };
+  if (auth.accountId !== undefined) opts.accountId = auth.accountId;
   if (resolved.baseUrl !== undefined) opts.baseUrl = resolved.baseUrl;
   if (resolved.clientVersion !== undefined) opts.clientVersion = resolved.clientVersion;
   return fetchCodexModels(opts);
@@ -506,7 +511,7 @@ export function formatStatus(resolved: ResolvedConfig, cwd: string): string {
   lines.push(`  enabled             = ${resolved.enabled}`);
   lines.push(`  searchToolName      = codex_search`);
   lines.push(`  standaloneToolName  = ${STANDALONE_TOOL_NAME}`);
-  lines.push(`  model               = ${resolved.model ?? "(auto from /codex/models)"}`);
+  lines.push(`  model               = ${resolved.model ?? "(auto from the OpenAI model catalog)"}`);
   lines.push(`  baseUrl             = ${resolved.baseUrl ?? "(default)"}`);
   lines.push(`  clientVersion       = ${resolved.clientVersion ?? "(default)"}`);
   lines.push(`  searchContextSize   = ${resolved.defaultSearchContextSize}`);

@@ -16,12 +16,18 @@ import {
   runStandaloneCommands,
   runResponsesSearch,
   normalizeCodexBaseUrl,
+  normalizeOpenAIBaseUrl,
   resolveCodexEndpoint,
   resolveCodexSearchEndpoint,
   selectDefaultModel,
   type StandaloneCommandsOptions,
 } from "../src/codex.ts";
-import { resolveCodexAccountId } from "../src/pi-auth.ts";
+import {
+  OPENAI_CODEX_PROVIDER,
+  OPENAI_PROVIDER,
+  resolveCodexAccountId,
+  resolvePiAuth,
+} from "../src/pi-auth.ts";
 import { formatQueryPreviewLines, selectStandalonePageRefId } from "../index.ts";
 
 describe("codex helpers", () => {
@@ -34,6 +40,19 @@ describe("codex helpers", () => {
     assert.equal(
       normalizeCodexBaseUrl("https://chatgpt.com/backend-api/codex/responses"),
       "https://chatgpt.com/backend-api",
+    );
+  });
+
+  it("normalizes OpenAI base URLs", () => {
+    assert.equal(normalizeOpenAIBaseUrl(undefined), "https://api.openai.com/v1");
+    assert.equal(normalizeOpenAIBaseUrl("https://api.openai.com"), "https://api.openai.com/v1");
+    assert.equal(
+      normalizeOpenAIBaseUrl("https://api.openai.com/v1/responses"),
+      "https://api.openai.com/v1",
+    );
+    assert.equal(
+      normalizeOpenAIBaseUrl("https://example.test/openai/v1/"),
+      "https://example.test/openai/v1",
     );
   });
 
@@ -81,6 +100,20 @@ describe("codex helpers", () => {
     assert.equal(headers.get("authorization"), "Bearer token");
     assert.equal(headers.get("chatgpt-account-id"), "account");
     assert.match(headers.get("user-agent") ?? "", /^codex_cli_rs\/0\.143\.0 /);
+  });
+
+  it("builds official OpenAI transport headers without Codex fields", () => {
+    const transport = createTransport({ token: "token", provider: OPENAI_PROVIDER });
+
+    assert.equal(transport.baseUrl, "https://api.openai.com/v1");
+    assert.equal(transport.resolveEndpoint("responses"), "https://api.openai.com/v1/responses");
+    assert.equal(transport.resolveEndpoint("models"), "https://api.openai.com/v1/models");
+
+    const headers = transport.buildHeaders("text/event-stream");
+    assert.equal(headers.get("authorization"), "Bearer token");
+    assert.equal(headers.get("chatgpt-account-id"), null);
+    assert.equal(headers.get("originator"), null);
+    assert.equal(headers.get("content-type"), "application/json");
   });
 
   it("preserves Request headers when wrapping fetch with cookies", async () => {
@@ -178,6 +211,89 @@ describe("codex helpers", () => {
 
     assert.equal(extractAccountIdFromToken(token), "acct_123");
     assert.equal(extractAccountIdFromToken("not-a-jwt"), undefined);
+  });
+
+  it("prefers the official OpenAI login over the legacy Codex login", async () => {
+    const auth = await resolvePiAuth(
+      {
+        getApiKeyForProvider: async (provider) =>
+          provider === OPENAI_PROVIDER ? "openai-token" : "codex-token",
+      },
+      undefined,
+      (provider) =>
+        provider === OPENAI_PROVIDER
+          ? { type: "oauth" }
+          : { type: "oauth", accountId: "acct_stored" },
+    );
+
+    assert.deepEqual(auth, { provider: OPENAI_PROVIDER, token: "openai-token" });
+  });
+
+  it("does not let an OpenAI API key shadow a stored Codex login", async () => {
+    const auth = await resolvePiAuth(
+      {
+        getApiKeyForProvider: async (provider) =>
+          provider === OPENAI_PROVIDER ? "api-key" : "codex-token",
+      },
+      undefined,
+      (provider) =>
+        provider === OPENAI_PROVIDER
+          ? { type: "api_key" }
+          : { type: "oauth", accountId: "acct_stored" },
+    );
+
+    assert.deepEqual(auth, {
+      provider: OPENAI_CODEX_PROVIDER,
+      token: "codex-token",
+      accountId: "acct_stored",
+    });
+  });
+
+  it("uses the OpenAI API key when neither subscription login is stored", async () => {
+    const auth = await resolvePiAuth(
+      {
+        getApiKeyForProvider: async (provider) =>
+          provider === OPENAI_PROVIDER ? "api-key" : undefined,
+      },
+      undefined,
+      () => undefined,
+    );
+
+    assert.deepEqual(auth, { provider: OPENAI_PROVIDER, token: "api-key" });
+  });
+
+  it("uses the active provider first when both logins exist", async () => {
+    const auth = await resolvePiAuth(
+      {
+        getApiKeyForProvider: async (provider) =>
+          provider === OPENAI_PROVIDER ? "openai-token" : "codex-token",
+      },
+      OPENAI_CODEX_PROVIDER,
+      () => ({ type: "oauth", accountId: "acct_stored" }),
+    );
+
+    assert.deepEqual(auth, {
+      provider: OPENAI_CODEX_PROVIDER,
+      token: "codex-token",
+      accountId: "acct_stored",
+    });
+  });
+
+  it("falls back to the legacy Codex login", async () => {
+    const auth = await resolvePiAuth(
+      {
+        getApiKeyForProvider: async (provider) =>
+          provider === OPENAI_CODEX_PROVIDER ? "codex-token" : undefined,
+      },
+      undefined,
+      () => ({ type: "oauth", accountId: "acct_stored" }),
+    );
+
+    assert.deepEqual(auth, {
+      provider: OPENAI_CODEX_PROVIDER,
+      token: "codex-token",
+      accountId: "acct_stored",
+    });
   });
 
   it("prefers a stored OAuth account id when the token has no account claim", () => {
@@ -819,5 +935,47 @@ describe("codex helpers", () => {
 
     assert.equal(models[0]?.id, "gpt-default");
     assert.equal(new URL(requestedUrl).searchParams.get("client_version"), "9.9.9");
+  });
+
+  it("loads the official OpenAI model catalog without Codex query params", async () => {
+    let requestedUrl = "";
+    let requestedHeaders = new Headers();
+    const fetchImpl = async (input: string | URL | Request, init?: RequestInit) => {
+      requestedUrl = String(input);
+      requestedHeaders = new Headers(init?.headers);
+      return new Response(JSON.stringify({ models: [{ slug: "gpt-6.1-sol" }] }));
+    };
+
+    const models = await fetchCodexModels({
+      token: "token",
+      provider: OPENAI_PROVIDER,
+      baseUrl: "https://api.openai.com/v1",
+      clientVersion: "9.9.9",
+      fetchImpl: fetchImpl as typeof fetch,
+    });
+
+    assert.equal(requestedUrl, "https://api.openai.com/v1/models");
+    assert.equal(new URL(requestedUrl).searchParams.get("client_version"), null);
+    assert.equal(requestedHeaders.get("chatgpt-account-id"), null);
+    assert.equal(models[0]?.id, "gpt-6.1-sol");
+  });
+
+  it("rejects standalone actions with the official OpenAI login", async () => {
+    const transport = createTransport({ token: "token", provider: OPENAI_PROVIDER });
+
+    await assert.rejects(
+      runStandaloneCommands({
+        model: "gpt-test",
+        transport,
+        sessionId: "pi-codex-search",
+        searchQuery: [{ q: "OpenAI news" }],
+        freshness: "live",
+      }),
+      (error: unknown) => {
+        assert.ok(error instanceof CodexError);
+        assert.equal(error.kind, "auth");
+        return true;
+      },
+    );
   });
 });

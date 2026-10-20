@@ -3,21 +3,40 @@
 local outputs = {
     internal = {
         name = "eDP-1",
-        mode = "1920x1080@60",
+        mode = "1920x1200@60",
         position = "0x0",
-        scale = 1,
+        scale = 1.25,
     },
     external = {
         name = "HDMI-A-1",
         mode = "1920x1080@75",
-        position = "1920x0",
+        position = nil, -- derived from the internal panel below
         scale = 1,
     },
 }
 
+local function logical_size(output)
+    local width, height = output.mode:match("^(%d+)x(%d+)")
+    return math.floor(tonumber(width) / output.scale), math.floor(tonumber(height) / output.scale)
+end
+
+local function place_beside(output, reference)
+    -- Sit to the right of the reference panel, vertically centered against it.
+    -- Deriving the offset keeps the layout correct when either mode or scale changes.
+    local reference_width, reference_height = logical_size(reference)
+    local reference_x, reference_y = reference.position:match("^(-?%d+)x(-?%d+)$")
+    local _, height = logical_size(output)
+
+    local x = tonumber(reference_x) + reference_width
+    local y = tonumber(reference_y) + math.floor((reference_height - height) / 2)
+    return string.format("%dx%d", x, y)
+end
+
+outputs.external.position = place_beside(outputs.external, outputs.internal)
+
 local function read_lid_state()
     -- Initialize correctly when Hyprland starts or reloads with the lid closed.
-    local state_file = io.open("/proc/acpi/button/lid/LID/state", "r")
+    local state_file = io.open("/proc/acpi/button/lid/LID0/state", "r")
     if not state_file then
         return false
     end
@@ -39,8 +58,13 @@ local function configure_output(output, position)
     })
 end
 
+local function disable_output(output)
+    hl.monitor({ output = output.name, disabled = true })
+end
+
 local function output_is_active(name)
-    return hl.get_monitor(name) ~= nil
+    local monitor = hl.get_monitor(name)
+    return monitor ~= nil and monitor.disabled ~= true
 end
 
 local function move_workspace_range(first, last, monitor_name)
@@ -65,18 +89,30 @@ local function bind_workspace_range(first, last, monitor_name, default_workspace
     end
 end
 
-local function restart_layer_clients()
-    -- Quickshell handles outputs reactively; only Hyprpaper needs a restart here.
-    hl.exec_cmd("pkill -x hyprpaper 2>/dev/null || true; uwsm app -- hyprpaper >/dev/null 2>&1 &")
+local function refresh_wallpaper()
+    -- Quickshell tracks outputs on its own. hyprpaper hands the configured wallpaper to
+    -- every output it knows about, so re-issuing the request is enough here and avoids
+    -- the flash of restarting the daemon on each hotplug.
+    hl.exec_cmd([[
+hyprctl hyprpaper wallpaper ,"$HOME/dotfiles/assets/wallpapers/wallpaper.png" >/dev/null 2>&1 ||
+    { pgrep -x hyprpaper >/dev/null || hyprpaper >/dev/null 2>&1 & }
+]])
 end
 
 local function apply_laptop_profile()
+    if lid_closed then
+        -- Closed lid without an external output: keep the panel off instead of lighting
+        -- it up inside the closed chassis.
+        disable_output(outputs.internal)
+        return
+    end
+
     local internal_was_active = output_is_active(outputs.internal.name)
     configure_output(outputs.internal)
     move_workspace_range(1, 10, outputs.internal.name)
 
     if not internal_was_active then
-        restart_layer_clients()
+        refresh_wallpaper()
     end
 end
 
@@ -88,7 +124,7 @@ local function apply_dual_profile()
     move_workspace_range(6, 10, outputs.internal.name)
 
     if not internal_was_active then
-        restart_layer_clients()
+        refresh_wallpaper()
     end
 end
 
@@ -102,13 +138,13 @@ local function apply_docked_profile()
     move_workspace_range(1, 10, outputs.external.name)
 
     if internal_was_active then
-        hl.monitor({ output = outputs.internal.name, disabled = true })
+        disable_output(outputs.internal)
     end
 
     configure_output(outputs.external, "0x0")
 
     if internal_was_active then
-        restart_layer_clients()
+        refresh_wallpaper()
     end
 end
 
@@ -137,6 +173,7 @@ end, { locked = true })
 hl.bind("switch:off:Lid Switch", function()
     lid_closed = false
     reconcile_outputs()
+    hl.dispatch(hl.dsp.dpms({ action = "on" }))
 end, { locked = true })
 
 -- Reapply the active profile when an output is connected or disconnected.

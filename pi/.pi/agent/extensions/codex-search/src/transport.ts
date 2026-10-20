@@ -1,46 +1,49 @@
 /**
- * Codex-faithful HTTP transport.
+ * OpenAI HTTP transport.
  *
- * Builds the same headers and cookie behavior used by the codex Rust client:
- * - originator: codex_cli_rs
- * - User-Agent: codex_cli_rs/{ver} (os ver; arch) terminal
- * - Authorization: Bearer {token}
- * - ChatGPT-Account-ID: {account_id}
- * - ChatGPT Cloudflare cookie store on all outbound/inbound requests
+ * Two authentication modes share the same request surface:
+ * - `openai-codex`: the legacy Codex backend (`chatgpt.com/backend-api`), using
+ *   Codex client headers, the ChatGPT account id, and the Cloudflare cookie store.
+ * - `openai`: the official Pi ChatGPT subscription login, which calls
+ *   `api.openai.com/v1` directly with a bearer token.
  */
 
 import { getCodexOriginator, buildCodexUserAgent } from "./ua.ts";
 import { wrapFetchWithCookies, type FetchLike } from "./cookies.ts";
+import type { OpenAIAuthProvider } from "./pi-auth.ts";
 
 export interface TransportOptions {
   token: string;
-  accountId: string;
+  accountId?: string;
+  provider?: OpenAIAuthProvider;
   baseUrl?: string;
   fetchImpl?: FetchLike;
 }
 
 export const DEFAULT_BASE_URL = "https://chatgpt.com/backend-api";
+export const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";
 export const DEFAULT_CLIENT_VERSION = "1.0.0";
 
 export interface CodexTransport {
   fetch: FetchLike;
+  provider: OpenAIAuthProvider;
   baseUrl: string;
   token: string;
-  accountId: string;
+  accountId?: string;
   buildHeaders(accept: string): Headers;
   resolveEndpoint(path: "models" | "responses"): string;
   resolveSearchEndpoint(): string;
 }
 
+function stripSuffix(value: string, suffix: string): string {
+  return value.endsWith(suffix) ? value.slice(0, -suffix.length) : value;
+}
+
 export function normalizeCodexBaseUrl(baseUrl: string | undefined): string {
   const raw = baseUrl?.trim() ? baseUrl : DEFAULT_BASE_URL;
   let normalized = raw.replace(/\/+$/, "");
-  if (normalized.endsWith("/codex/responses")) {
-    normalized = normalized.slice(0, -"/codex/responses".length);
-  }
-  if (normalized.endsWith("/codex")) {
-    normalized = normalized.slice(0, -"/codex".length);
-  }
+  normalized = stripSuffix(normalized, "/codex/responses");
+  normalized = stripSuffix(normalized, "/codex");
   return normalized;
 }
 
@@ -53,10 +56,23 @@ function isOpenAiRootBaseUrl(baseUrl: string): boolean {
   }
 }
 
+export function normalizeOpenAIBaseUrl(baseUrl: string | undefined): string {
+  const raw = baseUrl?.trim() ? baseUrl : DEFAULT_OPENAI_BASE_URL;
+  let normalized = raw.replace(/\/+$/, "");
+  normalized = stripSuffix(normalized, "/codex/responses");
+  normalized = stripSuffix(normalized, "/codex");
+  normalized = stripSuffix(normalized, "/responses");
+  normalized = stripSuffix(normalized, "/models");
+  if (isOpenAiRootBaseUrl(normalized)) normalized = `${normalized}/v1`;
+  return normalized;
+}
+
 export function resolveCodexEndpoint(
   baseUrl: string | undefined,
   path: "models" | "responses",
+  provider: OpenAIAuthProvider = "openai-codex",
 ): string {
+  if (provider === "openai") return `${normalizeOpenAIBaseUrl(baseUrl)}/${path}`;
   return `${normalizeCodexBaseUrl(baseUrl)}/codex/${path}`;
 }
 
@@ -79,20 +95,27 @@ export function resolveCodexSearchEndpoint(baseUrl: string | undefined): string 
 }
 
 export function createTransport(options: TransportOptions): CodexTransport {
-  const baseUrl = normalizeCodexBaseUrl(options.baseUrl);
+  const provider = options.provider ?? "openai-codex";
+  const baseUrl =
+    provider === "openai"
+      ? normalizeOpenAIBaseUrl(options.baseUrl)
+      : normalizeCodexBaseUrl(options.baseUrl);
   const rawFetch: FetchLike = options.fetchImpl ?? globalThis.fetch.bind(globalThis);
-  const fetch = wrapFetchWithCookies(rawFetch);
+  const fetch = provider === "openai" ? rawFetch : wrapFetchWithCookies(rawFetch);
 
   return {
     fetch,
+    provider,
     baseUrl,
     token: options.token,
-    accountId: options.accountId,
+    ...(options.accountId === undefined ? {} : { accountId: options.accountId }),
     buildHeaders(accept: string): Headers {
       const headers = new Headers();
       headers.set("Authorization", `Bearer ${options.token}`);
-      headers.set("chatgpt-account-id", options.accountId);
-      headers.set("originator", getCodexOriginator());
+      if (provider === "openai-codex") {
+        if (options.accountId) headers.set("chatgpt-account-id", options.accountId);
+        headers.set("originator", getCodexOriginator());
+      }
       headers.set("accept", accept);
       if (accept === "text/event-stream") {
         headers.set("content-type", "application/json");
@@ -101,7 +124,7 @@ export function createTransport(options: TransportOptions): CodexTransport {
       return headers;
     },
     resolveEndpoint(path) {
-      return resolveCodexEndpoint(baseUrl, path);
+      return resolveCodexEndpoint(baseUrl, path, provider);
     },
     resolveSearchEndpoint() {
       return resolveCodexSearchEndpoint(baseUrl);

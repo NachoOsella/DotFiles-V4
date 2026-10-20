@@ -49,6 +49,8 @@ check_file "$DOTFILES_DIR/systemd-user/.config/systemd/user/clean-arch.timer"
 
 check_sorted_unique "$PACKAGES_DIR/pacman.txt"
 check_sorted_unique "$PACKAGES_DIR/aur.txt"
+check_sorted_unique "$PACKAGES_DIR/pc-pacman.txt"
+check_sorted_unique "$PACKAGES_DIR/pc-aur.txt"
 check_sorted_unique "$(host_services_dir "$HOST")/system.txt"
 check_sorted_unique "$(host_services_dir "$HOST")/user.txt"
 
@@ -61,6 +63,7 @@ SHELL_SCRIPTS=(
 	"$DOTFILES_DIR/scripts/bootstrap.sh"
 	"$DOTFILES_DIR/scripts/preflight.sh"
 	"$DOTFILES_DIR/scripts/install-packages.sh"
+	"$DOTFILES_DIR/scripts/install-pc-apps.sh"
 	"$DOTFILES_DIR/scripts/apply-system.sh"
 	"$DOTFILES_DIR/scripts/enable-services.sh"
 	"$DOTFILES_DIR/scripts/capture-system.sh"
@@ -70,7 +73,6 @@ SHELL_SCRIPTS=(
 	"$DOTFILES_DIR/scripts/set-wallpaper.sh"
 	"$DOTFILES_DIR/rofi/.config/rofi/rofi-power-menu.sh"
 	"$DOTFILES_DIR/rofi/.config/rofi/rofi-wifi-menu.sh"
-	"$DOTFILES_DIR/hypr/.config/hypr/scripts/lid_handler.sh"
 	"$DOTFILES_DIR/hypr/.config/hypr/scripts/songdetail.sh"
 )
 

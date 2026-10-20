@@ -1,0 +1,3 @@
+gruvbox-dark-icons-gtk
+helium-browser-bin
+vesktop

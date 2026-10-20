@@ -169,6 +169,13 @@ export async function runStandaloneCommands(
     throw new CodexError("schema", "Codex standalone actions must be sent one per request");
   }
   assertSupportedStandaloneCombination(options.searchContextSize, options.freshness);
+  if (options.transport.provider === "openai") {
+    throw new CodexError(
+      "auth",
+      "codex_standalone_web requires the legacy Codex login (`/login openai-codex`). " +
+        "The OpenAI (ChatGPT subscription) login does not expose `/alpha/search`; use `codex_search` instead.",
+    );
+  }
 
   const {
     transport,

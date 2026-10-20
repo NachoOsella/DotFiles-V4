@@ -3,22 +3,18 @@ pragma Singleton
 import QtQuick
 import Quickshell
 import Quickshell.Io
-import Quickshell.Networking
 
 Singleton {
     id: root
 
-    readonly property var wifiDevice: Networking.devices.values.find(device => device.type === DeviceType.Wifi) ?? null
-    readonly property var wiredDevice: Networking.devices.values.find(device => device.type === DeviceType.Wired) ?? null
-    readonly property bool wifiAvailable: wifiDevice !== null && Networking.wifiHardwareEnabled
-    readonly property bool wifiEnabled: wifiAvailable && Networking.wifiEnabled
-    readonly property bool wifiConnected: wifiDevice !== null && wifiDevice.connected
-    readonly property bool wiredConnected: wiredDevice !== null && wiredDevice.connected
+    property var status: ({})
+    readonly property bool wifiAvailable: status.wifiAvailable ?? false
+    readonly property bool wifiEnabled: status.wifiEnabled ?? false
+    readonly property bool wifiConnected: status.wifiConnected ?? false
+    readonly property bool wiredConnected: status.wiredConnected ?? false
     readonly property bool connected: wiredConnected || wifiConnected
-    // The active access point can be absent from the scan model, so use the device link as the source of truth.
-    readonly property var connectedNetwork: wifiDevice ? wifiDevice.networks.values.find(network => network.connected) ?? null : null
-    readonly property string ssid: connectedNetwork ? connectedNetwork.name : ""
-    readonly property real signalStrength: connectedNetwork ? connectedNetwork.signalStrength : 0
+    readonly property string ssid: status.ssid ?? ""
+    readonly property real signalStrength: status.signalStrength ?? 0
     readonly property string connectionLabel: {
         if (!connected)
             return wifiEnabled ? "Disconnected" : "Off";
@@ -26,9 +22,9 @@ Singleton {
             return ssid;
         return wiredConnected ? "Wired" : "Connected";
     }
-    readonly property string interfaceName: wiredConnected ? wiredDevice.name : wifiDevice ? wifiDevice.name : ""
-    readonly property string address: wiredConnected ? wiredDevice.address : wifiDevice ? wifiDevice.address : ""
-    readonly property var networks: wifiDevice ? wifiDevice.networks.values : []
+    readonly property string interfaceName: status.interfaceName ?? ""
+    readonly property string address: status.address ?? ""
+    readonly property var networks: status.networks ?? []
     property real downloadBitsPerSecond: 0
     property real uploadBitsPerSecond: 0
     property real previousRxBytes: -1
@@ -63,29 +59,40 @@ Singleton {
         return (bits / 1000000000).toFixed(1) + " Gb/s";
     }
 
+    function request(action: var): void {
+        if (!iwd.running) {
+            connectionError("The iwd client is unavailable");
+            return;
+        }
+        iwd.write(JSON.stringify(action) + "\n");
+    }
+
     function toggleWifi(): void {
         if (wifiAvailable)
-            Networking.wifiEnabled = !Networking.wifiEnabled;
+            request({action: "toggle"});
     }
 
     function refreshScan(): void {
-        if (!wifiDevice || !wifiEnabled)
-            return;
-        wifiDevice.scannerEnabled = true;
-        scanStopTimer.restart();
+        if (wifiEnabled)
+            request({action: "scan"});
     }
 
     function connectNetwork(network: var, password: string): void {
         if (!network)
             return;
-        if (network.connected)
-            network.disconnect();
-        else if (network.known)
-            network.connect();
-        else if (network.security === WifiSecurityType.Open)
-            network.connectWithPsk("");
-        else if (password.length > 0)
-            network.connectWithPsk(password);
+        if (!network.known && network.type !== "open" && network.type !== "psk") {
+            connectionError("Configure this enterprise network with iwctl first");
+            return;
+        }
+        request({action: network.connected ? "disconnect" : "connect", path: network.path, password: password});
+    }
+
+    onInterfaceNameChanged: {
+        previousRxBytes = -1;
+        previousTxBytes = -1;
+        previousSampleTime = 0;
+        downloadBitsPerSecond = 0;
+        uploadBitsPerSecond = 0;
     }
 
     function consumeSample(): void {
@@ -136,12 +143,27 @@ Singleton {
         }
     }
 
-    Timer {
-        id: scanStopTimer
-        interval: 10000
-        onTriggered: {
-            if (root.wifiDevice)
-                root.wifiDevice.scannerEnabled = false;
+    Process {
+        id: iwd
+        command: ["python3", Qt.resolvedUrl("../scripts/iwd-client.py").toString().replace(/^file:\/\//, ""), "watch"]
+        stdinEnabled: true
+        running: true
+        stdout: SplitParser {
+            onRead: data => {
+                try {
+                    const message = JSON.parse(data);
+                    if (message.status)
+                        root.status = message.status;
+                    if (message.error)
+                        root.connectionError(message.error);
+                } catch (error) {
+                    root.connectionError("Invalid response from the iwd client");
+                }
+            }
+        }
+        onExited: {
+            root.status = ({});
+            root.connectionError("The iwd client stopped. Restart Quickshell to reconnect.");
         }
     }
 }

@@ -1,0 +1,3 @@
+[D-BUS Service]
+Name=org.freedesktop.FileManager1
+Exec=/usr/bin/env QT_QPA_PLATFORMTHEME=qt6ct /usr/bin/pcmanfm-qt --daemon-mode

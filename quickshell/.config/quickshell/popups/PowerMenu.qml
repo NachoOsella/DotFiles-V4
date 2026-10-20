@@ -35,7 +35,7 @@ PopupSurface {
         else if (action === "suspend")
             Quickshell.execDetached(["systemctl", "suspend"]);
         else if (action === "logout")
-            Quickshell.execDetached(["hyprctl", "dispatch", "exit"]);
+            Quickshell.execDetached(["hyprctl", "dispatch", "hl.dsp.exit()"]);
         else if (action === "reboot")
             Quickshell.execDetached(["systemctl", "reboot"]);
         else if (action === "poweroff")

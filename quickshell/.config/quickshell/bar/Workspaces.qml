@@ -65,12 +65,7 @@ Rectangle {
                     anchors.fill: parent
                     hoverEnabled: true
                     cursorShape: Qt.PointingHandCursor
-                    onClicked: {
-                        if (workspaceButton.workspace)
-                            workspaceButton.workspace.activate();
-                        else
-                            Hyprland.dispatch("workspace " + workspaceButton.workspaceId);
-                    }
+                    onClicked: Hyprland.dispatch("hl.dsp.focus({workspace = " + workspaceButton.workspaceId + "})")
                 }
             }
         }
@@ -81,6 +76,6 @@ Rectangle {
         hoverEnabled: true
         acceptedButtons: Qt.NoButton
         cursorShape: Qt.PointingHandCursor
-        onWheel: wheel => Hyprland.dispatch(wheel.angleDelta.y > 0 ? "workspace e-1" : "workspace e+1")
+        onWheel: wheel => Hyprland.dispatch(wheel.angleDelta.y > 0 ? "hl.dsp.focus({workspace = \"e-1\"})" : "hl.dsp.focus({workspace = \"e+1\"})")
     }
 }

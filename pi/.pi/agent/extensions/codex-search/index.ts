@@ -31,7 +31,12 @@ import {
   loadConfig,
   type ResolvedConfig,
 } from "./src/config.ts";
-import { resolveCodexAccountId } from "./src/pi-auth.ts";
+import {
+  OPENAI_CODEX_PROVIDER,
+  OPENAI_PROVIDER,
+  resolvePiAuth,
+  type ResolvedPiAuth,
+} from "./src/pi-auth.ts";
 import {
   FINAL_TOOL_TEXT_LIMIT_BYTES,
   FINAL_TOOL_TRUNCATION_MARKER,
@@ -42,7 +47,8 @@ import {
   type ThrottledUpdater,
 } from "./src/limits.ts";
 
-const OPENAI_CODEX_PROVIDER = "openai-codex";
+const OPENAI_AUTH_HINT =
+  "Run `/login openai` and choose `Sign in with ChatGPT` (or `/login openai-codex` for the legacy Codex login).";
 
 interface QuerySuccess {
   query: string;
@@ -155,7 +161,7 @@ function buildToolDescription(config: ResolvedConfig): string {
   if (config.searchApi === "standalone") {
     return `${toolName}: standalone webpage actions for explicit page inspection: open one URL, find text, click link ids, screenshot pages, or run finance/weather/sports/time lookups. Not for web search.`;
   }
-  return `${toolName}: search the web using the configured ChatGPT Codex subscription.`;
+  return `${toolName}: search the web using the configured ChatGPT subscription.`;
 }
 
 function buildSearchParametersSchema(config: ResolvedConfig) {
@@ -305,7 +311,7 @@ function buildTool(config: ResolvedConfig) {
     promptSnippet:
       config.searchApi === "standalone"
         ? `${config.toolName}: use only for explicit standalone webpage actions: open one URL, find text in that opened page, follow page link ids, take screenshots, or run finance/weather/sports/time lookups. Do not use for web search.`
-        : `${config.toolName}: search the web using the configured ChatGPT Codex subscription.`,
+        : `${config.toolName}: search the web using the configured ChatGPT subscription.`,
     promptGuidelines:
       config.searchApi === "standalone"
         ? [
@@ -316,7 +322,7 @@ function buildTool(config: ResolvedConfig) {
             "For follow-up find/click/screenshot, use the same URL string the user opened. Do not switch between www and non-www hosts, add/remove trailing paths, or upgrade search_context_size just to retry.",
             "Do not use search_context_size low in standalone; use medium unless the user explicitly asks for high.",
             "If a follow-up page action fails because the page was not opened in this session, open the exact requested URL once, then retry the follow-up once.",
-            "Do not ask the user for an access token; the tool uses pi's configured OpenAI Codex subscription.",
+            "Do not ask the user for an access token; the tool uses pi's configured OpenAI ChatGPT subscription.",
           ]
         : [
             `Use ${config.toolName} when current or source-backed information is needed.`,
@@ -326,7 +332,7 @@ function buildTool(config: ResolvedConfig) {
               : "codex_standalone_web is not enabled in this session; if the user asks for webpage actions, say that the Standalone web tool must be enabled in /codex-search-settings.",
             "Do not call codex_standalone_web merely to improve or duplicate a codex_search result.",
             "Choose freshness per request: use 'live' for news, prices, releases, availability, laws, schedules, or other time-sensitive facts; use 'cached' for stable facts and docs; use 'indexed' when OpenAI-indexed web access is enough but live browsing is not needed.",
-            "Do not ask the user for an access token; the tool uses pi's configured OpenAI Codex subscription.",
+            "Do not ask the user for an access token; the tool uses pi's configured OpenAI ChatGPT subscription.",
           ],
     parameters: buildToolParameters(config),
     // Reach the network; the external web is an open world and the call
@@ -371,24 +377,28 @@ function buildTool(config: ResolvedConfig) {
 
       const startedAt = Date.now();
 
-      const token = await ctx.modelRegistry.getApiKeyForProvider(OPENAI_CODEX_PROVIDER);
-      if (!token) {
-        const err = new CodexError(
+      const auth = await resolvePiAuth(ctx.modelRegistry, ctx.model?.provider);
+      if (!auth) {
+        throw new CodexError(
           "auth",
-          "OpenAI Codex subscription is not configured. Run `/login openai-codex` and choose ChatGPT Plus/Pro.",
+          `OpenAI ChatGPT subscription is not configured. ${OPENAI_AUTH_HINT}`,
         );
-        throw err;
       }
-
-      const accountId = resolveCodexAccountId(token, ctx.modelRegistry);
-      if (!accountId) {
+      if (auth.provider === OPENAI_CODEX_PROVIDER && !auth.accountId) {
         throw new CodexError(
           "auth",
           "OpenAI Codex account id was not found in stored credentials or access token. Re-run `/login openai-codex`.",
         );
       }
+      if (config.searchApi === "standalone" && auth.provider === OPENAI_PROVIDER) {
+        throw new CodexError(
+          "auth",
+          "codex_standalone_web requires the legacy Codex login (`/login openai-codex`). " +
+            "The OpenAI (ChatGPT subscription) login only supports `codex_search`.",
+        );
+      }
 
-      const model = await resolveSearchModel(ctx, token, accountId, config, signal);
+      const model = await resolveSearchModel(ctx, auth, config, signal);
       const freshness = params.freshness ?? config.defaultFreshness;
       let searchContextSize = params.search_context_size ?? config.defaultSearchContextSize;
       if (config.searchApi === "standalone") {
@@ -400,8 +410,9 @@ function buildTool(config: ResolvedConfig) {
       }
 
       const transport = createTransport({
-        token,
-        accountId,
+        token: auth.token,
+        accountId: auth.accountId,
+        provider: auth.provider,
         baseUrl: config.baseUrl,
       });
 
@@ -824,24 +835,33 @@ export default function codexWebSearchExtension(pi: ExtensionAPI) {
 
 async function resolveSearchModel(
   ctx: ExtensionContext,
-  token: string,
-  accountId: string,
+  auth: ResolvedPiAuth,
   config: ResolvedConfig,
   signal: AbortSignal | undefined,
 ): Promise<string> {
   if (config.model) return config.model;
-  if (ctx.model?.provider === OPENAI_CODEX_PROVIDER) return ctx.model.id;
+  const activeModel = ctx.model;
+  if (auth.provider === OPENAI_CODEX_PROVIDER && activeModel?.provider === OPENAI_CODEX_PROVIDER) {
+    return activeModel.id;
+  }
 
   const models = await fetchCodexModels({
-    token,
-    accountId,
+    token: auth.token,
+    accountId: auth.accountId,
+    provider: auth.provider,
     baseUrl: config.baseUrl,
     clientVersion: config.clientVersion,
     signal,
   });
+  if (activeModel?.provider === auth.provider && models.some((m) => m.id === activeModel.id)) {
+    return activeModel.id;
+  }
   const model = selectDefaultModel(models);
   if (!model) {
-    throw new CodexError("unknown", "Codex model list is empty.");
+    throw new CodexError(
+      "unknown",
+      `${auth.provider === OPENAI_PROVIDER ? "OpenAI" : "Codex"} model list is empty.`,
+    );
   }
   return model;
 }

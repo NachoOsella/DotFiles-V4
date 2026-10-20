@@ -1,4 +1,7 @@
+pragma ComponentBehavior: Bound
+
 import QtQuick
+import QtQuick.Controls as Controls
 import "../components"
 import "../config"
 import "../services"
@@ -8,6 +11,7 @@ PopupSurface {
 
     popupName: "control"
     surfaceWidth: 430
+    needsKeyboardFocus: true
 
     Column {
         width: parent.width
@@ -110,6 +114,66 @@ PopupSurface {
                 iconColor: BatteryService.charging ? Theme.green : BatteryService.percentage <= 15 ? Theme.red : Theme.fg0
                 label: "Battery"
                 detail: BatteryService.percentage + "%"
+            }
+
+            PopupRow {
+                width: parent.width
+                label: "Power mode"
+                detail: BatteryService.powerProfileName
+            }
+
+            Row {
+                id: powerModes
+
+                width: parent.width
+                spacing: 7
+
+                Repeater {
+                    model: ["Automatic", "Performance"]
+
+                    delegate: Controls.Button {
+                        id: modeButton
+
+                        required property int index
+                        required property string modelData
+                        readonly property bool automatic: index === 0
+
+                        width: (powerModes.width - powerModes.spacing) / 2
+                        height: 36
+                        text: modelData
+                        checkable: true
+                        autoExclusive: true
+                        checked: automatic ? BatteryService.automaticProfiles : !BatteryService.automaticProfiles
+                        enabled: automatic || BatteryService.hasPerformanceProfile
+                        hoverEnabled: true
+                        focus: checked
+
+                        onClicked: {
+                            if (automatic)
+                                BatteryService.setAutomaticMode();
+                            else
+                                BatteryService.setPerformanceMode();
+                        }
+
+                        contentItem: StyledText {
+                            text: modeButton.text
+                            color: !modeButton.enabled ? Theme.grey1 : modeButton.checked ? Theme.bg0 : Theme.fg0
+                            font.pixelSize: Settings.smallFontSize
+                            font.weight: modeButton.checked ? Font.DemiBold : Font.Normal
+                            horizontalAlignment: Text.AlignHCenter
+                            verticalAlignment: Text.AlignVCenter
+                            elide: Text.ElideRight
+                        }
+
+                        background: Rectangle {
+                            radius: 2
+                            color: modeButton.checked ? (modeButton.down ? Theme.aqua : Theme.green)
+                                : modeButton.hovered || modeButton.down ? Theme.bg4 : Theme.statusline2
+                            border.width: modeButton.activeFocus ? 1 : 0
+                            border.color: Theme.fg0
+                        }
+                    }
+                }
             }
 
             PopupRow {

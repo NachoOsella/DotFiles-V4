@@ -17,8 +17,9 @@ import {
   type SearchContextSize,
   type StandaloneCommandsOptions,
 } from "../src/codex.ts";
+import type { OpenAIAuthProvider } from "../src/pi-auth.ts";
 
-const PROVIDER = "openai-codex";
+const PROVIDERS: readonly OpenAIAuthProvider[] = ["openai", "openai-codex"];
 const DEFAULT_AUTH_PATH = join(homedir(), ".pi", "agent", "auth.json");
 const DEFAULT_QUERY = "OpenAI Codex release notes";
 const FRESHNESS_VALUES: readonly Freshness[] = ["live", "indexed", "cached"];
@@ -49,7 +50,7 @@ interface AuthCredential {
 }
 
 interface AuthFile {
-  [PROVIDER]?: AuthCredential;
+  [provider: string]: AuthCredential | undefined;
 }
 
 interface E2eResult {
@@ -70,8 +71,9 @@ interface E2eResult {
 }
 
 interface Runtime {
+  provider: OpenAIAuthProvider;
   token: string;
-  accountId: string;
+  accountId?: string;
   model: string;
   baseUrl?: string;
 }
@@ -163,21 +165,22 @@ async function main(): Promise<void> {
 }
 
 async function buildRuntime(options: CliOptions): Promise<Runtime> {
-  const auth = await loadAuth(options.authPath);
-  const token = readString(auth.access, `${PROVIDER}.access`);
-  const accountId = readOptionalString(auth.accountId) ?? extractAccountIdFromToken(token);
-  if (!accountId) {
-    throw new Error(`${PROVIDER}.accountId is missing and could not be decoded from access token`);
+  const { provider, credential } = await loadAuth(options.authPath);
+  const token = readString(credential.access, `${provider}.access`);
+  const accountId = readOptionalString(credential.accountId) ?? extractAccountIdFromToken(token);
+  if (provider === "openai-codex" && !accountId) {
+    throw new Error(`${provider}.accountId is missing and could not be decoded from access token`);
   }
-  warnIfExpired(auth.expires);
-  const model = options.model ?? (await resolveModel(token, accountId, options.baseUrl));
-  return { token, accountId, model, baseUrl: options.baseUrl };
+  warnIfExpired(credential.expires);
+  const model = options.model ?? (await resolveModel(provider, token, accountId, options.baseUrl));
+  return { provider, token, accountId, model, baseUrl: options.baseUrl };
 }
 
 function createRuntimeTransport(runtime: Runtime): CodexTransport {
   return createTransport({
     token: runtime.token,
     accountId: runtime.accountId,
+    provider: runtime.provider,
     baseUrl: runtime.baseUrl,
   });
 }
@@ -186,6 +189,7 @@ function createRecordingTransport(runtime: Runtime, requestIds: string[]): Codex
   return createTransport({
     token: runtime.token,
     accountId: runtime.accountId,
+    provider: runtime.provider,
     baseUrl: runtime.baseUrl,
     fetchImpl: (async (input: string | URL | Request, init?: RequestInit) => {
       const id = readBodyId(init?.body);
@@ -530,24 +534,29 @@ async function withTimedResult(
 }
 
 async function resolveModel(
+  provider: OpenAIAuthProvider,
   token: string,
-  accountId: string,
+  accountId: string | undefined,
   baseUrl: string | undefined,
 ): Promise<string> {
-  const models = await fetchCodexModels({ token, accountId, baseUrl });
+  const models = await fetchCodexModels({ token, accountId, provider, baseUrl });
   const model = selectDefaultModel(models);
-  if (!model) throw new Error("Codex model list is empty");
+  if (!model) throw new Error("OpenAI model list is empty");
   return model;
 }
 
-async function loadAuth(path: string): Promise<AuthCredential> {
+async function loadAuth(
+  path: string,
+): Promise<{ provider: OpenAIAuthProvider; credential: AuthCredential }> {
   const raw = await readFile(path, "utf-8");
   const parsed = JSON.parse(raw) as AuthFile;
-  const credential = parsed[PROVIDER];
-  if (!credential || typeof credential !== "object") {
-    throw new Error(`${PROVIDER} credential not found in ${path}`);
+  for (const provider of PROVIDERS) {
+    const credential = parsed[provider];
+    if (credential && typeof credential === "object") return { provider, credential };
   }
-  return credential;
+  throw new Error(
+    `OpenAI credential not found in ${path}. Run /login openai (Sign in with ChatGPT) or /login openai-codex.`,
+  );
 }
 
 function parseArgs(args: string[]): CliOptions {
@@ -713,7 +722,7 @@ function warnIfExpired(value: unknown): void {
   const expires = typeof value === "number" ? value : undefined;
   if (expires !== undefined && expires <= Date.now()) {
     console.warn(
-      "warning: stored openai-codex access token appears expired; run /login openai-codex in Pi if requests fail with auth errors",
+      "warning: stored OpenAI access token appears expired; run /login in Pi if requests fail with auth errors",
     );
   }
 }
@@ -777,16 +786,17 @@ function printHelp(): void {
 
 Default runs matrix, standalone action, standalone session, and concurrency suites.
 standalone/low is intentionally skipped because low-context standalone requests trigger Cloudflare.
+Standalone suites require the legacy openai-codex login; the official openai login only supports responses.
 
 Options:
-  --auth PATH              Pi auth file (default: ~/.pi/agent/auth.json)
+  --auth PATH              Pi auth file (default: ~/.pi/agent/auth.json; prefers openai, then openai-codex)
   --suite LIST             matrix, actions, session, concurrency, or comma list (default: all)
   --api LIST               responses, standalone, or comma list (default: both)
   --context LIST           low, medium, high, or comma list (default: all)
   --freshness LIST         live, indexed, cached, or comma list (default: all)
   --query TEXT             Query to run (default: ${DEFAULT_QUERY})
-  --model MODEL            Codex model id; otherwise resolves /codex/models default
-  --base-url URL           Override Codex base URL
+  --model MODEL            Model id; otherwise resolves the provider model catalog default
+  --base-url URL           Override the OpenAI/Codex API base URL
   --timeout-ms N           Per-case timeout (default: 45000)
   --concurrency LIST       Parallel requests per concurrency combo, e.g. 2,4,8 (default: 2,4)
 `);

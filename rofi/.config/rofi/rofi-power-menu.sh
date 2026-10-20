@@ -3,7 +3,7 @@
 set -euo pipefail
 
 ROFI_THEME="${ROFI_THEME:-${XDG_CONFIG_HOME:-$HOME/.config}/rofi/powermenu.rasi}"
-SESSION_ID="${XDG_SESSION_ID:-$(loginctl | awk '/tty|pts/ {print $1; exit}') }"
+SESSION_ID="${XDG_SESSION_ID:-$(loginctl | awk '/tty|pts/ {print $1; exit}')}"
 
 LOCK='  Lock'
 LOGOUT='  Logout'
@@ -13,7 +13,9 @@ REBOOT='  Reboot'
 SHUTDOWN='  Shutdown'
 
 run_lock() {
-    if command -v betterlockscreen >/dev/null 2>&1; then
+    if command -v hyprlock >/dev/null 2>&1; then
+        pidof hyprlock >/dev/null || hyprlock
+    elif command -v betterlockscreen >/dev/null 2>&1; then
         betterlockscreen -l
     elif command -v i3lock >/dev/null 2>&1; then
         i3lock
@@ -28,7 +30,7 @@ run_logout() {
     elif command -v bspc >/dev/null 2>&1; then
         bspc quit
     elif command -v hyprctl >/dev/null 2>&1; then
-        hyprctl dispatch exit
+        hyprctl dispatch 'hl.dsp.exit()'
     elif command -v qtile >/dev/null 2>&1; then
         qtile cmd-obj -o cmd -f shutdown
     fi

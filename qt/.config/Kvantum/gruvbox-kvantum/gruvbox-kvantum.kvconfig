@@ -76,13 +76,13 @@ shadowless_popup=false
 tooltip_blur_radius=0
 
 [GeneralColors]
-window.color=#3c3836
-base.color=#3c3836
+window.color=#1d2021
+base.color=#1d2021
 alt.base.color=#282828
-button.color=#3c3836
-light.color=#282828
-mid.light.color=#282828
-dark.color=#282828
+button.color=#282828
+light.color=#3c3836
+mid.light.color=#3c3836
+dark.color=#141617
 mid.color=#282828
 highlight.color=#a9b665
 inactive.highlight.color=#282828

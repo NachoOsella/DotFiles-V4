@@ -1,7 +1,7 @@
 {
   "name": "nacho-codex-search",
   "version": "0.1.6",
-  "description": "Personal Pi extension for web search through an existing OpenAI Codex subscription",
+  "description": "Personal Pi extension for web search through an existing OpenAI ChatGPT subscription",
   "keywords": [
     "chatgpt",
     "chatgpt-plus",
