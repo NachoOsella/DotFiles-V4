@@ -13,6 +13,7 @@ import Quickshell.Io
 import "bar"
 import "notifications"
 import "osd"
+import "screenshots"
 import "services"
 
 ShellRoot {
@@ -51,6 +52,15 @@ ShellRoot {
         }
     }
 
+    Variants {
+        model: Quickshell.screens
+
+        delegate: ScreenshotOverlay {
+            required property var modelData
+            screenInfo: modelData
+        }
+    }
+
     IpcHandler {
         target: "shell"
 
@@ -64,6 +74,10 @@ ShellRoot {
 
         function togglePowerMenu(): void {
             PopupManager.toggle("power", focusedScreenName());
+        }
+
+        function toggleScreenshotMenu(): void {
+            PopupManager.toggle("screenshot", focusedScreenName());
         }
 
         function togglePopup(name: string): void {

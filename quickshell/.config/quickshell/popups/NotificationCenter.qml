@@ -77,13 +77,12 @@ PopupSurface {
                             }
                             return "";
                         }
-                        readonly property string attachedImageSource: {
-                            const imageSource = notification.image.toString();
-                            return imageSource.length > 0 && imageSource !== appIconSource ? imageSource : "";
-                        }
+                        readonly property string imageSource: notification.image.toString()
+                        readonly property string iconSource: appIconSource.length > 0 ? appIconSource : imageSource
+                        readonly property string attachedImageSource: appIconSource.length > 0 && imageSource !== appIconSource ? imageSource : ""
 
                         width: listColumn.width
-                        implicitHeight: notificationContent.implicitHeight + 20
+                        implicitHeight: notificationContent.implicitHeight + 28
                         color: Theme.bg0
                         border.width: 1
                         border.color: Theme.border
@@ -95,24 +94,32 @@ PopupSurface {
                             anchors.right: parent.right
                             anchors.top: parent.top
                             anchors.margins: 14
-                            spacing: 8
+                            spacing: 10
 
-                            Image {
+                            Rectangle {
                                 id: appIcon
-                                width: 20
-                                height: 20
-                                visible: notificationItem.appIconSource.length > 0
-                                source: notificationItem.appIconSource
-                                asynchronous: true
-                                fillMode: Image.PreserveAspectFit
-                                sourceSize.width: 32
-                                sourceSize.height: 32
-                                smooth: true
+                                width: notificationItem.iconSource.length > 0 ? 36 : 0
+                                height: width
+                                visible: width > 0
+                                color: Theme.bg1
+                                radius: Settings.popupRadius
+
+                                Image {
+                                    anchors.centerIn: parent
+                                    width: 24
+                                    height: 24
+                                    source: notificationItem.iconSource
+                                    asynchronous: true
+                                    fillMode: Image.PreserveAspectFit
+                                    sourceSize.width: 32
+                                    sourceSize.height: 32
+                                    smooth: true
+                                }
                             }
 
                             Column {
-                                width: parent.width - appIcon.width - dismissButton.width - 2 * spacing
-                                spacing: 3
+                                width: parent.width - appIcon.width - dismissButton.width - 2 * notificationContent.spacing
+                                spacing: 5
 
                                 Row {
                                     width: parent.width
@@ -122,6 +129,7 @@ PopupSurface {
                                         text: notificationItem.notification.appName
                                         color: Theme.grey2
                                         font.pixelSize: 12
+                                        font.weight: Font.Medium
                                     }
 
                                     StyledText {
@@ -147,7 +155,7 @@ PopupSurface {
                                     text: notificationItem.notification.body
                                     color: Theme.fg0
                                     font.pixelSize: 13
-                                    font.weight: Font.Medium
+                                    font.weight: Font.Normal
                                     wrapMode: Text.Wrap
                                 }
 

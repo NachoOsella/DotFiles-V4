@@ -24,13 +24,12 @@ Rectangle {
         }
         return "";
     }
-    readonly property string attachedImageSource: {
-        const imageSource = notification.image.toString();
-        return imageSource.length > 0 && imageSource !== appIconSource ? imageSource : "";
-    }
+    readonly property string imageSource: notification.image.toString()
+    readonly property string iconSource: appIconSource.length > 0 ? appIconSource : imageSource
+    readonly property string attachedImageSource: appIconSource.length > 0 && imageSource !== appIconSource ? imageSource : ""
 
     width: 400
-    implicitHeight: content.implicitHeight + 26
+    implicitHeight: content.implicitHeight + 28
     color: Theme.bg1
     border.width: 1
     border.color: notification.urgency === NotificationUrgency.Critical ? Theme.red : Theme.border
@@ -41,42 +40,50 @@ Rectangle {
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.top: parent.top
-        anchors.leftMargin: 16
-        anchors.rightMargin: 8
-        anchors.topMargin: 12
+        anchors.leftMargin: 14
+        anchors.rightMargin: 10
+        anchors.topMargin: 14
         implicitHeight: Math.max(textColumn.implicitHeight, Math.max(appIcon.height, closeButton.implicitHeight))
         height: implicitHeight
 
-        // Small app icon, aligned with the first text line.
-        Image {
+        Rectangle {
             id: appIcon
-            width: root.appIconSource.length > 0 ? 20 : 0
-            height: root.appIconSource.length > 0 ? 20 : 0
+            width: root.iconSource.length > 0 ? 36 : 0
+            height: width
             visible: width > 0
             anchors.left: parent.left
             anchors.top: parent.top
-            source: root.appIconSource
-            asynchronous: true
-            fillMode: Image.PreserveAspectFit
-            sourceSize.width: 32
-            sourceSize.height: 32
-            smooth: true
+            color: Theme.bg0
+            radius: Settings.popupRadius
+
+            Image {
+                anchors.centerIn: parent
+                width: 24
+                height: 24
+                source: root.iconSource
+                asynchronous: true
+                fillMode: Image.PreserveAspectFit
+                sourceSize.width: 32
+                sourceSize.height: 32
+                smooth: true
+            }
         }
 
         Column {
             id: textColumn
             anchors.left: appIcon.right
-            anchors.leftMargin: appIcon.width > 0 ? 8 : 0
+            anchors.leftMargin: appIcon.width > 0 ? 12 : 0
             anchors.right: closeButton.left
             anchors.rightMargin: 8
             anchors.top: parent.top
-            spacing: 3
+            spacing: 5
 
             StyledText {
                 width: parent.width
                 text: notification.appName
-                color: Theme.grey2
+                color: notification.urgency === NotificationUrgency.Critical ? Theme.red : Theme.grey2
                 font.pixelSize: 12
+                font.weight: Font.Medium
             }
 
             StyledText {
@@ -94,7 +101,7 @@ Rectangle {
                 text: notification.body
                 color: Theme.fg0
                 font.pixelSize: 13
-                font.weight: Font.Medium
+                font.weight: Font.Normal
                 wrapMode: Text.Wrap
             }
 

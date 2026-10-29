@@ -57,6 +57,13 @@ PanelWindow {
         anchors.top: parent.top
         anchors.bottom: parent.bottom
 
+        IconButton {
+            visible: RecordingService.running
+            icon: "󰓛"
+            foreground: Theme.red
+            buttonHeight: Settings.barHeight
+            onClicked: RecordingService.stop()
+        }
         Separator { vertical: true; height: parent.height }
         NetworkIndicator { id: networkIndicator; screenName: root.screen.name }
         AudioIndicator { id: audioIndicator; screenName: root.screen.name }
@@ -118,4 +125,5 @@ PanelWindow {
         anchorItem: powerIndicator
         screenName: root.screen.name
     }
+
 }

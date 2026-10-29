@@ -15,7 +15,7 @@ end
 
 -- Session utilities.
 exec(mod .. " + Space", "hyprctl switchxkblayout current next")
-exec(mod .. " + S", "fish -i -c \"hyprshot -m region --freeze\"")
+exec(mod .. " + S", "qs ipc call shell toggleScreenshotMenu")
 exec(mod .. " + SHIFT + V", "~/.config/rofi/rofi-cliphist.sh")
 exec(mod .. " + period", "rofi -show emoji -theme ~/.config/rofi/emoji.rasi")
 exec(mod .. " + SHIFT + W", "~/.config/rofi/rofi-wifi-menu.sh")

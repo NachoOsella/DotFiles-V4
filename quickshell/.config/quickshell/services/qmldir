@@ -6,4 +6,5 @@ singleton BatteryService 1.0 BatteryService.qml
 singleton SystemService 1.0 SystemService.qml
 singleton BrightnessService 1.0 BrightnessService.qml
 singleton NotificationService 1.0 NotificationService.qml
+singleton RecordingService 1.0 RecordingService.qml
 singleton PopupManager 1.0 PopupManager.qml

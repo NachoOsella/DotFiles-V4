@@ -2,8 +2,9 @@
 
 hl.config({
     cursor = {
-        -- Hardware cursors freeze when crossing between these mixed-scale outputs.
-        no_hardware_cursors = 1,
+        -- CPU buffering avoids hardware cursor freezes between mixed-scale outputs.
+        no_hardware_cursors = 0,
+        use_cpu_buffer = 1,
     },
 
     input = {
