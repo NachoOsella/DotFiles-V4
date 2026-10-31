@@ -208,6 +208,12 @@ export const WaitAgentOutput = Type.Object(
                 'Synchronization note; child output arrives through the transcript.',
         }),
         timed_out: Type.Boolean(),
+        wake_reason: Type.Optional(
+            Type.String({
+                description:
+                    'Why the wait ended: mailbox activity, steering input, or timeout.',
+            })
+        ),
     },
     { additionalProperties: false }
 )
@@ -233,7 +239,22 @@ export const ListAgentsOutput = Type.Object(
                     model: Type.String(),
                     thinking_level: Type.Optional(Type.String()),
                     parent_path: Type.Union([Type.String(), Type.Null()]),
-                    has_pending_mail: Type.Boolean(),
+                    has_pending_mail: Type.Boolean({
+                        description:
+                            'An undelivered completion for this agent is waiting in the outbox.',
+                    }),
+                    has_pending_activity: Type.Optional(
+                        Type.Boolean({
+                            description:
+                                'Unobserved activity since the last wait_agent, independent of undelivered completions.',
+                        })
+                    ),
+                    blocked_reason: Type.Optional(
+                        Type.String({
+                            description:
+                                'Why this saved agent cannot be reopened; it stays listed but unusable.',
+                        })
+                    ),
                     running: Type.Boolean(),
                     waiting: Type.Boolean({
                         description:

@@ -1,6 +1,8 @@
 import type { ModelUsage, PricingSource } from '../../../shared/usage.ts'
 import type { ThinkingLevel } from '@earendil-works/pi-agent-core'
 import type {
+    AgentBlockedInfo,
+    AgentLimitReached,
     AgentUsageTotals,
     PendingCompletion,
     SessionToolCallCount,
@@ -33,6 +35,8 @@ export interface PersistedSubagentV2 {
     readonly runSequence: number
     readonly lastDeliveredRunSequence?: number
     readonly pendingCompletions?: readonly PendingCompletion[]
+    readonly limitReached?: AgentLimitReached
+    readonly blocked?: AgentBlockedInfo
     readonly lastResult?: string
     readonly task?: string
     readonly usage?: AgentUsageTotals
@@ -193,6 +197,12 @@ function normalizePersistedSubagentV2(
     )
     if (pendingCompletions.repaired) repaired = true
 
+    const limitReached = normalizeLimitReached(raw.limitReached)
+    if (limitReached.repaired) repaired = true
+
+    const blocked = normalizeBlocked(raw.blocked)
+    if (blocked.repaired) repaired = true
+
     const usage = normalizeUsage(raw.usage)
     if (usage.repaired) repaired = true
 
@@ -239,12 +249,46 @@ function normalizePersistedSubagentV2(
             ...(pendingCompletions.value !== undefined
                 ? { pendingCompletions: pendingCompletions.value }
                 : {}),
+            ...(limitReached.value !== undefined
+                ? { limitReached: limitReached.value }
+                : {}),
+            ...(blocked.value !== undefined ? { blocked: blocked.value } : {}),
             ...(lastResult !== undefined ? { lastResult } : {}),
             ...(task !== undefined ? { task } : {}),
             ...(usage.value !== undefined ? { usage: usage.value } : {}),
         },
         repaired,
     }
+}
+
+function normalizeBlocked(
+    value: unknown
+): Normalized<AgentBlockedInfo | undefined> {
+    if (value === undefined) return { value: undefined, repaired: false }
+    const raw = asRecord(value)
+    const code = raw === undefined ? undefined : nonEmptyString(raw.code)
+    const reason = raw === undefined ? undefined : nonEmptyString(raw.reason)
+    if (raw === undefined || code === undefined || reason === undefined) {
+        return { value: undefined, repaired: true }
+    }
+    return { value: { code, reason }, repaired: false }
+}
+
+function normalizeLimitReached(
+    value: unknown
+): Normalized<AgentLimitReached | undefined> {
+    if (value === undefined) return { value: undefined, repaired: false }
+    const raw = asRecord(value)
+    const kind = raw?.kind
+    const detail = raw === undefined ? undefined : nonEmptyString(raw.detail)
+    if (
+        raw === undefined ||
+        detail === undefined ||
+        (kind !== 'deadline' && kind !== 'requests' && kind !== 'tokens')
+    ) {
+        return { value: undefined, repaired: true }
+    }
+    return { value: { kind, detail }, repaired: false }
 }
 
 /**

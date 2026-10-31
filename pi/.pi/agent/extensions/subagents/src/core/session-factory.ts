@@ -1,4 +1,5 @@
 import { mkdir } from 'node:fs/promises'
+import { statSync } from 'node:fs'
 import { join } from 'node:path'
 import type { AgentMessage, ThinkingLevel } from '@earendil-works/pi-agent-core'
 import type { ModelRegistry } from '@earendil-works/pi-coding-agent'
@@ -13,6 +14,7 @@ import {
 } from '@earendil-works/pi-coding-agent'
 import type { AgentRecord } from '../domain/agent-record.ts'
 import type { ForkTurns } from '../domain/communication.ts'
+import { AgentBlockedError } from '../domain/errors.ts'
 import {
     INHERITED_SUMMARY_CUSTOM_TYPE,
     projectFork,
@@ -42,6 +44,11 @@ import {
     type AgentRuntime,
     type LiveActivity,
 } from './agent-runtime.ts'
+import {
+    checkOpenedSession,
+    checkSessionFile,
+    type SessionOwnershipMeta,
+} from './session-recovery.ts'
 
 import { SUBAGENT_META_CUSTOM_TYPE } from '../persistence/session-state.ts'
 
@@ -110,26 +117,74 @@ export class SessionFactory implements SubagentSessionFactory {
         })
         return await this.createRuntime(record, sessionManager, {
             cwd: parent.cwd,
-            model: parseModelIdentity(record.model),
+            model: this.modelIdentityFor(record),
             thinkingLevel: record.thinkingLevel ?? parent.thinkingLevel,
             activeTools: record.activeTools ?? parent.activeTools,
         })
     }
 
     async open(record: AgentRecord): Promise<AgentRuntime> {
-        if (!record.sessionFile) {
-            throw new Error(`Agent ${record.path} has no persistent session.`)
+        const rootSessionId = this.options.rootSessionId()
+        const file = checkSessionFile({
+            sessionFile: record.sessionFile,
+            rootSessionDir: this.options.rootSessionDir(),
+            rootSessionId,
+            expectedSessionId: record.sessionId,
+        })
+        if (!file.ok) {
+            throw this.blocked(
+                record,
+                file.reason ?? 'session path validation failed',
+                file.guidance ??
+                    'Start a new agent; no fallback session is used.'
+            )
         }
+        const sessionFile = file.sessionFile!
+        const expectedDir = file.expectedDir!
+        if (!isRegularFile(sessionFile)) {
+            throw this.blocked(
+                record,
+                'the recorded session file does not exist',
+                'Restore the session file or start a new agent; no replacement session is created.'
+            )
+        }
+        const model = this.modelIdentityFor(record)
         const cwd = record.cwd ?? process.cwd()
-        const sessionDir = this.options.rootSessionDir()
-        const sessionManager = SessionManager.open(
-            record.sessionFile,
-            sessionDir || undefined,
-            cwd
-        )
+        let sessionManager: SessionManager
+        try {
+            sessionManager = SessionManager.open(sessionFile, expectedDir, cwd)
+        } catch (error) {
+            throw this.blocked(
+                record,
+                `the recorded session file could not be opened: ${
+                    error instanceof Error ? error.message : String(error)
+                }`,
+                'Repair the session file or start a new agent; no replacement session is created.'
+            )
+        }
+        const identity = checkOpenedSession({
+            sessionFile,
+            expectedRootSessionId: rootSessionId,
+            expectedRecordRootSessionId: record.rootSessionId,
+            expectedSessionId: record.sessionId,
+            expectedAgentPath: record.path,
+            expectedParentPath: record.parentPath ?? null,
+            expectedRole: record.role,
+            actualSessionId: sessionManager.getSessionId(),
+            headerId: sessionManager.getHeader()?.id ?? null,
+            meta: readOwnershipMeta(sessionManager),
+        })
+        if (!identity.ok) {
+            throw this.blocked(
+                record,
+                identity.reason ?? 'session ownership validation failed',
+                identity.guidance ??
+                    'Start a new agent; no fallback session is used.'
+            )
+        }
         return await this.createRuntime(record, sessionManager, {
             cwd,
-            model: parseModelIdentity(record.model),
+            model,
             thinkingLevel: record.thinkingLevel ?? 'medium',
             activeTools: record.activeTools ?? [],
         })
@@ -157,8 +212,8 @@ export class SessionFactory implements SubagentSessionFactory {
             activeTools: readonly string[]
         }
     ): Promise<AgentRuntime> {
-        const model = resolveModel(this.options.getModelRegistry(), state.model)
-        const role = resolveRole(this.options.config, record.role)
+        const model = this.modelFor(record, state.model)
+        const role = this.roleFor(record)
         const resolution = resolveRoleTools(state.activeTools, role)
         const collaborationExclusions = collaborationToolNames().filter(
             (tool) =>
@@ -232,6 +287,51 @@ export class SessionFactory implements SubagentSessionFactory {
             throw error
         }
         return runtime
+    }
+
+    private blocked(
+        record: AgentRecord,
+        reason: string,
+        guidance: string
+    ): AgentBlockedError {
+        return new AgentBlockedError(record.path as string, reason, guidance)
+    }
+
+    private modelIdentityFor(record: AgentRecord): ModelIdentity {
+        try {
+            return parseModelIdentity(record.model)
+        } catch {
+            throw this.blocked(
+                record,
+                `recorded model "${record.model}" is not a provider/model identity`,
+                'Repair the record or start a new agent; no model is guessed.'
+            )
+        }
+    }
+
+    private roleFor(record: AgentRecord): ResolvedAgentRole {
+        try {
+            return resolveRole(this.options.config, record.role)
+        } catch {
+            const role = record.role?.trim() || 'default'
+            throw this.blocked(
+                record,
+                `agent_type "${role}" is not configured`,
+                'Restore the role in subagents.roles or start a new agent; no default role is substituted.'
+            )
+        }
+    }
+
+    private modelFor(record: AgentRecord, identity: ModelIdentity) {
+        try {
+            return resolveModel(this.options.getModelRegistry(), identity)
+        } catch {
+            throw this.blocked(
+                record,
+                `model "${identity.provider}/${identity.id}" is not available`,
+                'Restore the model provider/id or start a new agent; no fallback model is used.'
+            )
+        }
     }
 
     private async createResourceLoader(
@@ -389,6 +489,46 @@ function appendBranchSummary(
         details: { inherited: true, fromId: message.fromId },
         timestamp: message.timestamp,
     } as never)
+}
+
+function isRegularFile(path: string): boolean {
+    try {
+        return statSync(path).isFile()
+    } catch {
+        return false
+    }
+}
+
+/** Last persisted ownership entry for this child session. */
+function readOwnershipMeta(
+    sessionManager: SessionManager
+): SessionOwnershipMeta | null {
+    let meta: SessionOwnershipMeta | null = null
+    for (const entry of sessionManager.getEntries()) {
+        if (
+            entry.type !== 'custom' ||
+            entry.customType !== SUBAGENT_META_CUSTOM_TYPE
+        ) {
+            continue
+        }
+        const data = entry.data
+        if (!data || typeof data !== 'object') continue
+        const value = data as Record<string, unknown>
+        meta = {
+            rootSessionId:
+                typeof value.rootSessionId === 'string'
+                    ? value.rootSessionId
+                    : undefined,
+            path: typeof value.path === 'string' ? value.path : undefined,
+            parentPath:
+                typeof value.parentPath === 'string' ||
+                value.parentPath === null
+                    ? value.parentPath
+                    : undefined,
+            role: typeof value.role === 'string' ? value.role : undefined,
+        }
+    }
+    return meta
 }
 
 function parseModelIdentity(value: string): ModelIdentity {

@@ -96,6 +96,20 @@ agent. Failed runs render as `FINAL ERROR` with the error text.
 | `SUBAGENTS_MAX_LOADED=N`     | Loaded child sessions (default 16)                                                                                                       |
 | `SUBAGENTS_MAX_DEPTH=N`      | Allowed nesting after a direct child; direct children are depth 0 (default 1). This is a Pi safety limit that Codex V2 does not enforce. |
 
+Resource limits are opt-in through `subagents.limits`:
+
+| Setting | Effect |
+| --- | --- |
+| `runDeadlineMs` | Wall-clock ceiling for one child run; expiry aborts it |
+| `maxModelRequestsPerRun` | Native model requests allowed in one run |
+| `maxTreeTokens` | Shared child token budget for the whole root tree |
+| `warnAtRatio` | Fraction of the token budget that marks the warning state (default 0.8) |
+
+Absent limits are unlimited. An exhausted token budget refuses new `spawn_agent`
+and `followup_task` calls with `budget_exhausted_tokens`. A limit termination
+reports an error status with guidance, so the parent still receives a bounded
+result. The budget counts child usage only, not root model spending.
+
 `model` uses `provider/model-id`. `reasoning_effort` accepts `off`, `minimal`,
 `low`, `medium`, `high`, `xhigh`, or `max`. Overrides are valid with
 `fork_turns=none` or a bounded N. Full-history forks reject direct model and
@@ -109,6 +123,17 @@ Explicit JSON and files accept either the raw extension configuration or an
 object containing `subagents`. Malformed JSON, unreadable explicit files, and
 invalid integer overrides disable the extension with a diagnostic rather than
 silently enabling defaults. `SUBAGENTS_DISABLED=1` takes precedence.
+
+## Recovery and inspection
+
+A saved child is reopened only when its session file, header, and persisted
+identity match the expected root, directory, and agent path. A removed role or
+an unresolvable model blocks that agent with `agent_blocked` and actionable
+guidance. There is no silent fallback to another role, model, or new session.
+
+`list_agents` separates `has_pending_mail` (an undelivered completion in the
+outbox) from `has_pending_activity` (unobserved activity since the last wait).
+`wait_agent` adds `wake_reason` of `mailbox`, `steer`, or `timeout`.
 
 ## Branch ownership and shutdown
 
@@ -173,4 +198,5 @@ The extension-local `npm test` runs `src/*/*.test.ts`.
 
 Docs: `docs/PI_API_BINDINGS.md`, `docs/ARCHITECTURE.md`,
 `docs/CODEX_PARITY.md`, `docs/HARNESS_REVIEW.md`,
-`docs/IMPLEMENTATION_PLAN.md`, and `docs/M1_IMPLEMENTATION.md`.
+`docs/IMPLEMENTATION_PLAN.md`, `docs/M1_IMPLEMENTATION.md`, and
+`docs/M2_IMPLEMENTATION.md`.

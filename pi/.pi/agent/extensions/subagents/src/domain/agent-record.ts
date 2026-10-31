@@ -28,6 +28,18 @@ export interface SessionToolCallCount {
     readonly count: number
 }
 
+/** A saved identity that cannot be reopened under current host state. */
+export interface AgentBlockedInfo {
+    readonly code: string
+    readonly reason: string
+}
+
+/** A run terminated by a configured execution limit. */
+export interface AgentLimitReached {
+    readonly kind: 'deadline' | 'requests' | 'tokens'
+    readonly detail: string
+}
+
 /** Accumulated usage totals for one logical agent (plain data). */
 export interface AgentUsageTotals {
     readonly provider: string
@@ -69,6 +81,10 @@ export interface AgentRecord {
     readonly runStartedAt?: number
     readonly lastDeliveredRunSequence?: number
     readonly pendingCompletions?: readonly PendingCompletion[]
+    /** Present only when the last run terminated by a configured limit. */
+    readonly limitReached?: AgentLimitReached
+    /** Present when a cold reopen failed for a stable, actionable reason. */
+    readonly blocked?: AgentBlockedInfo
     readonly lastResult?: string
     readonly initiatingTurnId?: string
     /** Initial spawn prompt (the NEW_TASK payload) for UI display. */

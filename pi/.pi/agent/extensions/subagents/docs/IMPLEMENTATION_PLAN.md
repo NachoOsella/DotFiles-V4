@@ -242,8 +242,111 @@ Preserve the existing six-tool compatibility layer. Any additional versioned int
 | Root/branch/checkpoint integration | Root | Complete | Native entry receipt/steer/composition, branch navigation, failed checkpoint retry, strict config, supported-host guard |
 | M1 independent review | Review worker | Complete | Concurrent rollback, failed disposal, failed-retirement retention, pre-checkpoint shutdown, and Pi 1.0 prompt gap addressed |
 | M1 verification | Root | Complete | Workspace 238 pass / 6 expected skips; supported host 243 pass / 1 expected skip; full workspace 522 pass / 6 expected skips; both type-checks pass |
-| M2 bounded execution/recovery | Reassigned after M1 | Not started | Requires M1 integration |
+| M2 bounded execution/recovery | A: policy/config · B: enforcement · C: reopen | Complete | Limits 17 focused, run-limits 11, list-semantics 4, session-recovery 15, tool schema 12; unlimited path regression; review P1 blocked-state fixed |
 | M3 versioned features/evaluations | Reassigned after M2 | Not started | Requires explicit interface and evaluation design |
+
+## Milestone 2 execution plan
+
+M2 starts after the M1 commit (`7c0ff9c`). New limits ship disabled or
+unlimited by default: absent configuration must behave exactly like M1. No tool
+input schema changes. Additive optional output fields are allowed and documented.
+
+### Scope
+
+Included:
+
+- Per-run wall-clock deadline, per-run model-request limit, and a shared
+  root-tree token budget with pre-admission refusal.
+- Typed termination with a nonempty parent outcome and visible remaining limits.
+- Cold-reopen ownership and current-policy validation with blocked, actionable
+  failures instead of fallback execution.
+- Capacity-specific error codes and recovery guidance in error text.
+- Truthful `list_agents` mail versus activity semantics and `wait_agent` wake
+  reasons.
+- A repeatable benchmark for snapshot bytes, spawn/reopen latency, and usage
+  parsing before any incremental accounting change.
+
+Excluded and recorded as M3: persisted role/policy revision history, snapshot
+schema migration, task/run identity contracts, identity archival, and model
+quality evaluation.
+
+### Frozen internal contracts
+
+`src/core/limits.ts`:
+
+```ts
+export interface ResolvedLimits {
+    readonly runDeadlineMs?: number
+    readonly maxModelRequestsPerRun?: number
+    readonly maxTreeTokens?: number
+    readonly warnAtRatio: number
+    readonly unlimited: boolean
+}
+export function resolveLimits(config: CodexSubagentsConfig): ResolvedLimits
+export function describeLimits(limits: ResolvedLimits): string
+
+export interface TokenBudgetSnapshot {
+    readonly limit?: number
+    readonly consumed: number
+    readonly reserved: number
+    readonly remaining: number
+    readonly exhausted: boolean
+    readonly warning: boolean
+}
+export class TokenBudget {
+    constructor(limit?: number, warnAtRatio?: number)
+    snapshot(): TokenBudgetSnapshot
+    checkAdmission(): void
+    reserve(tokens: number): void
+    release(tokens: number): void
+    settle(reserved: number, actual: number): void
+    record(tokens: number): void
+}
+```
+
+Configuration block, all optional:
+
+```json
+{
+  "subagents": {
+    "limits": {
+      "runDeadlineMs": 900000,
+      "maxModelRequestsPerRun": 40,
+      "maxTreeTokens": 500000,
+      "warnAtRatio": 0.8
+    }
+  }
+}
+```
+
+`src/domain/errors.ts` is root-owned for M2 so both implementation workers can
+import the same typed errors. Each new error exposes a stable `code`, its limit,
+and `guidance` text.
+
+`AgentRecord.limitReached?: { kind: 'deadline' | 'requests' | 'tokens', detail: string }`
+is optional and persisted only when present. A limit termination settles as an
+error status with explicit guidance, so the parent receives a nonempty result.
+User-initiated `interrupt_agent` keeps `Interrupted` semantics.
+
+### Ownership
+
+| Worker | Files | Deliverable |
+| --- | --- | --- |
+| A | `src/config/config.ts`, `src/config/prompts.ts`, new `src/core/limits.ts`, `src/core/limits.test.ts`, `src/config/config-limits.test.ts`, `src/config/config-prompts.test.ts` | Pure limit policy, config validation, prompt-visible remaining limits |
+| B | `src/core/coordinator.ts`, `src/domain/agent-record.ts`, `src/domain/events.ts`, `src/persistence/schema.ts`, new `src/core/run-limits.test.ts`, new `src/core/list-semantics.test.ts` | Enforcement, termination, budget accounting, mail/activity semantics, wake reasons |
+| C | `src/core/session-factory.ts`, new `src/core/session-recovery.ts`, `src/core/session-recovery.test.ts`, `src/core/session-factory.test.ts` | Cold-reopen ownership and policy validation, blocked errors, no fallback |
+| Root | `index.ts`, `src/domain/errors.ts`, `src/tools/extension-tools.ts`, `src/tools/tool-specs.ts`, `shared/dashboard-state.ts`, docs, `bench/` | Error contracts, additive output fields, limit publication, benchmark, integration |
+
+### Verification order
+
+1. Each worker's focused tests.
+2. `npm run test:subagents` on the workspace SDK.
+3. Supplemental host suite on Pi 1.4.
+4. `npm run check` and `npm run check:extensions` with the cached executable.
+5. `npm test` for the whole workspace.
+6. Benchmark run with recorded numbers.
+7. Independent read-only review of enforcement races, budget accounting, and
+   reopen validation.
 
 ## Final verification
 
@@ -278,6 +381,21 @@ was rejected by Node; the valid serial invocation was
 No full interactive CLI lifecycle, live-provider quality evaluation, provider-
 driven compaction, filesystem crash/fault injection, shutdown timeout, or
 performance benchmark was run. These results do not replace those scenarios.
+
+## M2 verification
+
+| Command / target | Result |
+| --- | --- |
+| `npm run test:subagents`, workspace Pi 1.0.0 | 294 tests: 288 pass, 6 supported-host entry skips, zero failures |
+| Supplemental host suite, Pi 1.4.0 | 294 tests: 293 pass, 1 unsupported-host skip, zero failures |
+| `npm test`, full workspace | 578 tests: 572 pass, 6 expected entry skips, zero failures |
+| `npm run check` / `npm run check:extensions` | Exit 0 with the cached compiler |
+| `bench/benchmarks.ts` | 20k result: 40,671 B per agent snapshot, 811,863 B for 20 agents, result text stored twice; usage parse 2,000 turns 0.9 ms; spawn 21.3 ms; cold reopen 4.6 ms |
+
+Logs: `/tmp/pi-subagents-m2-host.log`, `/tmp/pi-subagents-m2-all.log`,
+`/tmp/pi-subagents-m2-format.log`. The benchmark shows usage parsing is cheap
+and snapshot duplication is the real cost, so incremental usage accounting is
+not justified in M2.
 
 ## Completion report requirements
 

@@ -24,6 +24,9 @@ Completed != destroyed.
 Forks copy structured AgentMessage values, never a text baseline prompt.
 A child inherits the caller's active tools, cwd, skills, and context files.
 Agent-count capacity != execution capacity.
+Limits are opt-in; absent limits reproduce unlimited M1 scheduling.
+A limit termination is a bounded error result, not a silent interruption.
+Cold reopen validates ownership and current policy instead of substituting.
 Coordinator-started runs reserve execution capacity before session initialization.
 A residency lease protects every runtime used by an operation.
 Dispatch != recipient transcript insertion != model processing.
@@ -82,6 +85,27 @@ If no execution slot is available, the supervisor calls `session.abort()` at
 `agent_start` and the child becomes `Interrupted`. Pi still invokes the stream
 function with an already-aborted signal, so providers must honor that signal.
 The extension message remains in the child transcript for a later follow-up.
+
+## Limits
+
+`src/core/limits.ts` resolves the optional `limits` block into a policy and
+owns the shared `TokenBudget`. The coordinator consumes it without adding a
+second scheduler:
+
+- One unref'd deadline timer per tracked run, cleared on settle, dispose,
+  detach, and shutdown.
+- Native `turn_start` counting per tracked run.
+- Positive usage deltas feed one budget shared by the whole root tree;
+  repeated capture never double counts, and restored records seed without
+  replaying history.
+- `spawn` and `followup_task` check admission before session creation, so an
+exhausted budget fails before expensive side effects.
+- Termination records `limitReached` on the agent record, persists it
+  optionally, and settles as a bounded error result so the parent still gets an
+  answer. `interrupt_agent` remains `Interrupted`.
+
+The budget counts child usage only. Root spending and in-flight overshoot are
+outside the guaranteed bound.
 
 ## Communication
 
@@ -142,6 +166,12 @@ Persistent children live below:
 The root session stores only the V3 graph snapshot. Child transcripts remain in
 their own Pi session files. Restoring the root restores unloaded identities;
 `SessionManager.open()` is called only when a target is used again.
+
+`src/core/session-recovery.ts` validates the saved file before opening it and
+the opened identity after: expected directory, `.jsonl` suffix and session-id
+basename, header identity, persisted agent metadata, and current root. Missing
+roles and unresolvable models block the agent with `AgentBlockedError` instead
+of falling back. Containment is lexical and is not a filesystem sandbox.
 
 Tree navigation retires the old coordinator before selecting another branch.
 It fences delivery, attempts a preliminary checkpoint, quiesces native runs,

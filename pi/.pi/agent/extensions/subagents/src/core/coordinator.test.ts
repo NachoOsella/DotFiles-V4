@@ -732,6 +732,7 @@ test('followup wakes a child blocked in wait_agent', async () => {
     assert.deepEqual(await waiting, {
         message: 'Wait interrupted by new input.',
         timedOut: false,
+        wakeReason: 'steer',
     })
     session.finishRun()
     await harness.coordinator.shutdown()

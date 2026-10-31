@@ -7,6 +7,18 @@
 
 import type { AgentRole } from './roles.ts'
 
+/** Optional runtime bounds. Omitted fields are unlimited. */
+export interface SubagentLimitsConfig {
+    /** Per-run wall-clock deadline. */
+    readonly runDeadlineMs?: number
+    /** Maximum model requests in one run. */
+    readonly maxModelRequestsPerRun?: number
+    /** Shared token budget for the whole root tree. */
+    readonly maxTreeTokens?: number
+    /** Warning threshold as a ratio of the token budget. */
+    readonly warnAtRatio: number
+}
+
 export interface CodexSubagentsConfig {
     readonly enabled: boolean
     /** Maximum logical child identities in one root tree. */
@@ -33,6 +45,8 @@ export interface CodexSubagentsConfig {
     readonly proactiveAt:
         'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
     readonly roles: Record<string, AgentRole>
+    /** Optional runtime bounds; absent means unlimited. */
+    readonly limits?: SubagentLimitsConfig
 }
 
 export const DEFAULT_SUBAGENTS_CONFIG: CodexSubagentsConfig = {
@@ -223,6 +237,77 @@ export function decodeConfig(input: unknown): CodexSubagentsConfig {
             )
         }
         ;(out as { mode: CodexSubagentsConfig['mode'] }).mode = raw.mode
+    }
+    if (raw.limits !== undefined) {
+        if (
+            typeof raw.limits !== 'object' ||
+            raw.limits === null ||
+            Array.isArray(raw.limits)
+        ) {
+            throw new ConfigValidationError('limits must be an object')
+        }
+        const limits = raw.limits as Record<string, unknown>
+        const asLimitMs = (value: unknown, name: string): number => {
+            if (
+                typeof value !== 'number' ||
+                !Number.isSafeInteger(value) ||
+                value < 1
+            ) {
+                throw new ConfigValidationError(
+                    `${name} must be an integer ms >= 1`
+                )
+            }
+            return value
+        }
+        const asLimitCount = (value: unknown, name: string): number => {
+            if (
+                typeof value !== 'number' ||
+                !Number.isSafeInteger(value) ||
+                value < 1
+            ) {
+                throw new ConfigValidationError(
+                    `${name} must be an integer >= 1`
+                )
+            }
+            return value
+        }
+        const runDeadlineMs =
+            limits.runDeadlineMs === undefined
+                ? undefined
+                : asLimitMs(limits.runDeadlineMs, 'limits.runDeadlineMs')
+        const maxModelRequestsPerRun =
+            limits.maxModelRequestsPerRun === undefined
+                ? undefined
+                : asLimitCount(
+                      limits.maxModelRequestsPerRun,
+                      'limits.maxModelRequestsPerRun'
+                  )
+        const maxTreeTokens =
+            limits.maxTreeTokens === undefined
+                ? undefined
+                : asLimitCount(limits.maxTreeTokens, 'limits.maxTreeTokens')
+        let warnAtRatio = 0.8
+        if (limits.warnAtRatio !== undefined) {
+            if (
+                typeof limits.warnAtRatio !== 'number' ||
+                !Number.isFinite(limits.warnAtRatio) ||
+                limits.warnAtRatio <= 0 ||
+                limits.warnAtRatio > 1
+            ) {
+                throw new ConfigValidationError(
+                    'limits.warnAtRatio must be a number > 0 and <= 1'
+                )
+            }
+            warnAtRatio = limits.warnAtRatio
+        }
+        ;(out as { limits?: SubagentLimitsConfig }).limits = {
+            ...(runDeadlineMs === undefined ? {} : { runDeadlineMs }),
+            ...(maxModelRequestsPerRun === undefined
+                ? {}
+                : { maxModelRequestsPerRun }),
+            ...(maxTreeTokens === undefined ? {} : { maxTreeTokens }),
+            warnAtRatio,
+        }
     }
     if (raw.roles !== undefined) {
         if (

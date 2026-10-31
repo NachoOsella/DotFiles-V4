@@ -116,6 +116,69 @@ describe('structured tool results match declared schemas', () => {
         })
     }
 
+    it('maps additive mail, activity and wake-reason fields only when present', async () => {
+        const listTool = tool('list_agents')
+        const listResult = await listTool.execute(
+            'call-1',
+            {},
+            undefined,
+            undefined,
+            undefined
+        )
+        const listed = listResult.details as {
+            agents: Array<Record<string, unknown>>
+        }
+        assert.equal(listed.agents[0]?.has_pending_mail, false)
+        assert.equal('has_pending_activity' in (listed.agents[0] ?? {}), false)
+
+        const waitTool = tool('wait_agent')
+        const waitResult = await waitTool.execute(
+            'call-2',
+            { timeout_ms: 10_000 },
+            undefined,
+            undefined,
+            undefined
+        )
+        assert.equal('wake_reason' in (waitResult.details as object), false)
+    })
+
+    it('reports why a saved agent is blocked without changing its status field', async () => {
+        const blocked = buildRootToolDefinitions({
+            ...manager,
+            list: () => [
+                {
+                    path: '/root/stale',
+                    status: 'Completed',
+                    residency: 'unloaded',
+                    model: 'provider/model',
+                    parentPath: '/root',
+                    hasPendingMail: false,
+                    hasPendingActivity: false,
+                    blockedReason: 'role "reviewer" is no longer configured',
+                    running: false,
+                    waiting: false,
+                },
+            ],
+        } as never).find(
+            (entry) => (entry as { name: string }).name === 'list_agents'
+        ) as unknown as StructuredTool
+        const result = await blocked.execute(
+            'call-1',
+            {},
+            undefined,
+            undefined,
+            undefined
+        )
+        const agent = (
+            result.details as {
+                agents: Array<{ agent_status: string; blocked_reason?: string }>
+            }
+        ).agents[0]
+        assert.equal(agent?.agent_status, 'Completed')
+        assert.match(agent?.blocked_reason ?? '', /no longer configured/)
+        assert.ok(Check(blocked.outputSchema as never, result.details as never))
+    })
+
     it('keeps the declared collaboration family and direct exposure', () => {
         assert.deepEqual(
             tools.map((entry) => entry.name),

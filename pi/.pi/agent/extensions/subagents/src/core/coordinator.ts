@@ -17,6 +17,7 @@ import { AgentStatus, type AgentResidency } from '../domain/agent-status.ts'
 import { ActivityFeed } from '../ui/activity-feed.ts'
 import type { ThinkingLevel, AgentMessage } from '@earendil-works/pi-agent-core'
 import type {
+    AgentLimitReached,
     AgentRecord,
     AgentUsageTotals,
     PendingCompletion,
@@ -33,11 +34,15 @@ import {
 import { formatCompletionResult } from '../domain/completion.ts'
 import {
     AgentAlreadyExistsError,
+    AgentBlockedError,
     AgentCapacityReachedError,
     AgentLoadFailedError,
     AgentNotFoundError,
     AgentSpawnFailedError,
     InvalidModelOverrideError,
+    ModelRequestLimitError,
+    RunDeadlineExceededError,
+    TokenBudgetExhaustedError,
     RootFollowupForbiddenError,
     SelfInterruptForbiddenError,
 } from '../domain/errors.ts'
@@ -66,6 +71,7 @@ import {
     type SubagentSessionFactory,
 } from './session-factory.ts'
 import { WaitHub } from './wait-hub.ts'
+import { resolveLimits, TokenBudget, type ResolvedLimits } from './limits.ts'
 import {
     clampWaitTimeout,
     type CodexSubagentsConfig,
@@ -74,6 +80,7 @@ import type {
     DeliveryCheckpointEvent,
     DeliveryCheckpointListener,
     SubagentEvent,
+    SubagentLimitsSnapshot,
 } from '../domain/events.ts'
 import type { PersistedSubagentStateV2 } from '../persistence/schema.ts'
 import { SUBAGENT_META_CUSTOM_TYPE } from '../persistence/session-state.ts'
@@ -89,11 +96,18 @@ export interface ListedAgent {
     readonly role?: string
     readonly model: string
     readonly parentPath: AgentPath | null
+    /** Stable blocked reason when a cold reopen failed. */
+    readonly blockedReason?: string
+    /** Undelivered completion intent in the outbox for this agent. */
     readonly hasPendingMail: boolean
+    /** WaitHub activity observed for this agent. */
+    readonly hasPendingActivity: boolean
     readonly running: boolean
     /** Blocked in `wait_agent` right now. */
     readonly waiting: boolean
 }
+
+type TimerHandle = ReturnType<typeof setTimeout> | number
 
 export interface CoordinatorSpawnOptions {
     readonly caller: AgentPath
@@ -111,9 +125,12 @@ export interface SpawnResult {
     readonly id: AgentId
 }
 
+export type WaitWakeReason = 'mailbox' | 'steer' | 'timeout'
+
 export interface WaitResult {
     readonly message: string
     readonly timedOut: boolean
+    readonly wakeReason: WaitWakeReason
 }
 
 export interface AgentTurnPreview {
@@ -136,6 +153,9 @@ export interface SubagentCoordinatorOptions {
     readonly deliveryReceipts?: boolean
     /** Child resource-loader warnings and extension errors. */
     readonly onLoaderDiagnostics?: (diagnostics: readonly string[]) => void
+    /** Test seam for deterministic run deadlines. */
+    readonly setTimer?: (callback: () => void, timeoutMs: number) => TimerHandle
+    readonly clearTimer?: (handle: TimerHandle) => void
 }
 
 interface TrackedRun {
@@ -144,6 +164,8 @@ interface TrackedRun {
     readonly permit?: ExecutionPermit
     nativeStarted: boolean
     settled: boolean
+    modelRequests: number
+    limitReached?: AgentLimitReached
     finish(error?: unknown): void
 }
 
@@ -202,6 +224,8 @@ export class SubagentCoordinator {
     private readonly waitHub = new WaitHub()
     private readonly activityFeed = new ActivityFeed()
     private readonly limiter: ExecutionLimiter
+    private readonly resolvedLimits: ResolvedLimits
+    private readonly budget: TokenBudget
     private readonly nativeRuns = new Map<AgentId, TrackedRun>()
     private readonly observedRuntimes = new WeakSet<AgentRuntime>()
     private readonly factory: SubagentSessionFactory
@@ -227,6 +251,13 @@ export class SubagentCoordinator {
     private readonly deliveryRetryTimers = new Set<
         ReturnType<typeof setTimeout>
     >()
+    private readonly deadlineTimers = new Map<
+        AgentId,
+        {
+            readonly sequence: number
+            readonly handle: TimerHandle
+        }
+    >()
     private deliveryGeneration = 0
     private deliveryDetached = false
     private shutdownPromise?: Promise<void>
@@ -235,6 +266,11 @@ export class SubagentCoordinator {
         this.options = options
         this.limiter = new ExecutionLimiter(
             options.config.maxConcurrentExecutions
+        )
+        this.resolvedLimits = resolveLimits(options.config)
+        this.budget = new TokenBudget(
+            this.resolvedLimits.maxTreeTokens,
+            this.resolvedLimits.warnAtRatio
         )
         this.rootId = newAgentId()
         const snapshot = safeRootSnapshot(options.getRootSnapshot)
@@ -341,6 +377,7 @@ export class SubagentCoordinator {
         this.outstandingDispatches.clear()
         for (const timer of this.deliveryRetryTimers) clearTimeout(timer)
         this.deliveryRetryTimers.clear()
+        this.clearAllDeadlines()
     }
 
     private get receiptsEnabled(): boolean {
@@ -386,6 +423,33 @@ export class SubagentCoordinator {
 
     getConfig(): CodexSubagentsConfig {
         return this.options.config
+    }
+
+    /** Visible run limits plus shared tree token accounting. */
+    limits(): SubagentLimitsSnapshot {
+        return {
+            ...this.budget.snapshot(),
+            ...(this.resolvedLimits.runDeadlineMs !== undefined
+                ? { runDeadlineMs: this.resolvedLimits.runDeadlineMs }
+                : {}),
+            ...(this.resolvedLimits.maxModelRequestsPerRun !== undefined
+                ? {
+                      maxModelRequestsPerRun:
+                          this.resolvedLimits.maxModelRequestsPerRun,
+                  }
+                : {}),
+            warnAtRatio: this.resolvedLimits.warnAtRatio,
+            unlimited: this.resolvedLimits.unlimited,
+        }
+    }
+
+    private emitLimitsChanged(): void {
+        this.emit({ _tag: 'LimitsChanged', limits: this.limits() })
+    }
+
+    private checkLimitAdmission(): void {
+        this.emitLimitsChanged()
+        this.budget.checkAdmission()
     }
 
     getRecordByPath(path: AgentPath): AgentRecord | undefined {
@@ -440,7 +504,11 @@ export class SubagentCoordinator {
                     role: record.role,
                     model: record.model,
                     parentPath: record.parentPath,
-                    hasPendingMail: this.waitHub.hasPending(
+                    ...(record.blocked
+                        ? { blockedReason: record.blocked.reason }
+                        : {}),
+                    hasPendingMail: this.hasUndeliveredCompletion(record.path),
+                    hasPendingActivity: this.waitHub.hasPending(
                         record.path as string
                     ),
                     running: runtime?.session.isStreaming ?? false,
@@ -463,6 +531,7 @@ export class SubagentCoordinator {
         if (this.shutdownFlag) {
             throw new AgentSpawnFailedError('session is shutting down')
         }
+        this.checkLimitAdmission()
         assertNonEmptyMessage(options.message)
         if (!isValidTaskName(options.taskName)) {
             throw new InvalidTaskNameError(options.taskName)
@@ -634,6 +703,7 @@ export class SubagentCoordinator {
         if (isRootPath(targetPath)) throw new RootFollowupForbiddenError()
         const target = this.getRecordByPath(targetPath)
         if (!target) throw new AgentNotFoundError(targetPath as string)
+        this.checkLimitAdmission()
         const lease = await this.leaseRuntime(target.id)
         const runtime = lease.runtime
         const comm = newTaskCommunication({
@@ -721,6 +791,7 @@ export class SubagentCoordinator {
             return {
                 message: withNote(WAIT_TIMED_OUT, clamped.note),
                 timedOut: true,
+                wakeReason: 'timeout',
             }
         }
         return {
@@ -729,6 +800,7 @@ export class SubagentCoordinator {
                 clamped.note
             ),
             timedOut: false,
+            wakeReason: outcome.kind,
         }
     }
 
@@ -767,6 +839,7 @@ export class SubagentCoordinator {
                 if (result.status === 'rejected') failures.push(result.reason)
             }
         } finally {
+            this.clearAllDeadlines()
             this.runtimes.clear()
             this.loading.clear()
             this.waitHub.clear()
@@ -804,6 +877,7 @@ export class SubagentCoordinator {
     }
 
     restore(state: unknown): void {
+        let added = false
         for (const record of restoreAgentRecords(
             state,
             this.options.rootSessionId()
@@ -812,7 +886,11 @@ export class SubagentCoordinator {
                 continue
             this.records.set(record.id, record)
             this.pathIndex.set(record.path, record.id)
+            const tokens = usageTokens(record.usage)
+            if (tokens > 0) this.budget.record(tokens)
+            added = true
         }
+        if (added) this.emitLimitsChanged()
     }
 
     private async startRun(
@@ -927,6 +1005,8 @@ export class SubagentCoordinator {
             status: AgentStatus.running(),
             runSequence: runtime.runSequence,
             runStartedAt: Date.now(),
+            limitReached: undefined,
+            blocked: undefined,
         }))
         let resolveRun!: () => void
         let rejectRun!: (error: unknown) => void
@@ -942,6 +1022,7 @@ export class SubagentCoordinator {
             permit,
             nativeStarted: false,
             settled: false,
+            modelRequests: 0,
             finish: (error) => {
                 if (run.settled) return
                 run.settled = true
@@ -950,13 +1031,60 @@ export class SubagentCoordinator {
                     runtime,
                     run.sequence,
                     error,
-                    permit
+                    permit,
+                    run.limitReached
                 ).then(resolveRun, rejectRun)
             },
         }
         this.nativeRuns.set(id, run)
         runtime.currentRun = completion
+        this.armDeadline(id, runtime, run.sequence)
         return run
+    }
+
+    private armDeadline(
+        id: AgentId,
+        runtime: AgentRuntime,
+        sequence: number
+    ): void {
+        const deadlineMs = this.resolvedLimits.runDeadlineMs
+        if (deadlineMs === undefined) return
+        const clearTimer = this.options.clearTimer ?? clearTimeout
+        const previous = this.deadlineTimers.get(id)
+        if (previous) clearTimer(previous.handle)
+        const setTimer = this.options.setTimer ?? setTimeout
+        const handle = setTimer(() => {
+            const run = this.nativeRuns.get(id)
+            if (
+                !run ||
+                run.runtime !== runtime ||
+                run.sequence !== sequence ||
+                run.settled ||
+                run.limitReached
+            ) {
+                return
+            }
+            const error = new RunDeadlineExceededError(deadlineMs)
+            run.limitReached = { kind: 'deadline', detail: error.message }
+            void runtime.session.abort().catch(() => undefined)
+        }, deadlineMs)
+        if (typeof handle !== 'number') handle.unref?.()
+        this.deadlineTimers.set(id, { sequence, handle })
+    }
+
+    private clearDeadline(id: AgentId, sequence?: number): void {
+        const timer = this.deadlineTimers.get(id)
+        if (!timer) return
+        if (sequence !== undefined && timer.sequence !== sequence) return
+        ;(this.options.clearTimer ?? clearTimeout)(timer.handle)
+        this.deadlineTimers.delete(id)
+    }
+
+    private clearAllDeadlines(): void {
+        for (const timer of this.deadlineTimers.values()) {
+            ;(this.options.clearTimer ?? clearTimeout)(timer.handle)
+        }
+        this.deadlineTimers.clear()
     }
 
     /** Observe extension-driven turns as well as coordinator-driven turns. */
@@ -1001,6 +1129,29 @@ export class SubagentCoordinator {
                         () => undefined
                     )
                 }
+            } else if (event.type === 'turn_start') {
+                const run = this.nativeRuns.get(record.id)
+                if (!run || run.runtime !== runtime || run.settled) return
+                run.modelRequests += 1
+                const limit = this.resolvedLimits.maxModelRequestsPerRun
+                if (limit === undefined || run.modelRequests <= limit) return
+                if (run.limitReached) {
+                    // A provider that ignored the first abort still gets a
+                    // repeated idempotent nudge on later turns.
+                    void runtime.session.abort().catch(() => undefined)
+                    return
+                }
+                // Pi compaction does not emit turn_start, so compaction work is
+                // not counted by maxModelRequestsPerRun.
+                const error = new ModelRequestLimitError(
+                    limit,
+                    run.modelRequests
+                )
+                run.limitReached = {
+                    kind: 'requests',
+                    detail: error.message,
+                }
+                void runtime.session.abort().catch(() => undefined)
             } else if (
                 event.type === 'turn_end' ||
                 event.type === 'compaction_end' ||
@@ -1046,6 +1197,7 @@ export class SubagentCoordinator {
                 unsubscribe()
                 const run = this.nativeRuns.get(record.id)
                 if (run?.runtime === runtime) {
+                    this.clearDeadline(record.id, run.sequence)
                     run.permit?.release()
                     this.nativeRuns.delete(record.id)
                 }
@@ -1065,7 +1217,8 @@ export class SubagentCoordinator {
         runtime: AgentRuntime,
         sequence: number,
         error: unknown,
-        permit?: ExecutionPermit
+        permit?: ExecutionPermit,
+        limitReached?: AgentLimitReached
     ): Promise<void> {
         const record = this.records.get(id)
         const registered = this.runtimes.get(id)
@@ -1075,12 +1228,14 @@ export class SubagentCoordinator {
             runtime.runSequence !== sequence
         ) {
             permit?.release()
+            this.clearDeadline(id, sequence)
             return
         }
         runtime.phase = 'settling'
         // The model run ended. Parent notification must not retain its slot.
         permit?.release()
         runtime.activePermitSequence = undefined
+        this.clearDeadline(id, sequence)
         try {
             this.captureUsage(id, runtime)
             this.captureRecentTurns(id, runtime)
@@ -1098,7 +1253,20 @@ export class SubagentCoordinator {
                 runtime.interruptRequested ||
                 lastAssistant?.stopReason === 'aborted' ||
                 isAbortError(error)
-            if (interrupted) {
+            if (limitReached) {
+                const status = AgentStatus.errored(limitReached.detail)
+                this.setRecord(id, (previous) => ({
+                    ...previous,
+                    status,
+                    limitReached,
+                }))
+                this.activityFeed.push(
+                    record.path,
+                    'final',
+                    limitReached.detail
+                )
+                await this.safeDeliverCompletion(record, sequence, status)
+            } else if (interrupted) {
                 this.setRecord(id, (previous) => ({
                     ...previous,
                     status: AgentStatus.interrupted(),
@@ -1135,6 +1303,7 @@ export class SubagentCoordinator {
             permit?.release()
             // agent_settled may synchronously schedule another SDK turn while
             // this run is still forwarding its result. Do not erase that run.
+            this.clearDeadline(id, sequence)
             if (runtime.runSequence === sequence) {
                 runtime.activePermitSequence = undefined
                 runtime.currentRun = undefined
@@ -1221,13 +1390,47 @@ export class SubagentCoordinator {
                 toolCalls: parsed.toolCalls,
                 ...(own ? { models: parsed.models } : {}),
             }
+            const previousUsage = this.records.get(id)?.usage
             this.setRecord(id, (previous) => ({ ...previous, usage }))
             this.emit({ _tag: 'UsageUpdated', agentId: id })
+            const delta = Math.max(
+                0,
+                usageTokens(usage) - usageTokens(previousUsage)
+            )
+            if (delta > 0) {
+                this.budget.record(delta)
+                this.emitLimitsChanged()
+                const snapshot = this.budget.snapshot()
+                if (snapshot.exhausted && snapshot.limit !== undefined) {
+                    const run = this.nativeRuns.get(id)
+                    if (
+                        run &&
+                        run.runtime === runtime &&
+                        !run.settled &&
+                        !run.limitReached
+                    ) {
+                        const error = new TokenBudgetExhaustedError(
+                            snapshot.consumed,
+                            snapshot.limit
+                        )
+                        run.limitReached = {
+                            kind: 'tokens',
+                            detail: error.message,
+                        }
+                        void runtime.session.abort().catch(() => undefined)
+                    }
+                }
+            }
         } catch {
             // Diagnostics must never affect run settlement.
         }
     }
 
+    /**
+     * Terminal results bypass token admission by design. A budget exhaustion
+     * must not strand a completed child result, so delivery is attempted even
+     * when new work would be refused.
+     */
     private async safeDeliverCompletion(
         record: AgentRecord,
         sequence: number,
@@ -1439,6 +1642,9 @@ export class SubagentCoordinator {
                             throw error
                         }
                     } else {
+                        // Completion delivery bypasses token/request admission
+                        // by design: results must still reach a parent after the
+                        // shared budget is exhausted.
                         await this.startRun(
                             parent.id,
                             communication,
@@ -1713,12 +1919,16 @@ export class SubagentCoordinator {
         }
     }
 
-    private hasPendingFor(recipient: AgentPath): boolean {
+    private hasUndeliveredCompletion(recipient: AgentPath): boolean {
         return [...this.records.values()].some((record) =>
             (record.pendingCompletions ?? []).some(
                 (item) => item.recipient === recipient
             )
         )
+    }
+
+    private hasPendingFor(recipient: AgentPath): boolean {
+        return this.hasUndeliveredCompletion(recipient)
     }
 
     /**
@@ -1911,7 +2121,15 @@ export class SubagentCoordinator {
 
     private ensureLoaded(id: AgentId): Promise<AgentRuntime> {
         const existing = this.runtimes.get(id)
-        if (existing) return Promise.resolve(existing)
+        if (existing) {
+            if (this.records.get(id)?.blocked) {
+                this.setRecord(id, (record) => ({
+                    ...record,
+                    blocked: undefined,
+                }))
+            }
+            return Promise.resolve(existing)
+        }
         const pending = this.loading.get(id)
         if (pending) return pending
         const record = this.records.get(id)
@@ -1960,9 +2178,18 @@ export class SubagentCoordinator {
             }
             throw new Error('session is shutting down')
         } catch (error) {
+            if (error instanceof AgentBlockedError) {
+                this.setRecord(id, (previous) => ({
+                    ...previous,
+                    residency: 'unloaded',
+                    blocked: { code: error.code, reason: error.reason },
+                }))
+                throw error
+            }
             this.setRecord(id, (previous) => ({
                 ...previous,
                 residency: 'unloaded',
+                blocked: undefined,
             }))
             throw new AgentLoadFailedError(
                 record.path as string,
@@ -2020,6 +2247,7 @@ export class SubagentCoordinator {
             sessionFile: runtime.session.sessionFile,
             activeTools: runtime.session.getActiveToolNames(),
             thinkingLevel: runtime.session.thinkingLevel,
+            blocked: undefined,
         }))
         this.captureRecentTurns(record.id, runtime)
         this.scheduleCompletionDrain()
@@ -2243,6 +2471,13 @@ function parseModel(value: string): { provider: string; id: string } {
         provider: value.slice(0, separator),
         id: value.slice(separator + 1),
     }
+}
+
+function usageTokens(usage: AgentUsageTotals | undefined): number {
+    if (!usage) return 0
+    const total =
+        usage.input + usage.output + usage.cacheRead + usage.cacheWrite
+    return Number.isSafeInteger(total) && total > 0 ? total : 0
 }
 
 function pendingCommunication(

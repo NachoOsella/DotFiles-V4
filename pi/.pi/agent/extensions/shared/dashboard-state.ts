@@ -53,6 +53,17 @@ export interface DiscordActivityState {
   active: boolean;
 }
 
+export interface SubagentLimitState {
+  /** Configured shared tree limit, absent when unlimited. */
+  limit?: number;
+  consumed: number;
+  reserved: number;
+  remaining: number;
+  exhausted: boolean;
+  warning: boolean;
+  unlimited: boolean;
+}
+
 export interface SubagentInfoState {
   running: number;
   /** Cumulative child cost, excluding the parent. */
@@ -61,6 +72,8 @@ export interface SubagentInfoState {
   promptTokens?: PromptTokens;
   /** Plain current snapshot; consumers validate it before use. */
   snapshot?: unknown;
+  /** Shared tree limit state; absent when no limits are configured. */
+  limits?: SubagentLimitState;
 }
 
 export function emptyModelInfoState(): ModelInfoState {
@@ -229,5 +242,22 @@ export function sanitizeSubagentInfoState(
     running,
     cost: Math.max(0, finiteOr(value.cost, 0)),
     promptTokens: sanitizePromptTokens(value.promptTokens),
+    ...(value.limits ? { limits: sanitizeSubagentLimits(value.limits) } : {}),
+  };
+}
+
+function sanitizeSubagentLimits(
+  value: SubagentLimitState,
+): SubagentLimitState {
+  return {
+    ...(isFiniteNumber(value.limit)
+      ? { limit: Math.max(0, Math.floor(value.limit)) }
+      : {}),
+    consumed: Math.max(0, finiteOr(value.consumed, 0)),
+    reserved: Math.max(0, finiteOr(value.reserved, 0)),
+    remaining: Math.max(0, finiteOr(value.remaining, 0)),
+    exhausted: value.exhausted === true,
+    warning: value.warning === true,
+    unlimited: value.unlimited !== false,
   };
 }

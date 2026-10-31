@@ -9,6 +9,7 @@
 
 import type { AgentId, AgentPath, ToolCallId, TurnId } from './ids.ts'
 import type { AgentResidency, AgentStatus } from './agent-status.ts'
+import type { TokenBudgetSnapshot } from '../core/limits.ts'
 
 export type DeliveryCheckpointReason =
     'intent-persisted' | 'receipt-accepted' | 'dispatch-retry'
@@ -25,6 +26,14 @@ export interface DeliveryCheckpointEvent {
 export type DeliveryCheckpointListener = (
     event: DeliveryCheckpointEvent
 ) => void | Promise<void>
+
+/** Visible limit policy plus shared tree token accounting. */
+export interface SubagentLimitsSnapshot extends TokenBudgetSnapshot {
+    readonly runDeadlineMs?: number
+    readonly maxModelRequestsPerRun?: number
+    readonly warnAtRatio: number
+    readonly unlimited: boolean
+}
 
 export type SubagentEvent =
     | { readonly _tag: 'UsageUpdated'; readonly agentId: AgentId }
@@ -68,4 +77,8 @@ export type SubagentEvent =
           readonly _tag: 'ToolActivity'
           readonly agentId: AgentId
           readonly summary: string
+      }
+    | {
+          readonly _tag: 'LimitsChanged'
+          readonly limits: SubagentLimitsSnapshot
       }

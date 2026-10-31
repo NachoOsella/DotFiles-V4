@@ -30,10 +30,22 @@ import {
 } from '../shared/dashboard-state.ts'
 import type { AgentPath } from './src/domain/ids.ts'
 import type { ParentExecutionSnapshot } from './src/domain/parent-snapshot.ts'
+import type { SubagentLimitsSnapshot } from './src/domain/events.ts'
 
 export { loadSubagentsConfig } from './src/config/entry-config.ts'
 
 const ROOT_PATH = '/root' as AgentPath
+
+/** Runtime budget state; the static configured limits live in the prompt. */
+function remainingLimitsLine(limits: SubagentLimitsSnapshot): string {
+    if (limits.unlimited || limits.limit === undefined) return ''
+    const state = limits.exhausted
+        ? 'Budget exhausted; new child runs are refused.'
+        : limits.warning
+          ? 'Budget is near exhaustion.'
+          : ''
+    return `Remaining shared tree tokens: ${limits.remaining} of ${limits.limit}.${state ? ` ${state}` : ''}`
+}
 
 function reportDiagnostic(
     ctx: ExtensionContext,
@@ -77,6 +89,7 @@ export default function subagentsExtension(pi: ExtensionAPI) {
     let retiring = false
     let retirement: Promise<void> | undefined
     let receiptTimer: ReturnType<typeof setTimeout> | undefined
+    let publishScheduled = false
     const initialized = new WeakSet<SubagentCoordinator>()
     const checkpoints = new WeakMap<SubagentCoordinator, string>()
 
@@ -88,11 +101,27 @@ export default function subagentsExtension(pi: ExtensionAPI) {
         if (!ctx) return
         const snapshot = manager.serialize(ctx.sessionManager.getSessionId())
         const { cost, ...promptTokens } = manager.usageTotals()
+        const limits = manager.limits()
+        // Only a token budget has a meaningful remaining count. A deadline or
+        // request limit is static configuration already described in the prompt.
+        const budget =
+            limits.limit === undefined
+                ? undefined
+                : {
+                      limit: limits.limit,
+                      consumed: limits.consumed,
+                      reserved: limits.reserved,
+                      remaining: limits.remaining,
+                      exhausted: limits.exhausted,
+                      warning: limits.warning,
+                      unlimited: false,
+                  }
         pi.events.emit(SUBAGENTS_INFO_CHANNEL, {
             running,
             cost,
             promptTokens,
             snapshot,
+            ...(budget ? { limits: budget } : {}),
         })
     }
 
@@ -209,9 +238,23 @@ export default function subagentsExtension(pi: ExtensionAPI) {
                 }
                 if (
                     event._tag === 'StatusChanged' ||
-                    event._tag === 'UsageUpdated'
+                    event._tag === 'UsageUpdated' ||
+                    event._tag === 'LimitsChanged'
                 ) {
-                    publishSubagentInfo(manager)
+                    // Usage refresh emits both usage and limit events; coalesce
+                    // them so one capture does not serialize the graph twice.
+                    if (!publishScheduled) {
+                        publishScheduled = true
+                        queueMicrotask(() => {
+                            publishScheduled = false
+                            if (
+                                generation === currentGeneration &&
+                                coordinator === manager
+                            ) {
+                                publishSubagentInfo(manager)
+                            }
+                        })
+                    }
                 }
                 if (
                     event._tag === 'StatusChanged' ||
@@ -338,7 +381,12 @@ export default function subagentsExtension(pi: ExtensionAPI) {
             mode: resolveConfiguredMode(config, thinking),
             activeSlotCount: config.maxConcurrentExecutions,
         })
-        event.systemPromptOptions.sections.subagents = fragment
+        const remaining = coordinator
+            ? remainingLimitsLine(coordinator.limits())
+            : ''
+        event.systemPromptOptions.sections.subagents = remaining
+            ? `${fragment}\n\n${remaining}`
+            : fragment
     })
 
     pi.on('session_shutdown', async (_event, ctx) => {

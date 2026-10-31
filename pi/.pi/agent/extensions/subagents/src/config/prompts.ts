@@ -7,6 +7,7 @@
  */
 
 import type { CodexSubagentsConfig } from './config.ts'
+import { describeLimits, resolveLimits } from '../core/limits.ts'
 import { modeInstructions, type MultiAgentMode } from './mode.ts'
 
 export interface PromptAssemblyInput {
@@ -202,6 +203,8 @@ function assemblePrompt(
     parts.push(
         `Capabilities:\n${capabilityGuidance(input.config, input.activeSlotCount, currentDepth)}`
     )
+    const limits = describeLimits(resolveLimits(input.config))
+    if (limits) parts.push(limits)
     const mode = modeAndHint(input.config, input.mode)
     if (mode) parts.push(mode)
     // Named for subagents; applying it to the root would leak child-only rules.

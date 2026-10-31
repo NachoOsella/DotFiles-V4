@@ -268,6 +268,47 @@ describe('prompts', () => {
         const withWait = assembleRootPrompt(input)
         assert.match(withWait, /wait_agent returns when mail arrives/)
     })
+
+    it('renders configured limits once and omits unlimited text', () => {
+        const unlimited = assembleRootPrompt(input)
+        assert.ok(!unlimited.includes('Limits:'))
+        assert.equal(
+            assembleRootPrompt({
+                ...input,
+                config: decodeConfig({ limits: {} }),
+            }),
+            unlimited
+        )
+
+        const bounded = decodeConfig({
+            limits: {
+                runDeadlineMs: 900_000,
+                maxModelRequestsPerRun: 40,
+                maxTreeTokens: 500_000,
+                warnAtRatio: 0.8,
+            },
+        })
+        const root = assembleRootPrompt({ ...input, config: bounded })
+        assert.equal(root.match(/^Limits: /gm)?.length, 1)
+        assert.match(
+            root,
+            /Limits: run deadline 900000 ms; max 40 model requests per run; max 500000 shared tree tokens; warn at 80%\./
+        )
+        const child = assembleChildPrompt({ ...input, config: bounded })
+        assert.equal(child.match(/^Limits: /gm)?.length, 1)
+        assert.match(child, /Limits: run deadline 900000 ms/)
+
+        const partial = decodeConfig({
+            limits: { maxModelRequestsPerRun: 7 },
+        })
+        const partialRoot = assembleRootPrompt({
+            ...input,
+            config: partial,
+        })
+        assert.match(partialRoot, /^Limits: max 7 model requests per run\.$/m)
+        assert.ok(!partialRoot.includes('run deadline'))
+        assert.ok(!partialRoot.includes('shared tree tokens'))
+    })
 })
 
 describe('tool plan', () => {

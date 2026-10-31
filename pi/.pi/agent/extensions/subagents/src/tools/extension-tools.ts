@@ -202,6 +202,11 @@ export function buildToolHandlers() {
             return structuredResult({
                 message: result.message,
                 timed_out: result.timedOut,
+                // Keep JSON and structured content identical when a test double
+                // omits the additive field.
+                ...(result.wakeReason === undefined
+                    ? {}
+                    : { wake_reason: result.wakeReason }),
             })
         },
         async interrupt(
@@ -234,6 +239,12 @@ export function buildToolHandlers() {
                         ?.thinkingLevel,
                     parent_path: agent.parentPath,
                     has_pending_mail: agent.hasPendingMail,
+                    ...(agent.hasPendingActivity === undefined
+                        ? {}
+                        : { has_pending_activity: agent.hasPendingActivity }),
+                    ...(agent.blockedReason === undefined
+                        ? {}
+                        : { blocked_reason: agent.blockedReason }),
                     running: agent.running,
                     waiting: agent.waiting,
                 })),
