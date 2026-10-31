@@ -45,30 +45,20 @@ check_file "$DOTFILES_DIR/scripts/bootstrap.sh"
 check_file "$DOTFILES_DIR/scripts/preflight.sh"
 check_file "$DOTFILES_DIR/scripts/apply-system.sh"
 check_file "$DOTFILES_DIR/scripts/enable-services.sh"
-check_file "$DOTFILES_DIR/systemd-user/.config/systemd/user/clean-arch.timer"
 
 check_sorted_unique "$PACKAGES_DIR/pacman.txt"
 check_sorted_unique "$PACKAGES_DIR/aur.txt"
-check_sorted_unique "$PACKAGES_DIR/pc-pacman.txt"
-check_sorted_unique "$PACKAGES_DIR/pc-aur.txt"
 check_sorted_unique "$(host_services_dir "$HOST")/system.txt"
 check_sorted_unique "$(host_services_dir "$HOST")/user.txt"
-
-if ! grep -q '"systemd-user"' "$DOTFILES_DIR/scripts/stow.sh"; then
-	error "systemd-user package is not registered in scripts/stow.sh"
-	STATUS=1
-fi
 
 SHELL_SCRIPTS=(
 	"$DOTFILES_DIR/scripts/bootstrap.sh"
 	"$DOTFILES_DIR/scripts/preflight.sh"
 	"$DOTFILES_DIR/scripts/install-packages.sh"
-	"$DOTFILES_DIR/scripts/install-pc-apps.sh"
 	"$DOTFILES_DIR/scripts/apply-system.sh"
 	"$DOTFILES_DIR/scripts/enable-services.sh"
 	"$DOTFILES_DIR/scripts/capture-system.sh"
 	"$DOTFILES_DIR/scripts/check.sh"
-	"$DOTFILES_DIR/scripts/install_systemd.sh"
 	"$DOTFILES_DIR/scripts/lib.sh"
 	"$DOTFILES_DIR/scripts/set-wallpaper.sh"
 	"$DOTFILES_DIR/rofi/.config/rofi/rofi-power-menu.sh"

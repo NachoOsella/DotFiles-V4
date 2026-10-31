@@ -1,10 +1,10 @@
 //@ pragma UseQApplication
 
-// THESIS: Preserve the incumbent 38 px Waybar at rest and reveal shell depth only through interaction; refuse dashboard-first desktop shells.
+// THESIS: Preserve the compact 38 px bar at rest and reveal shell depth only through interaction; refuse dashboard-first desktop shells.
 // OWN-WORLD: Gruvbox Material Dark Hard, JetBrainsMono Nerd Font, flat bar modules, one-pixel separators, modest popup radii, and restrained green/aqua state accents.
 // STORY: A developer reads familiar workspaces and status at a glance, then opens contextual controls without leaving the bar.
 // FIRST VIEWPORT: Arch, workspaces, and active title sit left; media is mathematically centered per monitor; compact system state remains right.
-// FORM: An established-world extension in operate mode, derived directly from the existing Waybar rather than a replacement visual concept.
+// FORM: An established-world extension in operate mode, derived directly from the established desktop rather than a replacement visual concept.
 
 import QtQuick
 import Quickshell

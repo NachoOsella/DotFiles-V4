@@ -165,6 +165,13 @@ bind_workspace_range(1, 5, outputs.external.name, 1)
 bind_workspace_range(6, 10, outputs.internal.name, 6)
 reconcile_outputs()
 
+-- Workspace 1 is bound to the external output, while the internal panel has its own
+-- default (6). Without the external output Hyprland therefore boots on workspace 6,
+-- so focus workspace 1 once the outputs are ready.
+hl.on("hyprland.start", function()
+    hl.dispatch(hl.dsp.focus({ workspace = "1" }))
+end)
+
 hl.bind("switch:on:Lid Switch", function()
     lid_closed = true
     reconcile_outputs()

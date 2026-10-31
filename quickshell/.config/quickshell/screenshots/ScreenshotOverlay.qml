@@ -1,6 +1,7 @@
 import QtQuick
 import Quickshell
 import Quickshell.Hyprland
+import Quickshell.Wayland
 import "../components"
 import "../config"
 import "../services"
@@ -23,8 +24,8 @@ PanelWindow {
     visible: PopupManager.activePopup === "screenshot"
     color: Theme.transparent
     aboveWindows: true
-    exclusiveZone: 0
-    exclusionMode: ExclusionMode.Ignore
+    WlrLayershell.namespace: "screenshot-overlay"
+    WlrLayershell.exclusiveZone: -1
     focusable: monitor !== null && monitor.focused
     anchors { top: true; bottom: true; left: true; right: true }
 
@@ -47,7 +48,8 @@ PanelWindow {
 
     Timer {
         id: captureTimer
-        interval: 250
+        // Allow the compositor to remove the selection layer before capture.
+        interval: 30
         onTriggered: {
             if (root.recordingCommand)
                 RecordingService.start(root.captureCommand);

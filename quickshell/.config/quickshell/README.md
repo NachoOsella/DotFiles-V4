@@ -1,9 +1,6 @@
 # Quickshell Desktop Shell
 
-A compact Quickshell shell derived from the existing Waybar, Hyprland, Rofi, and Hyprlock setup. It preserves the 38 px Gruvbox bar while adding native media, audio, network, Bluetooth, calendar, control-center, notification, tray, OSD, and power interactions.
-
-> [!IMPORTANT]
-> Waybar, Rofi, Hyprlock, Dunst, and system-service configurations remain untouched. At the user's final request, Hyprland startup now launches Quickshell instead of Waybar, and its monitor-reconnect helper no longer relaunches Waybar.
+A compact Quickshell shell for Hyprland built on the existing Rofi and Hyprlock workflow. It preserves the 38 px Gruvbox bar while adding native media, audio, network, Bluetooth, calendar, control-center, notification, tray, OSD, and power interactions.
 
 ## Target and dependencies
 
@@ -15,8 +12,8 @@ Core runtime:
 - Hyprland
 - Qt 6 / QtQuick
 - JetBrainsMono Nerd Font and Symbols Nerd Font
-- NetworkManager
-- BlueZ
+- iwd and systemd-networkd
+- BlueZ (optional, for the Bluetooth module)
 - PipeWire and WirePlumber
 - UPower
 - an MPRIS-compatible player
@@ -29,7 +26,7 @@ Command integrations:
 - `kitty -e btop`: memory-module action
 - `loginctl`, `systemctl`, and `hyprctl`: session and power actions
 
-Power profiles are not shown because `power-profiles-daemon` is not installed. No `nmcli`, `bluetoothctl`, `wpctl`, `pactl`, `playerctl`, or `hyprctl` polling is used.
+Power profiles are shown when `power-profiles-daemon` is available and running. No `nmcli`, `bluetoothctl`, `wpctl`, `pactl`, `playerctl`, or `hyprctl` polling is used.
 
 ## Launch and lifecycle
 
@@ -133,7 +130,7 @@ Key pointer actions:
 - **Hyprland:** workspaces, monitor mapping, focused workspace, active toplevels, dispatch
 - **MPRIS:** player discovery, capabilities, metadata, artwork, position, seek, and transport controls. Spotatui is recognized as a Spotify player, including its `mpris:artUrl` cover metadata.
 - **PipeWire:** default sink/source, output selection, mute, volume, and application stream nodes when exposed
-- **Networking:** NetworkManager devices, Wi-Fi state, scanning, networks, connection and disconnect actions
+- **Networking:** iwd and systemd-networkd state, Wi-Fi scanning, networks, connection and disconnect actions
 - **Bluetooth:** BlueZ adapter and paired-device state, connection, and battery information
 - **UPower:** battery state, time estimates, health, and energy rate
 - **SystemTray:** icons, activation, secondary activation, scrolling, and native menus
@@ -205,15 +202,9 @@ Reboot and power off require confirmation. These destructive commands were not e
 
 The Arch button runs the exact existing Rofi launcher command. The memory and audio secondary actions preserve `btop` and `pavucontrol` access.
 
-## Notifications and Dunst
+## Notifications
 
-Quickshell now owns `org.freedesktop.Notifications` (`Settings.notificationServerEnabled` is `true`). The Dunst user service is masked so D-Bus activation cannot take the name back:
-
-```bash
-systemctl --user mask dunst.service   # applied
-```
-
-To return to Dunst: unmask the unit, set `notificationServerEnabled` back to `false`, and restart Quickshell.
+Quickshell owns `org.freedesktop.Notifications` (`Settings.notificationServerEnabled` is `true`). No separate notification daemon is installed.
 
 ## Hyprland integration
 
@@ -237,9 +228,6 @@ The `ALT` modifier avoids the current `SUPER+N` and `SUPER+P` bindings. These op
 
 ## Current limitations
 
-- Notifications remain inactive until Dunst is manually disabled and the setting is enabled.
 - Brightness writes depend on external system permissions.
-- No power-profile row is shown without `power-profiles-daemon`.
-- Bluetooth currently has no paired devices, so its device list is empty.
+- Bluetooth requires BlueZ, which is not installed on this host.
 - Per-application audio rows appear only while PipeWire exposes active stream nodes.
-- Waybar and Quickshell reserve separate space when both bars are visibly stacked; this is expected during side-by-side development.

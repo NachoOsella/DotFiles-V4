@@ -1,8 +1,0 @@
-[Unit]
-Description=Clean Arch weekly user-only cleanup
-
-[Service]
-Type=oneshot
-ExecStart=/usr/bin/fish %h/dotfiles/scripts/clean_arch.fish --user-only --yes --no-spinner --no-notify --config=%h/dotfiles/scripts/clean_arch.conf --report-json=%h/.local/state/clean-arch/weekly-report.json
-Nice=10
-IOSchedulingClass=idle

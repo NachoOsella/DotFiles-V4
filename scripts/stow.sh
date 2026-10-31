@@ -30,10 +30,8 @@ PACKAGES=(
 	"kitty"
 	"fish"
 	"nvim"
-	"waybar"
 	"quickshell"
 	"rofi"
-	"dunst"
 	"lazygit"
 	"yazi"
 	"btop"
@@ -45,10 +43,8 @@ PACKAGES=(
 	"qt"
 	"starship"
 	"keepassxc"
-	"systemd-user"
 	"pi"
 	"pcmanfm-qt"
-	"opencode"
 )
 
 banner() {

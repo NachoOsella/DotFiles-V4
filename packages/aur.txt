@@ -1,6 +1,8 @@
+acer-wmi-battery-dkms
+brave-origin-bin
 gruvbox-dark-icons-gtk
-helium-browser-bin
+spotifast-bin
+t3code-bin
 vesktop
-wlogout
 yay
 yay-debug

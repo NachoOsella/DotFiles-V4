@@ -1,5 +1,5 @@
-clean-arch.timer
 p11-kit-server.socket
 pipewire-pulse.socket
 pipewire.socket
 wireplumber.service
+xdg-user-dirs.service

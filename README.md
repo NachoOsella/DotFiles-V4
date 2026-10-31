@@ -28,9 +28,9 @@ I keep it simple. One tool per job, all tied together with Gruvbox Material Dark
 | Terminal | Kitty |
 | Editor | Neovim on top of LazyVim |
 | Launcher | Rofi |
-| Bar and desktop widgets | Quickshell. Waybar config is still in the repo for reference |
+| Bar and desktop widgets | Quickshell |
 | File management | Yazi in the terminal, pcmanfm-qt for the rest |
-| System | PipeWire, NetworkManager with iwd, TLP, SDDM with the Classic Where is my SDDM theme, Dunst, btop, Fastfetch, zathura, KeePassXC |
+| System | PipeWire, iwd with systemd-networkd, power-profiles-daemon, SDDM with the sddm-gruvbox theme, btop, Fastfetch, zathura, KeePassXC |
 
 Wallpapers live in `assets/wallpapers`. The Death Star one in the header is the default.
 
@@ -60,7 +60,7 @@ Wallpapers live in `assets/wallpapers`. The Death Star one in the header is the 
 ## Getting started
 
 > [!WARNING]
-> These are my personal dotfiles. The full bootstrap can install packages, copy files to `/etc`, link configs with GNU Stow, and enable or mask systemd services. Skim the scripts first and run with `--dry-run` if you are not on my machine.
+> These are my personal dotfiles. The full bootstrap can install packages, apply versioned system files, link configs with GNU Stow, and enable or mask systemd services. Skim the scripts first and run with `--dry-run` if you are not on my machine.
 
 ### Prerequisites
 
@@ -131,17 +131,16 @@ Everything is a Stow package. Each folder at the root maps to `~/.config` or sim
 ```
 dotfiles/
 ├── assets/               # screenshots and wallpapers
-├── hypr/                 # Hyprland, Hyprlock, Hypridle, Hyprpaper, keybinds in hypr/binds.lua
+├── hypr/                 # Hyprland, Hyprlock, Hypridle, Hyprpaper, keybinds in hypr/.config/hypr/hypr/binds.lua
 ├── quickshell/           # bar, control center, media, network, notifications, OSD
 ├── kitty/ fish/ starship/# terminal stack
 ├── nvim/                 # LazyVim setup, plugins in lua/plugins/
 ├── rofi/                 # launcher, powermenu, wifi, clipboard and emoji menus
-├── yazi/ btop/ fastfetch/ lsd/ zathura/ waybar/ dunst/ gtk/ qt/ ...
+├── yazi/ btop/ fastfetch/ lsd/ zathura/ gtk/ qt/ ...
 ├── packages/
-│   ├── pacman.txt        # 129 official packages
-│   └── aur.txt           # AUR helpers and extras
-├── hosts/archlinux/      # per-host overlays for packages, /etc and services
-├── system/               # versioned system files copied to / by bootstrap
+│   ├── pacman.txt        # 128 official packages
+│   └── aur.txt           # 8 AUR packages
+├── hosts/archlinux/      # per-host overlays for packages and services
 └── scripts/
     ├── bootstrap.sh      # full setup. packages + system + stow + services
     ├── install-user.sh   # safe alias for stow.sh install
@@ -157,9 +156,9 @@ Host-specific things live under `hosts/<host>`. If your hostname matches, the sc
 No surprises. Each step is a separate script you can run on its own.
 
 - Installs packages from `packages/pacman.txt` and `packages/aur.txt`, plus any `hosts/<host>/packages` overlay.
-- Copies system files from `system` and `hosts/<host>/system` into `/`. That covers NetworkManager with iwd, TLP, and the Classic Where is my SDDM theme.
+- Copies any versioned system files from `system` and `hosts/<host>/system` into `/` when present.
 - Links user configs with GNU Stow. It checks for conflicts first and will not overwrite your files silently.
-- Enables services listed in `hosts/<host>/services/system.txt` and `user.txt`, and masks anything in `system-disable.txt`. On this host that means bluetooth, docker, NetworkManager, sddm, tlp and a few timers for user services like pipewire and wireplumber.
+- Enables services listed in `hosts/<host>/services/system.txt` and `user.txt`, and masks units in `system-disable.txt` when a host defines it. On this host that means docker, iwd, systemd-networkd, sddm, power-profiles-daemon, sshd, and the PipeWire/WirePlumber user services.
 
 Prefer the smaller scripts when you only want part of it:
 

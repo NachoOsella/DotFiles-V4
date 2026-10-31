@@ -18,7 +18,6 @@ Singleton {
     readonly property int volumeStep: 5
     readonly property string clockTimeZone: "America/Argentina/Cordoba"
     readonly property bool notificationServerEnabled: true
-    readonly property bool powerProfilesAvailable: false
     readonly property string rofiCommand: "rofi"
     readonly property list<string> rofiArguments: ["-show", "drun", "-theme", Quickshell.env("HOME") + "/.config/rofi/config.rasi"]
 }

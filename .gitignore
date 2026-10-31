@@ -7,13 +7,16 @@ Thumbs.db
 *.swo
 *~
 
+# Python
+__pycache__/
+*.pyc
+
 # Nvim
 nvim/.config/nvim/lazy-lock.json
 nvim/.config/nvim/.luarc.json
 
 # Fish
 fish/.config/fish/fish_variables
-fish/.config/fish/functions/facu.fish
 
 # Yazi plugins (reinstall with ya pack)
 yazi/.config/yazi/plugins/
@@ -38,12 +41,5 @@ pi/.pi/agent/pi-crash.log
 *.key
 *secret*
 
-# Jira skill config (actual data, not templates)
-pi/.pi/agent/skills/jira-admin/config/credentials.json
-pi/.pi/agent/skills/jira-admin/config/project.json
-
 # KeePassXC local config can contain KeeShare private keys
 keepassxc/.config/keepassxc/keepassxc.ini
-
-# OpenCode local service state (contains password)
-opencode/.config/opencode/service.json

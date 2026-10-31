@@ -16,7 +16,7 @@ abbr volumen 'pactl set-sink-volume @DEFAULT_SINK@'
 abbr paquetes 'pacman -Q | wc -l'
 abbr ya yazi
 abbr zathura 'setsid zathura'
-abbr bateria 'cat /sys/class/power_supply/BAT0/capacity'
+abbr bateria 'cat /sys/class/power_supply/BAT1/capacity'
 
 function ll
     lsd -l $argv

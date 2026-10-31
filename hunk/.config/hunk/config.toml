@@ -15,8 +15,8 @@ label = "Gruvbox Material Dark Hard"
 
 # Background palette (gruvbox-material dark hard)
 background = "#1d2021"    # bg0 - editor background
-panel = "#1d2021"         # Waybar base
-panelAlt = "#1d2021"      # Waybar base
+panel = "#1d2021"         # Panel base
+panelAlt = "#1d2021"      # Panel base
 border = "#3c3836"        # bg4 - border lines
 accent = "#7daea3"        # blue - accent / modified highlight
 accentMuted = "#2e3b3b"   # bg_visual_blue - muted selection

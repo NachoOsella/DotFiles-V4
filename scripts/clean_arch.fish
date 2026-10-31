@@ -1058,7 +1058,6 @@ function clean_app_caches
     set -l ok 1
 
     for root in \
-        "$HOME/.config/net.imput.helium" \
         "$HOME/.config/google-chrome" \
         "$HOME/.config/google-chrome-for-testing" \
         "$HOME/.config/chromium" \

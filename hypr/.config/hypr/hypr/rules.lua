@@ -59,3 +59,4 @@ hl.window_rule({ name = "steam-main-size", match = { class = "steam", title = "S
 -- Disable animations for screenshot and selection layers.
 hl.layer_rule({ name = "hyprpicker-no-animation", match = { namespace = "^(hyprpicker)$" }, no_anim = true })
 hl.layer_rule({ name = "selection-no-animation", match = { namespace = "^(selection)$" }, no_anim = true })
+hl.layer_rule({ name = "screenshot-overlay-no-animation", match = { namespace = "^(screenshot-overlay)$" }, no_anim = true })
