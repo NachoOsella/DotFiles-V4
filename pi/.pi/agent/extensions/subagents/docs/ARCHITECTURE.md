@@ -24,7 +24,10 @@ Completed != destroyed.
 Forks copy structured AgentMessage values, never a text baseline prompt.
 A child inherits the caller's active tools, cwd, skills, and context files.
 Agent-count capacity != execution capacity.
-Coordinator-started runs reserve execution capacity before delivery.
+Coordinator-started runs reserve execution capacity before session initialization.
+A residency lease protects every runtime used by an operation.
+Dispatch != recipient transcript insertion != model processing.
+Root teams belong to branches; detached generations cannot deliver or checkpoint.
 Extension-triggered excess runs are aborted at native agent_start.
 Nested agents share one coordinator and one execution limiter.
 UI activity never enters a parent model context.
@@ -105,16 +108,28 @@ queue-only when the target is idle (read on its next activation).
 
 A completion sent to an idle child parent enters through the coordinator's run
 admission, so its continuation has an execution permit, status transitions,
-usage capture, and a final answer to its own parent. A child releases its permit
+usage capture, and a final answer to its own parent. Insertion confirmation never
+waits for the parent's model run to finish. A child releases its permit
 when its native run ends, before forwarding the result. A streaming parent
 receives the completion as steering input in its existing run.
 
-Failed deliveries remain in a persisted completion outbox. Residency changes
-and freed execution slots schedule coalesced retries for resident recipients;
-unloaded recipients wait until they are used again. In-flight deliveries share
-one promise per child/run sequence. The recipient mutex covers delivery and
-acknowledgment, with a live watermark check after loading. A newer acknowledged
-result supersedes older pending results.
+Completion delivery writes its stable communication ID and payload to an outbox
+before dispatch. Critical checkpoint listeners are awaited; a failed intent
+checkpoint prevents dispatch. Root `sendMessage` returns void and cannot prove
+insertion. Root and child adapters instead probe their recipient's active branch
+for the envelope ID. Only a confirmed insertion advances the watermark.
+
+An outstanding dispatch is not resubmitted by ordinary observation. Retries need
+a known-absent probe and a native idle/terminal boundary; an unknown probe never
+authorizes retry. Restored outbox entries probe before dispatch, so an already
+persisted envelope can be acknowledged without sending it again. This does not
+promise exactly-once processing or delivery across every crash window.
+
+In-flight deliveries share one promise per child/run sequence. A failed receipt
+checkpoint restores only entries removed by that acknowledgment and preserves
+newer concurrent completions. Runtime leases pin recipients through cold load,
+dispatch, and insertion observation. LRU waits for a safe victim rather than
+disposing a handle still owned by an operation.
 
 ## Persistence and forks
 
@@ -127,6 +142,13 @@ Persistent children live below:
 The root session stores only the V3 graph snapshot. Child transcripts remain in
 their own Pi session files. Restoring the root restores unloaded identities;
 `SessionManager.open()` is called only when a target is used again.
+
+Tree navigation retires the old coordinator before selecting another branch.
+It fences delivery, attempts a preliminary checkpoint, quiesces native runs,
+settles every disposal, and persists final usage/outbox on the old branch. The
+final checkpoint is the persistence barrier. Failure retains the fenced manager
+for retry; a preliminary checkpoint failure never skips shutdown. The new
+coordinator restores only the selected branch. Old child files remain intact.
 
 `src/persistence/record-snapshot.ts` owns current-schema record serialization
 and restoration, separate from live coordination. Schema validation lives in
@@ -173,6 +195,11 @@ Rendering wraps entries from the tail only until the visible rows and requested
 scroll offset are covered; tool-result matching still scans the retained window.
 
 ## Compatibility
+
+Production requires Pi >=1.4.0 <2.0.0. Pi 1.0 starts idle custom-triggered runs
+without preparing system instructions; the extension fails closed on that host.
+The workspace's older SDK remains useful for structural tests and explicit
+characterization of this gap, not as production compatibility evidence.
 
 `src/core/pi-api-drift.test.ts` asserts the Pi surface this extension reads: the entry
 points it imports, the `AgentSession` methods and getters it calls, the

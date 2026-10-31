@@ -10,12 +10,47 @@ export interface DeliveryOptions {
     readonly delivery?: 'steer' | 'followUp' | 'nextTurn'
 }
 
+export type InsertionState = 'absent' | 'accepted' | 'unknown'
+
+/** Reads a recipient transcript and reports whether an envelope was inserted. */
+export type InsertionProbe = (
+    communicationId: string
+) => InsertionState | Promise<InsertionState>
+
 export interface CommunicationEndpoint {
     readonly path: AgentPath
+    /** Dispatch only. Completion of this promise is not an insertion receipt. */
     send(
         communication: InterAgentCommunication,
         options: DeliveryOptions
     ): Promise<void>
+    /** Optional durable transcript receipt. Absent means legacy best effort. */
+    probeInsertion?(
+        communicationId: string
+    ): InsertionState | Promise<InsertionState>
+}
+
+/**
+ * Probe a native session's current branch for a communication envelope. Root
+ * and child sessions persist custom messages with `details.id`, so the same
+ * insertion check applies to both. A probe failure is ambiguous, never absent.
+ */
+export function sessionInsertionProbe(session: AgentSession): InsertionProbe {
+    return (communicationId) => {
+        try {
+            const branch = session.sessionManager.getBranch()
+            return branch.some((entry) => {
+                if (entry.type !== 'custom_message') return false
+                const details = (entry as { details?: { id?: unknown } })
+                    .details
+                return details?.id === communicationId
+            })
+                ? 'accepted'
+                : 'absent'
+        } catch {
+            return 'unknown'
+        }
+    }
 }
 
 function customMessage(comm: InterAgentCommunication) {
@@ -39,7 +74,8 @@ function customMessage(comm: InterAgentCommunication) {
 
 export function childEndpoint(
     path: AgentPath,
-    session: AgentSession
+    session: AgentSession,
+    probeInsertion?: InsertionProbe
 ): CommunicationEndpoint {
     return {
         path,
@@ -49,6 +85,7 @@ export function childEndpoint(
                 deliverAs: options.delivery,
             })
         },
+        ...(probeInsertion ? { probeInsertion } : {}),
     }
 }
 
@@ -60,7 +97,8 @@ export function rootEndpoint(
             triggerTurn: boolean
             deliverAs?: DeliveryOptions['delivery']
         }
-    ) => void | Promise<void>
+    ) => void | Promise<void>,
+    probeInsertion?: InsertionProbe
 ): CommunicationEndpoint {
     return {
         path,
@@ -80,5 +118,6 @@ export function rootEndpoint(
                 }
             )
         },
+        ...(probeInsertion ? { probeInsertion } : {}),
     }
 }

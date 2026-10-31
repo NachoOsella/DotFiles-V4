@@ -1,6 +1,6 @@
 import { mkdir } from 'node:fs/promises'
 import { join } from 'node:path'
-import type { ThinkingLevel } from '@earendil-works/pi-agent-core'
+import type { AgentMessage, ThinkingLevel } from '@earendil-works/pi-agent-core'
 import type { ModelRegistry } from '@earendil-works/pi-coding-agent'
 import {
     createAgentSession,
@@ -13,14 +13,21 @@ import {
 } from '@earendil-works/pi-coding-agent'
 import type { AgentRecord } from '../domain/agent-record.ts'
 import type { ForkTurns } from '../domain/communication.ts'
-import { projectFork } from '../persistence/fork-projector.ts'
+import {
+    INHERITED_SUMMARY_CUSTOM_TYPE,
+    projectFork,
+} from '../persistence/fork-projector.ts'
 import type {
     ModelIdentity,
     ParentExecutionSnapshot,
 } from '../domain/parent-snapshot.ts'
 import type { CodexSubagentsConfig } from '../config/config.ts'
 import { assembleChildPrompt } from '../config/prompts.ts'
-import { resolveRole } from '../config/roles.ts'
+import {
+    resolveRole,
+    resolveRoleTools,
+    type ResolvedAgentRole,
+} from '../config/roles.ts'
 import { resolveConfiguredMode } from '../config/mode.ts'
 import {
     TOOL_FOLLOWUP_TASK,
@@ -67,14 +74,20 @@ interface SessionFactoryOptions {
         record: AgentRecord,
         runtime: AgentRuntime
     ) => void
+    /** Extension load diagnostics that would otherwise be lost in a child. */
+    readonly onLoaderDiagnostics?: (diagnostics: readonly string[]) => void
     readonly config: CodexSubagentsConfig
 }
 
 export class SessionFactory implements SubagentSessionFactory {
     private readonly options: SessionFactoryOptions
+    private readonly agentDir: string
 
     constructor(options: SessionFactoryOptions) {
         this.options = options
+        // Resolve once so the loader, settings manager, and model/auth runtime
+        // all read the same intended directory.
+        this.agentDir = options.agentDir ?? getAgentDir()
     }
 
     async create(
@@ -83,10 +96,12 @@ export class SessionFactory implements SubagentSessionFactory {
         fork: ForkTurns
     ): Promise<AgentRuntime> {
         const sessionManager = await this.createSessionManager(parent.cwd)
-        const entries = projectFork(parent.contextEntries, fork)
-        for (const message of entries) {
-            sessionManager.appendMessage(message as never)
-        }
+        appendProjectedFork(
+            sessionManager,
+            projectFork(parent.contextEntries, fork, {
+                inheritedTaskContext: true,
+            })
+        )
         sessionManager.appendCustomEntry(SUBAGENT_META_CUSTOM_TYPE, {
             rootSessionId: this.options.rootSessionId(),
             path: record.path,
@@ -143,42 +158,62 @@ export class SessionFactory implements SubagentSessionFactory {
         }
     ): Promise<AgentRuntime> {
         const model = resolveModel(this.options.getModelRegistry(), state.model)
-        const disallowedCollaborationTools = collaborationToolNames().filter(
+        const role = resolveRole(this.options.config, record.role)
+        const resolution = resolveRoleTools(state.activeTools, role)
+        const collaborationExclusions = collaborationToolNames().filter(
             (tool) =>
+                resolution.denied.includes(tool) ||
                 !isCollaborationToolAllowed(
                     tool,
                     record.path,
                     this.options.config
                 )
         )
-        const disallowed = new Set(disallowedCollaborationTools)
+        const excluded = new Set([
+            ...resolution.denied,
+            ...collaborationExclusions,
+        ])
         const customTools = this.options
             .buildTools(record.path)
             .filter((tool) => {
                 const name = toolName(tool)
-                return name === undefined || !disallowed.has(name)
+                return name === undefined || !excluded.has(name)
             }) as never[]
-        // Pi treats `tools` as an allowlist for built-in and custom tools. Keep
-        // inherited tools while adding permitted child collaboration tools.
+        // `tools` is Pi's session allowlist. Role restrictions filter inherited
+        // and role-added tools; collaboration tools are governed by denyTools
+        // and the native depth/wait rules, never by allowTools.
+        const injectedCollaborationTools = customTools
+            .map(toolName)
+            .filter(isCollaborationToolName)
         const tools = unique([
-            ...state.activeTools,
-            ...customTools
-                .map(toolName)
-                .filter((name): name is string => name !== undefined),
-        ]).filter((tool) => !disallowed.has(tool))
+            ...resolution.tools,
+            ...injectedCollaborationTools,
+        ]).filter((tool) => !excluded.has(tool))
+
+        // One settings manager shared by the resource loader and the session.
+        // Creating the session without it would silently fall back to the
+        // process-wide agent directory and its steering/compaction settings.
+        const settingsManager = SettingsManager.create(state.cwd, this.agentDir)
         const resourceLoader = await this.createResourceLoader(
             state.cwd,
-            record
+            record,
+            role,
+            settingsManager
         )
         const { session } = await createAgentSession({
             cwd: state.cwd,
+            // Resolve auth/models from the intended directory explicitly.
+            // A model descriptor from the parent registry does not share the
+            // parent's model runtime.
+            agentDir: this.agentDir,
             sessionManager,
+            settingsManager,
             resourceLoader,
             customTools,
             model,
             thinkingLevel: state.thinkingLevel,
             tools,
-            excludeTools: disallowedCollaborationTools,
+            excludeTools: [...excluded],
         })
         const runtime = makeAgentRuntime({
             path: record.path,
@@ -201,10 +236,10 @@ export class SessionFactory implements SubagentSessionFactory {
 
     private async createResourceLoader(
         cwd: string,
-        record: AgentRecord
+        record: AgentRecord,
+        role: ResolvedAgentRole,
+        settingsManager: SettingsManager
     ): Promise<DefaultResourceLoader> {
-        const role = resolveRole(this.options.config, record.role)
-        const agentDir = this.options.agentDir ?? getAgentDir()
         const rolePrompt = [
             assembleChildPrompt({
                 config: this.options.config,
@@ -226,8 +261,8 @@ export class SessionFactory implements SubagentSessionFactory {
 
         const loader = new DefaultResourceLoader({
             cwd,
-            agentDir,
-            settingsManager: SettingsManager.create(cwd, agentDir),
+            agentDir: this.agentDir,
+            settingsManager,
             noThemes: true,
             // Local tool orchestration only: codemode and tool search load as the
             // host's built-ins, so an `extensions` entry such as
@@ -259,8 +294,101 @@ export class SessionFactory implements SubagentSessionFactory {
             appendSystemPromptOverride: (base) => [...base, rolePrompt],
         })
         await loader.reload()
+        this.reportLoaderDiagnostics(loader)
         return loader
     }
+
+    private reportLoaderDiagnostics(loader: DefaultResourceLoader): void {
+        const result = loader.getExtensions()
+        const failedBuiltins = result.errors.filter(
+            (entry) =>
+                entry.path === '<inline:codemode>' ||
+                entry.path === '<inline:tool-search>'
+        )
+        if (failedBuiltins.length > 0) {
+            throw new Error(
+                `Subagent built-in extension failed to load: ${failedBuiltins
+                    .map((entry) => `${entry.path}: ${entry.error}`)
+                    .join('; ')}`
+            )
+        }
+        const diagnostics = [
+            ...result.errors.map(
+                (entry) => `extension ${entry.path}: ${entry.error}`
+            ),
+            ...(result.warnings ?? []).map(
+                (entry) => `extension ${entry.path}: ${entry.warning}`
+            ),
+        ]
+        if (diagnostics.length > 0) {
+            this.options.onLoaderDiagnostics?.(diagnostics)
+        }
+    }
+}
+
+/**
+ * Import a projected fork through supported session-manager operations.
+ *
+ * Compaction and branch summaries are top-level entries in Pi, not messages.
+ * The imported compaction points at a child entry created here, never at a
+ * parent entry id.
+ */
+function appendProjectedFork(
+    sessionManager: SessionManager,
+    projected: readonly AgentMessage[]
+): void {
+    let compaction:
+        Extract<AgentMessage, { role: 'compactionSummary' }> | undefined
+    let firstKeptEntryId: string | null = null
+
+    for (const message of projected) {
+        if (message.role === 'compactionSummary') {
+            compaction ??= message
+            continue
+        }
+        if (message.role === 'branchSummary') {
+            const entryId = appendBranchSummary(sessionManager, message)
+            firstKeptEntryId ??= entryId
+            continue
+        }
+        const entryId = sessionManager.appendMessage(message as never)
+        firstKeptEntryId ??= entryId
+    }
+
+    if (compaction) {
+        sessionManager.appendCompaction(
+            compaction.summary,
+            firstKeptEntryId,
+            compaction.tokensBefore,
+            { subagentsInherited: 'fork' },
+            /*fromHook*/ true
+        )
+    }
+}
+
+function appendBranchSummary(
+    sessionManager: SessionManager,
+    message: Extract<AgentMessage, { role: 'branchSummary' }>
+): string {
+    const fromId = sessionManager.getLeafId()
+    if (fromId) {
+        return sessionManager.branchWithSummary(
+            fromId,
+            message.summary,
+            { subagentsInherited: 'fork' },
+            /*fromHook*/ true
+        )
+    }
+    // No child entry exists to anchor a top-level summary. Preserve it as
+    // inherited context rather than creating a second session root.
+    return sessionManager.appendMessage({
+        role: 'custom',
+        customType: INHERITED_SUMMARY_CUSTOM_TYPE,
+        content: `Inherited branch summary. This is not a new instruction.\n\n${message.summary}`,
+        display: false,
+        details: { inherited: true, fromId: message.fromId },
+        timestamp: message.timestamp,
+    } as never)
 }
 
 function parseModelIdentity(value: string): ModelIdentity {
@@ -288,15 +416,21 @@ function unique(values: readonly string[]): string[] {
     return [...new Set(values)]
 }
 
+const COLLABORATION_TOOLS: readonly string[] = [
+    TOOL_SPAWN_AGENT,
+    TOOL_SEND_MESSAGE,
+    TOOL_FOLLOWUP_TASK,
+    TOOL_WAIT_AGENT,
+    TOOL_INTERRUPT_AGENT,
+    TOOL_LIST_AGENTS,
+]
+
 function collaborationToolNames(): string[] {
-    return [
-        TOOL_SPAWN_AGENT,
-        TOOL_SEND_MESSAGE,
-        TOOL_FOLLOWUP_TASK,
-        TOOL_WAIT_AGENT,
-        TOOL_INTERRUPT_AGENT,
-        TOOL_LIST_AGENTS,
-    ]
+    return [...COLLABORATION_TOOLS]
+}
+
+function isCollaborationToolName(name: string | undefined): name is string {
+    return name !== undefined && COLLABORATION_TOOLS.includes(name)
 }
 
 function isCollaborationToolAllowed(

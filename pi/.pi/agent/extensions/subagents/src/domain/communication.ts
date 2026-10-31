@@ -23,6 +23,10 @@ export interface FinalAnswerMeta {
     readonly tokens?: number
     readonly cost?: number
     readonly failed?: boolean
+    /** True when only a bounded prefix of the child result was delivered. */
+    readonly truncated?: boolean
+    /** Child transcript file retaining the full result. */
+    readonly fullResultRef?: string
 }
 
 export interface InterAgentCommunication {

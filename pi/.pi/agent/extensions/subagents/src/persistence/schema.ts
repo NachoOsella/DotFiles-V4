@@ -348,6 +348,8 @@ function normalizeFinalAnswerMeta(
         tokens?: number
         cost?: number
         failed?: boolean
+        truncated?: boolean
+        fullResultRef?: string
     } = { model }
     const role = optionalString(raw.role)
     if (role !== undefined) meta.role = role
@@ -366,6 +368,15 @@ function normalizeFinalAnswerMeta(
     }
     if (raw.failed !== undefined) {
         if (typeof raw.failed === 'boolean') meta.failed = raw.failed
+        else repaired = true
+    }
+    if (raw.truncated !== undefined) {
+        if (typeof raw.truncated === 'boolean') meta.truncated = raw.truncated
+        else repaired = true
+    }
+    if (raw.fullResultRef !== undefined) {
+        const reference = nonEmptyString(raw.fullResultRef)
+        if (reference !== undefined) meta.fullResultRef = reference
         else repaired = true
     }
     return { value: meta, repaired }

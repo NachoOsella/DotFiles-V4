@@ -8,9 +8,11 @@ import {
     DefaultResourceLoader,
     SessionManager,
     SettingsManager,
+    VERSION,
 } from '@earendil-works/pi-coding-agent'
 import type { AgentSession } from '@earendil-works/pi-coding-agent'
 import subagentsExtension from '../../index.ts'
+import { isSupportedHostVersion } from '../config/host-compatibility.ts'
 import {
     findLatestState,
     SUBAGENTS_STATE_CUSTOM_TYPE,
@@ -64,69 +66,74 @@ async function assertChildListed(session: AgentSession): Promise<void> {
     )
 }
 
-test('subagents survive reload, shutdown, and reopening the root session', async (t) => {
-    const directory = mkdtempSync(join(tmpdir(), 'subagents-lifecycle-'))
-    t.after(() => rmSync(directory, { recursive: true, force: true }))
-    const agentDir = join(directory, 'agent')
-    const manager = SessionManager.create(
-        directory,
-        join(directory, 'sessions')
-    )
-    manager.appendMessage({
-        role: 'user',
-        content: 'Review the project.',
-        timestamp: Date.now(),
-    })
-    const snapshot: PersistedSubagentStateV2 = {
-        version: 2,
-        rootSessionId: manager.getSessionId(),
-        persistedAt: Date.now(),
-        agents: [
-            {
-                id: 'reviewer-id',
-                path: '/root/reviewer',
-                parentPath: '/root',
-                rootSessionId: manager.getSessionId(),
-                model: { provider: 'test-provider', id: 'test-model' },
-                activeTools: [],
-                status: 'Completed',
-                createdAt: Date.now(),
-                lastActivityAt: Date.now(),
-                runSequence: 1,
-                lastDeliveredRunSequence: 1,
-            },
-        ],
-    }
-    manager.appendCustomEntry(SUBAGENTS_STATE_CUSTOM_TYPE, snapshot)
-    const sessionFile = manager.getSessionFile()
-    assert.ok(sessionFile)
+const nativeTest = isSupportedHostVersion(VERSION) ? test : test.skip
 
-    const session = await createSession(directory, agentDir, manager)
-    try {
-        await assertChildListed(session)
-        await session.reload()
-        await assertChildListed(session)
-        await session.extensionRunner.emit({
-            type: 'session_shutdown',
-            reason: 'quit',
-        })
-        const persisted = findLatestState(manager.getBranch())
-        assert.deepEqual(
-            persisted?.agents.map((agent) => agent.path),
-            ['/root/reviewer']
+nativeTest(
+    'subagents survive reload, shutdown, and reopening the root session',
+    async (t) => {
+        const directory = mkdtempSync(join(tmpdir(), 'subagents-lifecycle-'))
+        t.after(() => rmSync(directory, { recursive: true, force: true }))
+        const agentDir = join(directory, 'agent')
+        const manager = SessionManager.create(
+            directory,
+            join(directory, 'sessions')
         )
-    } finally {
-        session.dispose()
-    }
+        manager.appendMessage({
+            role: 'user',
+            content: 'Review the project.',
+            timestamp: Date.now(),
+        })
+        const snapshot: PersistedSubagentStateV2 = {
+            version: 2,
+            rootSessionId: manager.getSessionId(),
+            persistedAt: Date.now(),
+            agents: [
+                {
+                    id: 'reviewer-id',
+                    path: '/root/reviewer',
+                    parentPath: '/root',
+                    rootSessionId: manager.getSessionId(),
+                    model: { provider: 'test-provider', id: 'test-model' },
+                    activeTools: [],
+                    status: 'Completed',
+                    createdAt: Date.now(),
+                    lastActivityAt: Date.now(),
+                    runSequence: 1,
+                    lastDeliveredRunSequence: 1,
+                },
+            ],
+        }
+        manager.appendCustomEntry(SUBAGENTS_STATE_CUSTOM_TYPE, snapshot)
+        const sessionFile = manager.getSessionFile()
+        assert.ok(sessionFile)
 
-    const reopened = await createSession(
-        directory,
-        agentDir,
-        SessionManager.open(sessionFile)
-    )
-    try {
-        await assertChildListed(reopened)
-    } finally {
-        reopened.dispose()
+        const session = await createSession(directory, agentDir, manager)
+        try {
+            await assertChildListed(session)
+            await session.reload()
+            await assertChildListed(session)
+            await session.extensionRunner.emit({
+                type: 'session_shutdown',
+                reason: 'quit',
+            })
+            const persisted = findLatestState(manager.getBranch())
+            assert.deepEqual(
+                persisted?.agents.map((agent) => agent.path),
+                ['/root/reviewer']
+            )
+        } finally {
+            session.dispose()
+        }
+
+        const reopened = await createSession(
+            directory,
+            agentDir,
+            SessionManager.open(sessionFile)
+        )
+        try {
+            await assertChildListed(reopened)
+        } finally {
+            reopened.dispose()
+        }
     }
-})
+)

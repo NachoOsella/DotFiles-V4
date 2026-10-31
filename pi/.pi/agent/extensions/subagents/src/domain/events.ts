@@ -10,6 +10,22 @@
 import type { AgentId, AgentPath, ToolCallId, TurnId } from './ids.ts'
 import type { AgentResidency, AgentStatus } from './agent-status.ts'
 
+export type DeliveryCheckpointReason =
+    'intent-persisted' | 'receipt-accepted' | 'dispatch-retry'
+
+/** Awaitable delivery state change. Listener failures abort the side effect. */
+export interface DeliveryCheckpointEvent {
+    readonly _tag: 'DeliveryCheckpoint'
+    readonly reason: DeliveryCheckpointReason
+    readonly communicationId: string
+    readonly agentId: AgentId
+    readonly recipient: AgentPath
+    readonly runSequence: number
+}
+export type DeliveryCheckpointListener = (
+    event: DeliveryCheckpointEvent
+) => void | Promise<void>
+
 export type SubagentEvent =
     | { readonly _tag: 'UsageUpdated'; readonly agentId: AgentId }
     | {

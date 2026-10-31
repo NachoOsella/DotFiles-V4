@@ -1,7 +1,14 @@
 # Pi API bindings
 
-V3 is bound to the installed `@earendil-works/pi-coding-agent@1.0.0` APIs.
-The coordinator does not emulate Pi lifecycle or queues.
+Production requires `@earendil-works/pi-coding-agent >=1.4.0 <2.0.0`.
+The extension checks the running host version before registering collaboration
+tools. The coordinator does not emulate Pi lifecycle or queues.
+
+Pi 1.0.0 remains installed in the shared workspace. Its idle
+`sendCustomMessage(..., { triggerTurn: true })` bypasses prompt preparation and
+omits child system instructions. Pi 1.4.0 prepares those custom-triggered runs.
+Tests characterize the 1.0 gap explicitly; native entry integration runs only
+on supported hosts. No shared dependencies were updated for this milestone.
 
 | Capability                           | Pi primitive                                                        | V3 use                                                                                  |
 | ------------------------------------ | ------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
@@ -36,6 +43,23 @@ Excess extension-triggered turns are aborted from `agent_start`. Pi still calls
 the stream function with an aborted signal; cancellation depends on the provider
 honoring that signal. The coordinator does not replace SDK stream functions or
 rebind extension runtime internals.
+
+## Delivery and lifecycle contracts
+
+- Root `ExtensionAPI.sendMessage()` is dispatch-only and returns void. Async
+  insertion failures surface as extension errors, not rejected endpoint sends.
+- `custom_message` entries with a stable `details.id` prove recipient insertion,
+  not model processing. A missing or unreadable branch returns an unknown probe.
+- `agent_settled` handlers run before deferred native actions drain. Retry checks
+  run on the next timer tick and require `ctx.isIdle()` or `session.isIdle`.
+- Root instructions mutate `before_agent_start.systemPromptOptions.sections`
+  instead of returning an opaque full-prompt override.
+- `session_before_tree` quiesces and checkpoints the old branch; `session_tree`
+  restores a fresh branch-owned coordinator. Root tool handlers resolve that
+  coordinator per call.
+- Compaction and branch summaries use `appendCompaction` and
+  `branchWithSummary`. Inherited branch context without an anchor uses a custom
+  message rather than an invalid native summary entry.
 
 ## Deliberate non-bindings
 

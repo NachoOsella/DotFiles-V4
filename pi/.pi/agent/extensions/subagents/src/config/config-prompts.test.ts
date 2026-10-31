@@ -114,7 +114,7 @@ describe('prompts', () => {
         activeSlotCount: 4,
     }
 
-    it('covers the required meaning clauses', () => {
+    it('covers the required meaning clauses once', () => {
         const root = assembleRootPrompt(input)
         for (const clause of [
             '/root',
@@ -125,20 +125,23 @@ describe('prompts', () => {
             'FINAL_ANSWER',
             'same filesystem',
             '4 child-agent run',
+            'spawn message brief',
+            'RESULT (outcome)',
         ]) {
             assert.ok(root.includes(clause), `root prompt misses: ${clause}`)
         }
+        assert.equal(
+            root.match(/model and reasoning_effort overrides/g)?.length,
+            1
+        )
+        assert.equal(
+            root.match(/Wait for agent activity|wait_agent returns/g)?.length,
+            1
+        )
         const child = assembleChildPrompt(input)
         assert.ok(child.includes('FINAL_ANSWER'))
         assert.ok(!child.includes('/root, the primary'))
-        assert.match(child, /may spawn nested agents/)
-
-        const nestedChild = assembleChildPrompt({
-            ...input,
-            config: { ...DEFAULT_SUBAGENTS_CONFIG, maxDepth: 2 },
-            currentDepth: 0,
-        })
-        assert.match(nestedChild, /may spawn nested agents/)
+        assert.match(child, /You can spawn agents/)
     })
 
     it('keeps small work local in every mode', () => {
@@ -148,26 +151,76 @@ describe('prompts', () => {
         ]) {
             assert.match(
                 assembleRootPrompt({ ...input, mode }),
-                /Keep small work local/
+                /Keep work that needs one or two local calls/
             )
         }
-        assert.match(
-            COLLABORATION_TOOL_PROMPTS.spawn_agent.promptGuidelines[0] ?? '',
-            /keep small work in the current agent/
-        )
         const proactive = modeInstructions({ _tag: 'Proactive' }) ?? ''
         assert.match(proactive, /but only for independent work/)
-        assert.match(
-            proactive,
-            /Do not delegate work that needs only one or two local tool calls/
-        )
         assert.ok(
             proactive.indexOf('but only for independent work') <
                 proactive.indexOf('When you do delegate')
         )
     })
 
-    it('appends configured hints without replacing collaboration invariants', () => {
+    it('does not recommend spawning at the depth limit', () => {
+        const limited = assembleChildPrompt({
+            ...input,
+            config: { ...DEFAULT_SUBAGENTS_CONFIG, maxDepth: 1 },
+            currentDepth: 1,
+        })
+        assert.match(
+            limited,
+            /Nested delegation is unavailable at depth 1 of 1/
+        )
+        assert.ok(!limited.includes('spawn_agent'))
+
+        const nested = assembleChildPrompt({
+            ...input,
+            config: { ...DEFAULT_SUBAGENTS_CONFIG, maxDepth: 2 },
+            currentDepth: 0,
+        })
+        assert.match(nested, /You can spawn agents/)
+        assert.match(nested, /paths up to depth 2/)
+    })
+
+    it('shows configured role descriptions to the model', () => {
+        const config = {
+            ...DEFAULT_SUBAGENTS_CONFIG,
+            roles: {
+                reviewer: { description: 'Read-only code review' },
+                builder: {},
+            },
+        }
+        const root = assembleRootPrompt({ ...input, config })
+        assert.match(root, /reviewer \(Read-only code review\)/)
+        assert.match(root, /builder/)
+        assert.match(root, /Omit agent_type for the default role/)
+
+        const hidden = assembleRootPrompt({
+            ...input,
+            config: { ...config, hideSpawnAgentMetadata: true },
+        })
+        assert.ok(!hidden.includes('reviewer'))
+    })
+
+    it('states the override policy for the exposed capability', () => {
+        const exposed = assembleRootPrompt(input)
+        assert.match(
+            exposed,
+            /overrides require fork_turns none or a positive N/
+        )
+        const inherited = assembleRootPrompt({
+            ...input,
+            config: {
+                ...DEFAULT_SUBAGENTS_CONFIG,
+                exposeSpawnAgentModelOverrides: false,
+            },
+        })
+        assert.match(inherited, /inherit the parent model/)
+        assert.ok(!inherited.includes('require fork_turns'))
+    })
+
+    it('appends configured hints without replacing the contract', () => {
         const custom = {
             ...DEFAULT_SUBAGENTS_CONFIG,
             rootAgentUsageHintText: 'custom root',
@@ -186,6 +239,24 @@ describe('prompts', () => {
         )
         const assembled = assembleRootPrompt({ ...input, config: suppressed })
         assert.ok(assembled.includes('You are /root'))
+        assert.ok(assembled.includes('Collaboration contract'))
+    })
+
+    it('applies developer instructions to children only', () => {
+        const config = {
+            ...DEFAULT_SUBAGENTS_CONFIG,
+            subagentDeveloperInstructions: 'child-only rule',
+        }
+        assert.ok(
+            assembleChildPrompt({ ...input, config }).includes(
+                'child-only rule'
+            )
+        )
+        assert.ok(
+            !assembleRootPrompt({ ...input, config }).includes(
+                'child-only rule'
+            )
+        )
     })
 
     it('conditions wait guidance on tool exposure', () => {
@@ -194,6 +265,8 @@ describe('prompts', () => {
             config: { ...DEFAULT_SUBAGENTS_CONFIG, waitAgentEnabled: false },
         })
         assert.ok(!withoutWait.includes('wait_agent'))
+        const withWait = assembleRootPrompt(input)
+        assert.match(withWait, /wait_agent returns when mail arrives/)
     })
 })
 
@@ -247,6 +320,7 @@ describe('tool plan', () => {
         assert.equal(schema.additionalProperties, false)
         assert.equal(schema.properties.task_name.pattern, '^[a-z0-9_]+$')
         assert.equal(schema.properties.message.minLength, 1)
+        assert.match(schema.properties.message.description, /objective/)
         assert.equal(schema.properties.target, undefined)
         assert.equal(schema.properties.model.pattern, '^[^/\\s]+/[^/\\s]+$')
         assert.equal(schema.properties.reasoning_effort.anyOf.length, 7)
@@ -279,5 +353,28 @@ describe('tool plan', () => {
             'interrupt_agent',
             'list_agents',
         ])
+    })
+
+    it('keeps tool copy free of repeated contract rules', () => {
+        const guidelines = Object.values(COLLABORATION_TOOL_PROMPTS).flatMap(
+            (tool) => tool.promptGuidelines
+        )
+        assert.ok(
+            !guidelines.some((guideline) => /fork_turns/.test(guideline)),
+            'fork_turns belongs to the contract'
+        )
+        assert.ok(
+            !guidelines.some((guideline) => /keep small work/i.test(guideline)),
+            'local-work rule belongs to the contract'
+        )
+    })
+
+    it('describes message success as dispatch acceptance, not insertion', () => {
+        const guideline =
+            COLLABORATION_TOOL_PROMPTS.send_message.promptGuidelines.join(' ')
+        assert.match(guideline, /accepted the message for dispatch/)
+        assert.match(guideline, /not proof of transcript insertion/)
+        assert.match(guideline, /not proof of .*processing/)
+        assert.doesNotMatch(guideline, /message was inserted/)
     })
 })

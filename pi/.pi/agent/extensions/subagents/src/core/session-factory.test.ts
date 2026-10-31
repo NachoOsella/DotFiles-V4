@@ -334,3 +334,132 @@ test('children omit wait_agent when wait is disabled', async () => {
         assert.ok(result.active.includes(name), `${name} should remain active`)
     }
 })
+
+test('role allowTools filters inherited tools but never collaboration tools', async () => {
+    const factory = createFactory({
+        roles: { reviewer: { allowTools: ['read'] } },
+    })
+    const child = {
+        ...record('/root/child', ['read', 'bash']),
+        role: 'reviewer',
+    }
+    const result = await activeTools(factory, child, parent(['read', 'bash']))
+
+    assert.ok(result.active.includes('read'))
+    assert.ok(!result.active.includes('bash'))
+    assert.ok(!result.configured.includes('bash'))
+    for (const name of COLLABORATION_TOOLS) {
+        assert.ok(result.active.includes(name), `${name} should remain active`)
+    }
+})
+
+test('role denyTools wins over allowTools and injected collaboration tools', async () => {
+    const factory = createFactory({
+        roles: {
+            reviewer: {
+                allowTools: ['read', 'bash'],
+                denyTools: ['bash', TOOL_WAIT_AGENT],
+            },
+        },
+    })
+    const inherited = ['read', 'bash', ...COLLABORATION_TOOLS]
+    const child = {
+        ...record('/root/child', inherited),
+        role: 'reviewer',
+    }
+    const result = await activeTools(factory, child, parent(inherited))
+
+    assert.ok(result.active.includes('read'))
+    assert.ok(!result.active.includes('bash'))
+    assert.ok(!result.configured.includes('bash'))
+    assert.ok(!result.active.includes(TOOL_WAIT_AGENT))
+    assert.ok(!result.configured.includes(TOOL_WAIT_AGENT))
+    for (const name of [
+        TOOL_SPAWN_AGENT,
+        TOOL_SEND_MESSAGE,
+        TOOL_FOLLOWUP_TASK,
+        TOOL_INTERRUPT_AGENT,
+        TOOL_LIST_AGENTS,
+    ]) {
+        assert.ok(result.active.includes(name), `${name} should remain active`)
+    }
+})
+
+test('an empty allowTools leaves only permitted collaboration tools', async () => {
+    const inherited = ['read', 'bash']
+    const factory = createFactory({ roles: { reviewer: { allowTools: [] } } })
+    const child = {
+        ...record('/root/child', inherited),
+        role: 'reviewer',
+    }
+    const result = await activeTools(factory, child, parent(inherited))
+
+    assert.ok(!result.active.includes('read'))
+    assert.ok(!result.active.includes('bash'))
+    assert.ok(!result.configured.includes('read'))
+    for (const name of COLLABORATION_TOOLS) {
+        assert.ok(result.active.includes(name), `${name} should remain active`)
+    }
+})
+
+test('role restrictions apply again on a cold reopen', async (t) => {
+    const directory = mkdtempSync(join(tmpdir(), 'subagents-role-reopen-'))
+    t.after(() => rmSync(directory, { recursive: true, force: true }))
+    const factory = new SessionFactory({
+        rootSessionId: () => 'root-session',
+        rootSessionDir: () => directory,
+        agentDir: join(directory, 'agent'),
+        getModelRegistry: () => ({ find: () => MODEL }) as never,
+        buildTools: () => COLLABORATION_TOOLS.map(customTool),
+        config: {
+            ...DEFAULT_SUBAGENTS_CONFIG,
+            roles: {
+                reviewer: {
+                    allowTools: ['read'],
+                    denyTools: ['bash', TOOL_SPAWN_AGENT],
+                },
+            },
+        },
+    })
+    const child = {
+        ...record('/root/child', ['read', 'bash']),
+        role: 'reviewer',
+    }
+    const first = await factory.create(child, parent(['read', 'bash']), {
+        _tag: 'None',
+    })
+    let sessionFile: string
+    try {
+        const active = first.session.getActiveToolNames()
+        assert.ok(active.includes('read'))
+        assert.ok(!active.includes('bash'))
+        assert.ok(!active.includes(TOOL_SPAWN_AGENT))
+        first.session.sessionManager.appendMessage({
+            role: 'user',
+            content: 'reopen prompt',
+            timestamp: Date.now(),
+        } as never)
+        sessionFile = first.session.sessionFile!
+    } finally {
+        await first.dispose()
+    }
+
+    const reopened = await factory.open({ ...child, sessionFile })
+    try {
+        const active = reopened.session.getActiveToolNames()
+        assert.ok(active.includes('read'))
+        assert.ok(!active.includes('bash'))
+        assert.ok(!active.includes(TOOL_SPAWN_AGENT))
+        for (const name of [
+            TOOL_SEND_MESSAGE,
+            TOOL_FOLLOWUP_TASK,
+            TOOL_WAIT_AGENT,
+            TOOL_INTERRUPT_AGENT,
+            TOOL_LIST_AGENTS,
+        ]) {
+            assert.ok(active.includes(name), `${name} should remain active`)
+        }
+    } finally {
+        await reopened.dispose()
+    }
+})

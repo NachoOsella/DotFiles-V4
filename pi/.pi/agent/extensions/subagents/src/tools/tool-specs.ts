@@ -41,7 +41,7 @@ export function buildSpawnAgentParams(config: SpawnSchemaConfig) {
             minLength: 1,
             pattern: '\\S',
             description:
-                'One nonempty, bounded delegated task for the new agent.',
+                'One bounded task for the new agent: objective; inputs and paths; deliverable; constraints; how to verify; when to stop.',
         }),
         task_name: Type.String({
             minLength: 1,

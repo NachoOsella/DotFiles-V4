@@ -285,15 +285,27 @@ export function decodeConfig(input: unknown): CodexSubagentsConfig {
                     `role "${name}" thinkingLevel is invalid`
                 )
             }
-            if (
-                role.tools !== undefined &&
-                (!Array.isArray(role.tools) ||
-                    role.tools.some((tool) => typeof tool !== 'string'))
-            ) {
-                throw new ConfigValidationError(
-                    `role "${name}" tools must be an array of strings`
-                )
+            const asToolList = (value: unknown): string[] => {
+                if (
+                    !Array.isArray(value) ||
+                    value.some((tool) => typeof tool !== 'string')
+                ) {
+                    throw new ConfigValidationError(
+                        `role "${name}" tools, allowTools, and denyTools must be arrays of strings`
+                    )
+                }
+                return value as string[]
             }
+            const tools =
+                role.tools === undefined ? undefined : asToolList(role.tools)
+            const allowTools =
+                role.allowTools === undefined
+                    ? undefined
+                    : asToolList(role.allowTools)
+            const denyTools =
+                role.denyTools === undefined
+                    ? undefined
+                    : asToolList(role.denyTools)
             roles[name] = {
                 ...(typeof role.description === 'string'
                     ? { description: role.description }
@@ -310,9 +322,9 @@ export function decodeConfig(input: unknown): CodexSubagentsConfig {
                               role.thinkingLevel as AgentRole['thinkingLevel'],
                       }
                     : {}),
-                ...(Array.isArray(role.tools)
-                    ? { tools: role.tools as string[] }
-                    : {}),
+                ...(tools ? { tools } : {}),
+                ...(allowTools ? { allowTools } : {}),
+                ...(denyTools ? { denyTools } : {}),
             }
         }
         ;(out as { roles: Record<string, AgentRole> }).roles = roles

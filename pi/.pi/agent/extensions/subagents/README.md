@@ -8,6 +8,10 @@ Pi adaptation informed by `openai/codex@a592c38c16cdd7623dacc9168926ebccedfb67d3
 (see `CODEX_SOURCE_MANIFEST.md` and `docs/CODEX_PARITY.md`). The revision is a
 behavioral reference, not a complete parity claim. Not an OpenAI product.
 
+Requires Pi 1.4 or later in the 1.x series. Older hosts start custom-message
+turns without preparing the child's system instructions. The extension disables
+itself with a diagnostic on unsupported hosts.
+
 ## Use
 
 ```text
@@ -21,7 +25,15 @@ list_agents(path_prefix="/root")
 
 Children run in persistent independent Pi sessions and report each completed
 turn to their direct parent with `FINAL_ANSWER`. Child transcripts stay in their
-own sessions; only the final answer enters the parent model context.
+own sessions; a bounded final summary enters the parent model context. Empty
+successful results produce an explicit outcome. Truncated results reference the
+full child transcript when one is available.
+
+Final-answer delivery persists an outbox intent before dispatch and acknowledges
+insertion only after finding its communication ID in the recipient transcript.
+Dispatch is not proof that a model read or processed the result. Retries require
+a known-absent envelope and a safe native idle boundary. This is not an
+exactly-once delivery guarantee.
 
 ## Child capabilities
 
@@ -30,6 +42,12 @@ A child inherits the caller's active tools, cwd, skills, context files, and the
 filter large results the same way the parent can. MCP is deliberately not
 loaded: no child opens an MCP server, and `-builtin:<name>` still disables a
 built-in for children too.
+
+Role `tools` remains additive for compatibility. Optional `allowTools` filters
+inherited and role-added tools; `denyTools` then removes names and takes
+precedence. `allowTools: []` allows no inherited tools. Collaboration tools use
+the depth/wait limits and `denyTools`, not `allowTools`. These filters do not
+sandbox the filesystem or suppress trusted extension startup hooks.
 
 The six collaboration tools declare an `outputSchema` and return
 `structuredContent`, so codemode scripts read their fields directly instead of
@@ -87,6 +105,23 @@ selects configured role defaults.
 Optional extension settings can be placed under `subagents` in `settings.json`,
 or supplied as JSON through `SUBAGENTS_CONFIG` / `SUBAGENTS_CONFIG_PATH`.
 Configured `roles` are exposed as `agent_type` choices in the spawn schema.
+Explicit JSON and files accept either the raw extension configuration or an
+object containing `subagents`. Malformed JSON, unreadable explicit files, and
+invalid integer overrides disable the extension with a diagnostic rather than
+silently enabling defaults. `SUBAGENTS_DISABLED=1` takes precedence.
+
+## Branch ownership and shutdown
+
+Teams belong to the selected root branch. Tree navigation detaches and settles
+the old team, writes its final graph to the old branch, and restores the selected
+branch's membership. It never deletes child transcripts or merges unrelated
+branch teams. Cancellation after quiescing restores the old membership, but
+cannot resume an already interrupted run.
+
+Shutdown attempts every child finalizer before writing the final checkpoint.
+A failed final checkpoint retains the detached graph for a navigation retry.
+Resolve the storage error before retrying or reloading. A process exit while
+storage remains unavailable cannot guarantee persistence.
 
 ## Source layout
 
@@ -137,4 +172,5 @@ npm run test:subagents
 The extension-local `npm test` runs `src/*/*.test.ts`.
 
 Docs: `docs/PI_API_BINDINGS.md`, `docs/ARCHITECTURE.md`,
-`docs/CODEX_PARITY.md`.
+`docs/CODEX_PARITY.md`, `docs/HARNESS_REVIEW.md`,
+`docs/IMPLEMENTATION_PLAN.md`, and `docs/M1_IMPLEMENTATION.md`.

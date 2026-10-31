@@ -99,23 +99,31 @@ function structuredResult<T extends Record<string, unknown>>(
     }
 }
 
-function callerOf(
-    manager: SubagentCoordinator,
-    ctx: ToolContextLike | undefined,
-    fixedCaller?: AgentPath
-): AgentPath {
-    if (fixedCaller) return fixedCaller
-    try {
-        const sessionId = ctx?.sessionManager.getSessionId()
-        return manager.callerFromSession(sessionId)
-    } catch {
-        return '/root' as AgentPath
-    }
+/** Live manager source so root tools survive coordinator replacement. */
+export type CollaborationManagerSource =
+    SubagentCoordinator | (() => SubagentCoordinator)
+
+function resolveManager(
+    source: CollaborationManagerSource
+): SubagentCoordinator {
+    return typeof source === 'function' ? source() : source
 }
 
-export function buildToolHandlers(manager: SubagentCoordinator) {
+function callerOf(
+    manager: SubagentCoordinator,
+    ctx: ToolContextLike | undefined
+): AgentPath {
+    const sessionId = ctx?.sessionManager.getSessionId()
+    // A missing context is a host/test path with no identity to verify. A
+    // present session id must resolve; callerFromSession fails closed there.
+    if (sessionId === undefined) return '/root' as AgentPath
+    return manager.callerFromSession(sessionId)
+}
+
+export function buildToolHandlers() {
     return {
         async spawn(
+            manager: SubagentCoordinator,
             caller: AgentPath,
             params: {
                 message: string
@@ -153,6 +161,7 @@ export function buildToolHandlers(manager: SubagentCoordinator) {
             })
         },
         async send(
+            manager: SubagentCoordinator,
             caller: AgentPath,
             params: { target: string; message: string },
             toolCallId: string
@@ -166,6 +175,7 @@ export function buildToolHandlers(manager: SubagentCoordinator) {
             return structuredResult({ delivered: true })
         },
         async followup(
+            manager: SubagentCoordinator,
             caller: AgentPath,
             params: { target: string; message: string },
             toolCallId: string
@@ -179,6 +189,7 @@ export function buildToolHandlers(manager: SubagentCoordinator) {
             return structuredResult({ delivered: true })
         },
         async wait(
+            manager: SubagentCoordinator,
             caller: AgentPath,
             params: { timeout_ms?: number },
             signal?: AbortSignal
@@ -194,6 +205,7 @@ export function buildToolHandlers(manager: SubagentCoordinator) {
             })
         },
         async interrupt(
+            manager: SubagentCoordinator,
             caller: AgentPath,
             params: { target: string },
             toolCallId: string
@@ -205,7 +217,11 @@ export function buildToolHandlers(manager: SubagentCoordinator) {
             })
             return structuredResult({ status: status._tag })
         },
-        list(caller: AgentPath, params: { path_prefix?: string }) {
+        list(
+            manager: SubagentCoordinator,
+            caller: AgentPath,
+            params: { path_prefix?: string }
+        ) {
             const agents = manager.list(caller, params.path_prefix)
             return structuredResult({
                 agents: agents.map((agent) => ({
@@ -228,19 +244,25 @@ export function buildToolHandlers(manager: SubagentCoordinator) {
 
 /** How a collaboration tool family is wired for its host session. */
 export interface CollaborationToolOptions {
-    /** Resolves the calling agent per call; a child pins one path. */
-    readonly resolveCaller: (ctx: ToolContextLike | undefined) => AgentPath
+    /** Resolves the calling agent with the manager active for this call. */
+    readonly resolveCaller: (
+        manager: SubagentCoordinator,
+        ctx: ToolContextLike | undefined
+    ) => AgentPath
     /** Root tools render their calls and results in the transcript. */
     readonly renderers?: boolean
 }
 
 /** Collaboration tools for pi.registerTool or an SDK child session. */
 export function buildToolDefinitions(
-    manager: SubagentCoordinator,
+    managerSource: CollaborationManagerSource,
     options: CollaborationToolOptions
 ): ToolDefinition[] {
-    const handlers = buildToolHandlers(manager)
-    const config = manager.getConfig()
+    const handlers = buildToolHandlers()
+    // Schemas are built once from the manager active at registration. Root
+    // handlers resolve the current manager per call so branch replacement does
+    // not require re-registering tools.
+    const config = resolveManager(managerSource).getConfig()
     const spawnAgentParams = buildSpawnAgentParams(config)
     const waitAgentParams = buildWaitAgentParams(config)
     const resolveCaller = options.resolveCaller
@@ -586,8 +608,10 @@ export function buildToolDefinitions(
                 _onUpdate: undefined,
                 ctx: ToolContextLike
             ) {
+                const manager = resolveManager(managerSource)
                 return handlers.spawn(
-                    resolveCaller(ctx),
+                    manager,
+                    resolveCaller(manager, ctx),
                     params,
                     ctx,
                     toolCallId
@@ -616,7 +640,13 @@ export function buildToolDefinitions(
                 _onUpdate: undefined,
                 ctx: ToolContextLike
             ) {
-                return handlers.send(resolveCaller(ctx), params, toolCallId)
+                const manager = resolveManager(managerSource)
+                return handlers.send(
+                    manager,
+                    resolveCaller(manager, ctx),
+                    params,
+                    toolCallId
+                )
             },
             outputSchema: DeliveryOutput,
             ...(renderers
@@ -641,7 +671,13 @@ export function buildToolDefinitions(
                 _onUpdate: undefined,
                 ctx: ToolContextLike
             ) {
-                return handlers.followup(resolveCaller(ctx), params, toolCallId)
+                const manager = resolveManager(managerSource)
+                return handlers.followup(
+                    manager,
+                    resolveCaller(manager, ctx),
+                    params,
+                    toolCallId
+                )
             },
             outputSchema: DeliveryOutput,
             ...(renderers
@@ -667,7 +703,13 @@ export function buildToolDefinitions(
                 _onUpdate: undefined,
                 ctx: ToolContextLike
             ) {
-                return handlers.wait(resolveCaller(ctx), params, signal)
+                const manager = resolveManager(managerSource)
+                return handlers.wait(
+                    manager,
+                    resolveCaller(manager, ctx),
+                    params,
+                    signal
+                )
             },
             ...(renderers
                 ? {
@@ -691,8 +733,10 @@ export function buildToolDefinitions(
                 _onUpdate: undefined,
                 ctx: ToolContextLike
             ) {
+                const manager = resolveManager(managerSource)
                 return handlers.interrupt(
-                    resolveCaller(ctx),
+                    manager,
+                    resolveCaller(manager, ctx),
                     params,
                     toolCallId
                 )
@@ -720,7 +764,12 @@ export function buildToolDefinitions(
                 _onUpdate: undefined,
                 ctx: ToolContextLike
             ) {
-                return handlers.list(resolveCaller(ctx), params)
+                const manager = resolveManager(managerSource)
+                return handlers.list(
+                    manager,
+                    resolveCaller(manager, ctx),
+                    params
+                )
             },
             outputSchema: ListAgentsOutput,
             ...(renderers
@@ -734,9 +783,9 @@ export function buildToolDefinitions(
 }
 
 /** Root tool definitions for pi.registerTool (caller from the session). */
-export function buildRootToolDefinitions(manager: SubagentCoordinator) {
+export function buildRootToolDefinitions(manager: CollaborationManagerSource) {
     return buildToolDefinitions(manager, {
-        resolveCaller: (ctx) => callerOf(manager, ctx),
+        resolveCaller: (current, ctx) => callerOf(current, ctx),
         renderers: true,
     })
 }

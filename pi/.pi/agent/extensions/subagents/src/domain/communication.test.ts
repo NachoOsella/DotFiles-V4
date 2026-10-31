@@ -137,9 +137,11 @@ describe('communication envelopes', () => {
 })
 
 describe('completion formatting', () => {
-    it('passes through success and empty success', () => {
+    it('passes through a short success and synthesizes empty success', () => {
         assert.equal(formatFinalAnswer(AgentStatus.completed('done')), 'done')
-        assert.equal(formatFinalAnswer(AgentStatus.completed(null)), '')
+        const empty = formatFinalAnswer(AgentStatus.completed(null))
+        assert.ok(empty && empty.length > 0)
+        assert.match(empty, /no final message/i)
     })
 
     it('bounds terminal errors with recovery guidance', () => {
@@ -147,6 +149,7 @@ describe('completion formatting', () => {
         const payload = formatFinalAnswer(AgentStatus.errored(long))!
         assert.match(payload, /^Agent errored: /)
         assert.match(payload, /followup_task/)
+        assert.match(payload, /truncated/)
         assert.ok(payload.length < long.length)
     })
 

@@ -23,7 +23,6 @@ import type {
 } from '../domain/agent-record.ts'
 import {
     assertNonEmptyMessage,
-    finalAnswerCommunication,
     newTaskCommunication,
     plainMessageCommunication,
     parseForkTurns,
@@ -31,7 +30,7 @@ import {
     type ForkTurns,
     type InterAgentCommunication,
 } from '../domain/communication.ts'
-import { formatFinalAnswer } from '../domain/completion.ts'
+import { formatCompletionResult } from '../domain/completion.ts'
 import {
     AgentAlreadyExistsError,
     AgentCapacityReachedError,
@@ -44,20 +43,23 @@ import {
 } from '../domain/errors.ts'
 import {
     newAgentId,
+    newCommunicationId,
     newTurnId,
     type AgentId,
     type AgentPath,
     type ToolCallId,
 } from '../domain/ids.ts'
 import type { ParentExecutionSnapshot } from '../domain/parent-snapshot.ts'
-import { resolveRole } from '../config/roles.ts'
+import { resolveRole, resolveRoleTools } from '../config/roles.ts'
 import { AgentMutex, type AgentRuntime } from './agent-runtime.ts'
 import type { AgentSession } from '@earendil-works/pi-coding-agent'
 import { ExecutionLimiter, type ExecutionPermit } from './execution-limiter.ts'
 import {
     childEndpoint,
     type CommunicationEndpoint,
-    type DeliveryOptions,
+    type InsertionState,
+    sessionInsertionProbe,
+    SUBAGENTS_COMMUNICATION_CUSTOM_TYPE,
 } from './transport.ts'
 import {
     SessionFactory,
@@ -68,7 +70,11 @@ import {
     clampWaitTimeout,
     type CodexSubagentsConfig,
 } from '../config/config.ts'
-import type { SubagentEvent } from '../domain/events.ts'
+import type {
+    DeliveryCheckpointEvent,
+    DeliveryCheckpointListener,
+    SubagentEvent,
+} from '../domain/events.ts'
 import type { PersistedSubagentStateV2 } from '../persistence/schema.ts'
 import { SUBAGENT_META_CUSTOM_TYPE } from '../persistence/session-state.ts'
 import {
@@ -126,6 +132,10 @@ export interface SubagentCoordinatorOptions {
     readonly sessionFactory?: SubagentSessionFactory
     /** Live check used to route root-bound messages (steer vs append). */
     readonly isRootStreaming?: () => boolean
+    /** Enable durable insertion probes and checkpoints. Root integration sets this. */
+    readonly deliveryReceipts?: boolean
+    /** Child resource-loader warnings and extension errors. */
+    readonly onLoaderDiagnostics?: (diagnostics: readonly string[]) => void
 }
 
 interface TrackedRun {
@@ -135,6 +145,34 @@ interface TrackedRun {
     nativeStarted: boolean
     settled: boolean
     finish(error?: unknown): void
+}
+
+interface OutstandingDispatch {
+    readonly communicationId: string
+    readonly childId: AgentId
+    readonly recipient: AgentPath
+    readonly runSequence: number
+    readonly epochAtDispatch: number
+    failed: boolean
+}
+
+interface DeliveryDispatchReceipt {
+    readonly childId: AgentId
+    readonly sequence: number
+    readonly communicationId: string
+    readonly recipient: AgentPath
+}
+
+interface RuntimeLease {
+    readonly runtime: AgentRuntime
+    release(): void
+}
+
+export interface ReconcileDeliveryOptions {
+    /** Treat this call as a native terminal boundary for the recipient. */
+    readonly terminal?: boolean
+    /** Explicit override after the host confirms the recipient is idle. */
+    readonly forceRetry?: boolean
 }
 
 const WAIT_COMPLETED = 'Wait completed.'
@@ -172,6 +210,26 @@ export class SubagentCoordinator {
     private readonly completionDeliveries = new Map<string, Promise<void>>()
     private completionDrain?: Promise<void>
     private completionDrainRequested = false
+    private readonly deliveryCheckpointListeners =
+        new Set<DeliveryCheckpointListener>()
+    private readonly outstandingDispatches = new Map<
+        string,
+        OutstandingDispatch
+    >()
+    /** Intents created in this process but not yet checkpointed. */
+    private readonly unconfirmedIntents = new Set<string>()
+    private readonly deliveryEpochs = new Map<string, number>()
+    private readonly runtimePins = new Map<AgentId, number>()
+    private readonly residencyWaiters = new Set<() => void>()
+    private residencyGeneration = 0
+    private readonly ackMutexes = new Map<AgentId, AgentMutex>()
+    private readonly deliveryOperations = new Set<Promise<unknown>>()
+    private readonly deliveryRetryTimers = new Set<
+        ReturnType<typeof setTimeout>
+    >()
+    private deliveryGeneration = 0
+    private deliveryDetached = false
+    private shutdownPromise?: Promise<void>
 
     constructor(options: SubagentCoordinatorOptions) {
         this.options = options
@@ -211,6 +269,7 @@ export class SubagentCoordinator {
                 getModelRegistry: options.getModelRegistry,
                 buildTools: options.buildTools,
                 config: options.config,
+                onLoaderDiagnostics: options.onLoaderDiagnostics,
                 onRuntimeCreated: (record, runtime) =>
                     this.observeRuntime(record, runtime),
                 onActivity: (path, activity) => {
@@ -264,6 +323,67 @@ export class SubagentCoordinator {
         }
     }
 
+    /**
+     * Awaitable delivery checkpoint. Unlike `emit`, listener failures are
+     * propagated so a caller cannot send or acknowledge after the durable
+     * checkpoint failed.
+     */
+    onDeliveryCheckpoint(listener: DeliveryCheckpointListener): () => void {
+        this.deliveryCheckpointListeners.add(listener)
+        return () => this.deliveryCheckpointListeners.delete(listener)
+    }
+
+    detachDelivery(): void {
+        if (this.deliveryDetached) return
+        this.deliveryDetached = true
+        this.deliveryGeneration += 1
+        this.completionDrainRequested = false
+        this.outstandingDispatches.clear()
+        for (const timer of this.deliveryRetryTimers) clearTimeout(timer)
+        this.deliveryRetryTimers.clear()
+    }
+
+    private get receiptsEnabled(): boolean {
+        return this.options.deliveryReceipts === true
+    }
+
+    private async checkpointDelivery(
+        reason: DeliveryCheckpointEvent['reason'],
+        childId: AgentId,
+        recipient: AgentPath,
+        runSequence: number,
+        communicationId: string
+    ): Promise<void> {
+        if (!this.receiptsEnabled) return
+        if (this.deliveryCheckpointListeners.size === 0) {
+            throw new Error(
+                'Delivery receipts are enabled but no checkpoint listener is attached.'
+            )
+        }
+        const event: DeliveryCheckpointEvent = {
+            _tag: 'DeliveryCheckpoint',
+            reason,
+            communicationId,
+            agentId: childId,
+            recipient,
+            runSequence,
+        }
+        await Promise.all(
+            [...this.deliveryCheckpointListeners].map((listener) =>
+                Promise.resolve(listener(event))
+            )
+        )
+    }
+
+    private trackDeliveryOperation<T>(operation: Promise<T>): Promise<T> {
+        this.deliveryOperations.add(operation)
+        const clear = () => {
+            this.deliveryOperations.delete(operation)
+        }
+        void operation.then(clear, clear)
+        return operation
+    }
+
     getConfig(): CodexSubagentsConfig {
         return this.options.config
     }
@@ -297,7 +417,11 @@ export class SubagentCoordinator {
     callerFromSession(sessionId: string | undefined): AgentPath {
         if (!sessionId) return ROOT_PATH
         const id = this.sessionBindings.get(sessionId)
-        return this.records.get(id ?? this.rootId)?.path ?? ROOT_PATH
+        const record = id ? this.records.get(id) : undefined
+        if (!record) {
+            throw new AgentNotFoundError(`session:${sessionId}`)
+        }
+        return record.path
     }
 
     list(from: AgentPath, prefix?: string): ListedAgent[] {
@@ -387,12 +511,8 @@ export class SubagentCoordinator {
             model,
             reasoningEffort: options.reasoningEffort,
             cwd: parentSnapshot.cwd,
-            activeTools: [
-                ...new Set([
-                    ...parentSnapshot.activeTools,
-                    ...(role.tools ?? []),
-                ]),
-            ],
+            activeTools: resolveRoleTools(parentSnapshot.activeTools, role)
+                .tools,
             thinkingLevel: inheritsExecution
                 ? (role.thinkingLevel ?? parentSnapshot.thinkingLevel)
                 : (thinkingOverride ??
@@ -406,8 +526,13 @@ export class SubagentCoordinator {
             task: options.message,
         }
         let initialization!: Promise<AgentRuntime>
+        let spawnPermit: ExecutionPermit | undefined
         await this.registryMutex.runExclusive(async () => {
             this.assertSpawnReservationAvailable(childPath)
+            // Reserve execution admission before creating a child session or
+            // running its extension startup. A rejection must not leave side
+            // effects or a loaded session behind.
+            spawnPermit = this.limiter.tryAcquire()
             this.records.set(record.id, record)
             this.pathIndex.set(childPath as string, record.id)
             initialization = this.initializeSpawnRuntime(
@@ -427,7 +552,8 @@ export class SubagentCoordinator {
                 payload: options.message,
                 sourceCallId: options.callId,
             })
-            await this.startRun(record.id, comm)
+            await this.startRun(record.id, comm, spawnPermit)
+            spawnPermit = undefined
             this.emit({
                 _tag: 'ActivityStarted',
                 callId: options.callId ?? (`spawn-${Date.now()}` as ToolCallId),
@@ -437,6 +563,7 @@ export class SubagentCoordinator {
             })
             return { path: childPath, id: record.id }
         } catch (error) {
+            spawnPermit?.release()
             await this.residencyMutex.runExclusive(async () => {
                 const runtime = this.runtimes.get(record.id)
                 if (runtime) await runtime.dispose().catch(() => undefined)
@@ -460,16 +587,32 @@ export class SubagentCoordinator {
     }): Promise<void> {
         assertNonEmptyMessage(args.message)
         const target = this.resolve(args.caller, args.target)
-        const endpoint = await this.endpointFor(target.id)
+        const root = target.path === ROOT_PATH || target.id === this.rootId
+        const lease = root ? undefined : await this.leaseRuntime(target.id)
+        const endpoint = root
+            ? this.options.rootEndpoint
+            : lease!.runtime.endpoint!
         const comm = plainMessageCommunication({
             author: args.caller,
             recipient: target.path,
             payload: args.message,
             sourceCallId: args.callId,
         })
-        await this.mutex(target.id).runExclusive(async () => {
-            await endpoint.send(comm, this.messageDelivery(target.id))
-        })
+        try {
+            await this.mutex(target.id).runExclusive(async () => {
+                const streaming = root
+                    ? (this.options.isRootStreaming?.() ?? false)
+                    : lease!.runtime.session.isStreaming
+                await endpoint.send(
+                    comm,
+                    streaming
+                        ? { triggerTurn: true, delivery: 'steer' }
+                        : { triggerTurn: false }
+                )
+            })
+        } finally {
+            lease?.release()
+        }
         this.touch(target.id)
         this.waitHub.notifyMailbox(target.path as string)
         this.emit({
@@ -491,7 +634,8 @@ export class SubagentCoordinator {
         if (isRootPath(targetPath)) throw new RootFollowupForbiddenError()
         const target = this.getRecordByPath(targetPath)
         if (!target) throw new AgentNotFoundError(targetPath as string)
-        const runtime = await this.ensureLoaded(target.id)
+        const lease = await this.leaseRuntime(target.id)
+        const runtime = lease.runtime
         const comm = newTaskCommunication({
             kind: 'followup',
             author: args.caller,
@@ -499,20 +643,24 @@ export class SubagentCoordinator {
             payload: args.message,
             sourceCallId: args.callId,
         })
-        await this.mutex(target.id).runExclusive(async () => {
-            if (runtime.session.isStreaming) {
-                await runtime.endpoint!.send(comm, {
-                    triggerTurn: true,
-                    delivery: 'steer',
-                })
-                this.waitHub.notifySteer(target.path as string)
-                return
-            }
-            if (runtime.currentRun) {
-                await runtime.currentRun.catch(() => undefined)
-            }
-            await this.startRun(target.id, comm)
-        })
+        try {
+            await this.mutex(target.id).runExclusive(async () => {
+                if (runtime.session.isStreaming) {
+                    await runtime.endpoint!.send(comm, {
+                        triggerTurn: true,
+                        delivery: 'steer',
+                    })
+                    this.waitHub.notifySteer(target.path as string)
+                    return
+                }
+                if (runtime.currentRun) {
+                    await runtime.currentRun.catch(() => undefined)
+                }
+                await this.startRun(target.id, comm)
+            })
+        } finally {
+            lease.release()
+        }
         this.touch(target.id)
         this.emit({
             _tag: 'ActivityInteracted',
@@ -533,13 +681,19 @@ export class SubagentCoordinator {
         }
         const target = this.getRecordByPath(targetPath)
         if (!target) throw new AgentNotFoundError(targetPath as string)
-        const runtime = this.runtimes.get(target.id)
+        const lease = this.leaseExistingRuntime(target.id)
+        const runtime = lease?.runtime
         if (!runtime?.session.isStreaming && !runtime?.currentRun) {
+            lease?.release()
             return target.status
         }
-        runtime.interruptRequested = true
-        await runtime.session.abort().catch(() => undefined)
-        await runtime.currentRun?.catch(() => undefined)
+        try {
+            runtime.interruptRequested = true
+            await runtime.session.abort().catch(() => undefined)
+            await runtime.currentRun?.catch(() => undefined)
+        } finally {
+            lease?.release()
+        }
         this.emit({
             _tag: 'ActivityInterrupted',
             callId: args.callId ?? (`interrupt-${Date.now()}` as ToolCallId),
@@ -582,24 +736,50 @@ export class SubagentCoordinator {
         this.waitHub.notifySteer(path as string)
     }
 
-    async shutdown(): Promise<void> {
-        this.shutdownFlag = true
-        await Promise.allSettled([...this.loading.values()])
-        const runtimes = [...this.runtimes.values()]
-        for (const runtime of runtimes) {
-            runtime.interruptRequested = true
-            await runtime.session.abort().catch(() => undefined)
-        }
-        await Promise.all(
-            runtimes.map((runtime) =>
-                runtime.currentRun?.catch(() => undefined)
+    shutdown(): Promise<void> {
+        return (this.shutdownPromise ??= this.runShutdown())
+    }
+
+    private async runShutdown(): Promise<void> {
+        const failures: unknown[] = []
+        try {
+            this.detachDelivery()
+            this.shutdownFlag = true
+            this.notifyResidencyChange()
+            await Promise.allSettled([...this.loading.values()])
+            const runtimes = [...this.runtimes.values()]
+            for (const runtime of runtimes) {
+                runtime.interruptRequested = true
+                await runtime.session.abort().catch(() => undefined)
+            }
+            await Promise.all(
+                runtimes.map((runtime) =>
+                    runtime.currentRun?.catch(() => undefined)
+                )
             )
-        )
-        await Promise.all(runtimes.map((runtime) => runtime.dispose()))
-        this.runtimes.clear()
-        this.loading.clear()
-        this.waitHub.clear()
-        this.activityFeed.clear()
+            while (this.deliveryOperations.size > 0) {
+                await Promise.allSettled([...this.deliveryOperations])
+            }
+            const disposals = await Promise.allSettled(
+                runtimes.map(async (runtime) => await runtime.dispose())
+            )
+            for (const result of disposals) {
+                if (result.status === 'rejected') failures.push(result.reason)
+            }
+        } finally {
+            this.runtimes.clear()
+            this.loading.clear()
+            this.waitHub.clear()
+            this.activityFeed.clear()
+            this.notifyResidencyChange()
+        }
+        if (failures.length === 1) throw failures[0]
+        if (failures.length > 1) {
+            throw new AggregateError(
+                failures,
+                `subagent shutdown failed for ${failures.length} runtimes`
+            )
+        }
     }
 
     serialize(rootSessionId: string): PersistedSubagentStateV2 {
@@ -637,17 +817,34 @@ export class SubagentCoordinator {
 
     private async startRun(
         id: AgentId,
-        comm: InterAgentCommunication
+        comm: InterAgentCommunication,
+        permit?: ExecutionPermit,
+        receipt?: DeliveryDispatchReceipt
     ): Promise<void> {
         if (this.shutdownFlag) throw new Error('session is shutting down')
         const runtime = this.runtimes.get(id)
         if (!this.records.has(id) || !runtime)
             throw new AgentNotFoundError(String(id))
         if (runtime.session.isStreaming && !runtime.interruptRequested) {
-            await runtime.endpoint!.send(comm, {
-                triggerTurn: true,
-                delivery: 'steer',
-            })
+            permit?.release()
+            if (receipt) {
+                if (this.deliveryDetached) return
+                this.markOutstanding(
+                    receipt.childId,
+                    receipt.sequence,
+                    receipt.communicationId,
+                    receipt.recipient
+                )
+            }
+            try {
+                await runtime.endpoint!.send(comm, {
+                    triggerTurn: true,
+                    delivery: 'steer',
+                })
+            } catch (error) {
+                if (receipt) this.failOutstanding(receipt.communicationId)
+                throw error
+            }
             this.waitHub.notifySteer(runtime.path)
             return
         }
@@ -657,14 +854,45 @@ export class SubagentCoordinator {
             await runtime.session.waitForIdle()
         if (this.shutdownFlag) throw new Error('session is shutting down')
         if (runtime.session.isStreaming) {
-            await runtime.endpoint!.send(comm, {
-                triggerTurn: true,
-                delivery: 'steer',
-            })
+            permit?.release()
+            if (receipt) {
+                if (this.deliveryDetached) return
+                this.markOutstanding(
+                    receipt.childId,
+                    receipt.sequence,
+                    receipt.communicationId,
+                    receipt.recipient
+                )
+            }
+            try {
+                await runtime.endpoint!.send(comm, {
+                    triggerTurn: true,
+                    delivery: 'steer',
+                })
+            } catch (error) {
+                if (receipt) this.failOutstanding(receipt.communicationId)
+                throw error
+            }
             this.waitHub.notifySteer(runtime.path)
             return
         }
-        const run = this.beginRun(id, runtime, this.limiter.tryAcquire())
+        const run = this.beginRun(
+            id,
+            runtime,
+            permit ?? this.limiter.tryAcquire()
+        )
+        if (receipt) {
+            if (this.deliveryDetached) {
+                run.finish()
+                return
+            }
+            this.markOutstanding(
+                receipt.childId,
+                receipt.sequence,
+                receipt.communicationId,
+                receipt.recipient
+            )
+        }
         try {
             void runtime.endpoint!.send(comm, { triggerTurn: true }).then(
                 () => {
@@ -672,9 +900,13 @@ export class SubagentCoordinator {
                     // sends and non-event adapters still need promise settlement.
                     if (!run.nativeStarted) run.finish()
                 },
-                (error) => run.finish(error)
+                (error) => {
+                    if (receipt) this.failOutstanding(receipt.communicationId)
+                    run.finish(error)
+                }
             )
         } catch (error) {
+            if (receipt) this.failOutstanding(receipt.communicationId)
             run.finish(error)
             throw error
         }
@@ -759,6 +991,17 @@ export class SubagentCoordinator {
                 // Public message_end precedes SDK persistence, so include its finalized message once.
                 this.captureUsage(record.id, runtime, event.message)
             } else if (
+                event.type === 'message_end' &&
+                event.message.role === 'custom' &&
+                (event.message as { customType?: unknown }).customType ===
+                    SUBAGENTS_COMMUNICATION_CUSTOM_TYPE
+            ) {
+                if (this.receiptsEnabled) {
+                    void this.reconcileDeliveryReceipts(record.path).catch(
+                        () => undefined
+                    )
+                }
+            } else if (
                 event.type === 'turn_end' ||
                 event.type === 'compaction_end' ||
                 (event.type === 'entry_appended' &&
@@ -768,6 +1011,31 @@ export class SubagentCoordinator {
             } else if (event.type === 'agent_settled') {
                 const run = this.nativeRuns.get(record.id)
                 if (run?.runtime === runtime) run.finish()
+                if (this.receiptsEnabled) {
+                    const generation = this.deliveryGeneration
+                    void this.reconcileDeliveryReceipts(record.path).catch(
+                        () => undefined
+                    )
+                    const pendingAtSettlement = this.hasPendingFor(record.path)
+                    if (!pendingAtSettlement) return
+                    // Native settlement precedes deferred turn processing. A
+                    // next-tick idle check is the first safe retry boundary.
+                    const timer = setTimeout(() => {
+                        this.deliveryRetryTimers.delete(timer)
+                        if (
+                            this.deliveryDetached ||
+                            this.deliveryGeneration !== generation ||
+                            !runtime.session.isIdle
+                        ) {
+                            return
+                        }
+                        void this.reconcileDeliveryReceipts(record.path, {
+                            forceRetry: true,
+                        }).catch(() => undefined)
+                    }, 0)
+                    timer.unref?.()
+                    this.deliveryRetryTimers.add(timer)
+                }
             }
         })
         const dispose = runtime.dispose.bind(runtime)
@@ -844,7 +1112,9 @@ export class SubagentCoordinator {
                 await this.safeDeliverCompletion(record, sequence, status)
             } else {
                 const status = AgentStatus.completed(
-                    runtime.session.getLastAssistantText() ?? null
+                    assistantText(runtime.lastAssistant) ??
+                        runtime.session.getLastAssistantText() ??
+                        null
                 )
                 this.setRecord(id, (previous) => ({
                     ...previous,
@@ -873,6 +1143,7 @@ export class SubagentCoordinator {
                 runtime.lastTouched = Date.now()
                 this.nativeRuns.delete(id)
             }
+            this.notifyResidencyChange()
             this.scheduleCompletionDrain()
             this.emit({
                 _tag: 'ActivityCompleted',
@@ -967,39 +1238,86 @@ export class SubagentCoordinator {
             record.lastDeliveredRunSequence >= sequence
         )
             return
-        const payload = formatFinalAnswer(status)
-        if (payload === null || !record.parentPath) return
-        // Usage and start time land on the stored record during settlement, so
-        // read the current one instead of the caller's snapshot.
+        // Usage, start time, and transcript reference land on the stored record
+        // during settlement, so read the current one instead of the snapshot.
         const current = this.records.get(record.id) ?? record
-        const communication = finalAnswerCommunication({
-            author: record.path,
-            recipient: record.parentPath,
-            payload,
-            meta: completionMeta(current, status),
+        const formatted = formatCompletionResult({
+            status,
+            sessionFile: current.sessionFile,
+            sessionId: current.sessionId,
         })
+        if (formatted === null || !record.parentPath) return
+        const existing = (current.pendingCompletions ?? []).find(
+            (pending) => pending.runSequence === sequence
+        )
+        const pending =
+            existing ??
+            this.queuePendingCompletion(record.id, sequence, {
+                id: newCommunicationId(),
+                kind: 'result',
+                messageType: 'FINAL_ANSWER',
+                author: record.path,
+                recipient: record.parentPath,
+                payload: formatted.payload,
+                triggerTurn: true,
+                meta: {
+                    ...completionMeta(current, status),
+                    ...(formatted.truncated ? { truncated: true } : {}),
+                    ...(formatted.fullResultRef
+                        ? { fullResultRef: formatted.fullResultRef }
+                        : {}),
+                },
+            })
+        if (this.receiptsEnabled && !existing) {
+            this.unconfirmedIntents.add(pending.communicationId)
+            try {
+                await this.checkpointDelivery(
+                    'intent-persisted',
+                    record.id,
+                    pending.recipient,
+                    sequence,
+                    pending.communicationId
+                )
+            } catch {
+                // The outbox entry remains, but it is not dispatchable until a
+                // durable intent checkpoint succeeds.
+                return
+            }
+            this.unconfirmedIntents.delete(pending.communicationId)
+        }
         try {
-            await this.deliverCompletion(record.id, sequence, communication)
+            await this.deliverCompletion(
+                record.id,
+                sequence,
+                pendingCommunication(pending)
+            )
         } catch {
-            this.queuePendingCompletion(record.id, sequence, communication)
+            // The outbox entry was written before dispatch and remains pending.
         }
     }
 
     private async deliverCompletion(
         childId: AgentId,
         sequence: number,
-        communication: InterAgentCommunication
+        communication: InterAgentCommunication,
+        retry = false
     ): Promise<void> {
         const current = this.records.get(childId)
         if (!current) return
         if ((current.lastDeliveredRunSequence ?? -1) >= sequence) {
-            this.acknowledgeCompletion(childId, sequence)
+            await this.acknowledgeCompletion(
+                childId,
+                sequence,
+                communication.id
+            )
             return
         }
         const key = `${childId}:${sequence}`
         const pending = this.completionDeliveries.get(key)
         if (pending) return await pending
-        const delivery = this.sendCompletion(childId, sequence, communication)
+        const delivery = this.trackDeliveryOperation(
+            this.sendCompletion(childId, sequence, communication, retry)
+        )
         this.completionDeliveries.set(key, delivery)
         try {
             await delivery
@@ -1011,6 +1329,143 @@ export class SubagentCoordinator {
     private async sendCompletion(
         childId: AgentId,
         sequence: number,
+        communication: InterAgentCommunication,
+        retry: boolean
+    ): Promise<void> {
+        if (!this.receiptsEnabled) {
+            await this.sendCompletionLegacy(childId, sequence, communication)
+            return
+        }
+        const parent = this.getRecordByPath(communication.recipient)
+        if (!parent) throw new AgentNotFoundError(communication.recipient)
+        if (this.deliveryDetached) return
+        if (this.unconfirmedIntents.has(communication.id)) return
+
+        const parentLease =
+            parent.path === ROOT_PATH
+                ? undefined
+                : await this.leaseRuntime(parent.id)
+        try {
+            const endpoint =
+                parent.path === ROOT_PATH
+                    ? this.options.rootEndpoint
+                    : parentLease!.runtime.endpoint!
+            const observed = await this.probeEndpoint(
+                endpoint,
+                communication.id
+            )
+            if (observed === 'accepted') {
+                await this.acknowledgeCompletion(
+                    childId,
+                    sequence,
+                    communication.id
+                )
+                return
+            }
+            if (observed === 'unknown') return
+            if (this.outstandingDispatches.has(communication.id)) return
+            if (this.deliveryDetached) return
+
+            if (retry) {
+                try {
+                    await this.checkpointDelivery(
+                        'dispatch-retry',
+                        childId,
+                        parent.path,
+                        sequence,
+                        communication.id
+                    )
+                } catch {
+                    return
+                }
+            }
+
+            if (parent.path === ROOT_PATH) {
+                this.markOutstanding(
+                    childId,
+                    sequence,
+                    communication.id,
+                    parent.path
+                )
+                try {
+                    // Root send is fire-and-forget by contract. This await only
+                    // observes synchronous callback invocation, never insertion.
+                    await endpoint.send(communication, {
+                        triggerTurn: true,
+                        delivery: 'steer',
+                    })
+                } catch (error) {
+                    this.failOutstanding(communication.id)
+                    throw error
+                }
+            } else {
+                const runtime = parentLease!.runtime
+                await this.mutex(parent.id).runExclusive(async () => {
+                    if (this.deliveryDetached) return
+                    const current = this.records.get(childId)
+                    if (
+                        !current ||
+                        (current.lastDeliveredRunSequence ?? -1) >= sequence
+                    ) {
+                        if (current) {
+                            await this.acknowledgeCompletion(
+                                childId,
+                                sequence,
+                                communication.id
+                            )
+                        }
+                        return
+                    }
+                    const receipt = {
+                        childId,
+                        sequence,
+                        communicationId: communication.id,
+                        recipient: parent.path,
+                    }
+                    if (runtime.session.isStreaming) {
+                        this.markOutstanding(
+                            childId,
+                            sequence,
+                            communication.id,
+                            parent.path
+                        )
+                        try {
+                            await runtime.endpoint!.send(communication, {
+                                triggerTurn: true,
+                                delivery: 'steer',
+                            })
+                        } catch (error) {
+                            this.failOutstanding(communication.id)
+                            throw error
+                        }
+                    } else {
+                        await this.startRun(
+                            parent.id,
+                            communication,
+                            undefined,
+                            receipt
+                        )
+                    }
+                })
+            }
+
+            const after = await this.probeEndpoint(endpoint, communication.id)
+            if (after === 'accepted') {
+                await this.acknowledgeCompletion(
+                    childId,
+                    sequence,
+                    communication.id
+                )
+            }
+        } finally {
+            parentLease?.release()
+        }
+        this.waitHub.notifyMailbox(parent.path as string)
+    }
+
+    private async sendCompletionLegacy(
+        childId: AgentId,
+        sequence: number,
         communication: InterAgentCommunication
     ): Promise<void> {
         const parent = this.getRecordByPath(communication.recipient)
@@ -1020,50 +1475,131 @@ export class SubagentCoordinator {
                 triggerTurn: true,
                 delivery: 'steer',
             })
-            this.acknowledgeCompletion(childId, sequence)
+            await this.acknowledgeCompletion(
+                childId,
+                sequence,
+                communication.id
+            )
         } else {
-            const runtime = await this.ensureLoaded(parent.id)
-            await this.mutex(parent.id).runExclusive(async () => {
-                // Loading and mutex acquisition may have let a newer result
-                // acknowledge this child. Check again at the actual send.
-                const current = this.records.get(childId)
-                if (
-                    !current ||
-                    (current.lastDeliveredRunSequence ?? -1) >= sequence
-                ) {
-                    if (current) this.acknowledgeCompletion(childId, sequence)
-                    return
-                }
-                if (runtime.session.isStreaming) {
-                    await runtime.endpoint!.send(communication, {
-                        triggerTurn: true,
-                        delivery: 'steer',
-                    })
-                } else {
-                    if (runtime.currentRun) await runtime.currentRun
-                    await this.startRun(parent.id, communication)
-                }
-                // Acknowledge before releasing the recipient mutex so a stale
-                // waiter cannot slip between delivery and its watermark.
-                this.acknowledgeCompletion(childId, sequence)
-            })
+            const lease = await this.leaseRuntime(parent.id)
+            try {
+                const runtime = lease.runtime
+                await this.mutex(parent.id).runExclusive(async () => {
+                    const current = this.records.get(childId)
+                    if (
+                        !current ||
+                        (current.lastDeliveredRunSequence ?? -1) >= sequence
+                    ) {
+                        if (current) {
+                            await this.acknowledgeCompletion(
+                                childId,
+                                sequence,
+                                communication.id
+                            )
+                        }
+                        return
+                    }
+                    if (runtime.session.isStreaming) {
+                        await runtime.endpoint!.send(communication, {
+                            triggerTurn: true,
+                            delivery: 'steer',
+                        })
+                    } else {
+                        if (runtime.currentRun) await runtime.currentRun
+                        await this.startRun(parent.id, communication)
+                    }
+                    await this.acknowledgeCompletion(
+                        childId,
+                        sequence,
+                        communication.id
+                    )
+                })
+            } finally {
+                lease.release()
+            }
         }
         this.waitHub.notifyMailbox(parent.path as string)
     }
 
-    private acknowledgeCompletion(childId: AgentId, sequence: number): void {
-        this.setRecord(childId, (previous) => {
-            const acknowledged = Math.max(
-                previous.lastDeliveredRunSequence ?? 0,
-                sequence
+    private async acknowledgeCompletion(
+        childId: AgentId,
+        sequence: number,
+        communicationId?: string
+    ): Promise<boolean> {
+        if (this.deliveryDetached) return false
+        return await this.ackMutex(childId).runExclusive(async () => {
+            const previous = this.records.get(childId)
+            if (!previous) return false
+            const previousSequence = previous.lastDeliveredRunSequence
+            const previousPending = previous.pendingCompletions
+            const acknowledged = Math.max(previousSequence ?? 0, sequence)
+            const removedPending = (previousPending ?? []).filter(
+                (pending) => pending.runSequence <= acknowledged
             )
-            return {
-                ...previous,
+            const id =
+                communicationId ??
+                removedPending.find(
+                    (pending) => pending.runSequence === sequence
+                )?.communicationId ??
+                ''
+            this.setRecord(childId, (record) => ({
+                ...record,
                 lastDeliveredRunSequence: acknowledged,
-                pendingCompletions: (previous.pendingCompletions ?? []).filter(
+                pendingCompletions: (record.pendingCompletions ?? []).filter(
                     (pending) => pending.runSequence > acknowledged
                 ),
+            }))
+            if (this.receiptsEnabled) {
+                try {
+                    await this.checkpointDelivery(
+                        'receipt-accepted',
+                        childId,
+                        previous.parentPath ?? ROOT_PATH,
+                        sequence,
+                        id
+                    )
+                } catch {
+                    // A newer run may have queued another completion while the
+                    // checkpoint was awaiting. Restore only what this ack
+                    // removed and preserve concurrent intents.
+                    this.setRecord(childId, (record) => {
+                        const current = record.pendingCompletions ?? []
+                        const sequences = new Set(
+                            current.map((pending) => pending.runSequence)
+                        )
+                        const ids = new Set(
+                            current.map((pending) => pending.communicationId)
+                        )
+                        const restored = [...current]
+                        for (const pending of removedPending) {
+                            if (
+                                sequences.has(pending.runSequence) ||
+                                ids.has(pending.communicationId)
+                            ) {
+                                continue
+                            }
+                            restored.push(pending)
+                            sequences.add(pending.runSequence)
+                            ids.add(pending.communicationId)
+                        }
+                        restored.sort(
+                            (left, right) =>
+                                left.runSequence - right.runSequence
+                        )
+                        return {
+                            ...record,
+                            lastDeliveredRunSequence:
+                                record.lastDeliveredRunSequence === acknowledged
+                                    ? previousSequence
+                                    : record.lastDeliveredRunSequence,
+                            pendingCompletions: restored,
+                        }
+                    })
+                    return false
+                }
             }
+            if (id) this.clearOutstanding(id)
+            return true
         })
     }
 
@@ -1071,7 +1607,7 @@ export class SubagentCoordinator {
         childId: AgentId,
         sequence: number,
         communication: InterAgentCommunication
-    ): void {
+    ): PendingCompletion {
         const pending: PendingCompletion = {
             communicationId: communication.id,
             runSequence: sequence,
@@ -1089,9 +1625,76 @@ export class SubagentCoordinator {
                 pending,
             ],
         }))
+        return pending
+    }
+
+    private markOutstanding(
+        childId: AgentId,
+        sequence: number,
+        communicationId: string,
+        recipient: AgentPath
+    ): void {
+        this.outstandingDispatches.set(communicationId, {
+            communicationId,
+            childId,
+            recipient,
+            runSequence: sequence,
+            epochAtDispatch: this.deliveryEpochs.get(recipient as string) ?? 0,
+            failed: false,
+        })
+    }
+
+    private failOutstanding(communicationId: string): void {
+        const dispatch = this.outstandingDispatches.get(communicationId)
+        if (dispatch) dispatch.failed = true
+    }
+
+    private clearOutstanding(communicationId: string): void {
+        this.outstandingDispatches.delete(communicationId)
+    }
+
+    private async probeEndpoint(
+        endpoint: CommunicationEndpoint,
+        communicationId: string
+    ): Promise<InsertionState> {
+        if (!endpoint.probeInsertion) {
+            throw new Error(
+                'Delivery receipts are enabled but the endpoint has no insertion probe.'
+            )
+        }
+        try {
+            return await endpoint.probeInsertion(communicationId)
+        } catch {
+            return 'unknown'
+        }
+    }
+
+    private async probeRecipient(
+        recipient: AgentRecord,
+        communicationId: string
+    ): Promise<InsertionState> {
+        if (recipient.path === ROOT_PATH) {
+            return await this.probeEndpoint(
+                this.options.rootEndpoint,
+                communicationId
+            )
+        }
+        const lease = await this.leaseRuntime(recipient.id)
+        try {
+            return await this.probeEndpoint(
+                lease.runtime.endpoint!,
+                communicationId
+            )
+        } finally {
+            lease.release()
+        }
     }
 
     async retryPendingCompletions(recipient: AgentPath): Promise<void> {
+        if (this.receiptsEnabled) {
+            await this.reconcileDeliveryReceipts(recipient)
+            return
+        }
         const pending = [...this.records.values()].flatMap((record) =>
             (record.pendingCompletions ?? [])
                 .filter((item) => item.recipient === recipient)
@@ -1099,30 +1702,112 @@ export class SubagentCoordinator {
         )
         for (const { childId, item } of pending) {
             try {
-                await this.deliverCompletion(childId, item.runSequence, {
-                    id: item.communicationId,
-                    kind: 'result',
-                    messageType: 'FINAL_ANSWER',
-                    author: item.author,
-                    recipient: item.recipient,
-                    payload: item.payload,
-                    triggerTurn: true,
-                    meta: item.meta,
-                })
+                await this.deliverCompletion(
+                    childId,
+                    item.runSequence,
+                    pendingCommunication(item)
+                )
             } catch {
                 // Keep the durable outbox entry for the next load or root start.
             }
         }
     }
 
+    private hasPendingFor(recipient: AgentPath): boolean {
+        return [...this.records.values()].some((record) =>
+            (record.pendingCompletions ?? []).some(
+                (item) => item.recipient === recipient
+            )
+        )
+    }
+
+    /**
+     * Observe durable recipient insertion. `terminal` advances the recipient
+     * epoch; `forceRetry` is only valid after the host confirms the recipient
+     * is idle. An 'unknown' probe never authorizes a resend.
+     */
+    async reconcileDeliveryReceipts(
+        recipient: AgentPath = ROOT_PATH,
+        options: ReconcileDeliveryOptions = {}
+    ): Promise<void> {
+        if (!this.receiptsEnabled || this.deliveryDetached) return
+        if (options.terminal) {
+            this.deliveryEpochs.set(
+                recipient as string,
+                (this.deliveryEpochs.get(recipient as string) ?? 0) + 1
+            )
+        }
+        const recipientRecord = this.getRecordByPath(recipient)
+        if (!recipientRecord) return
+        const pending = [...this.records.values()].flatMap((record) =>
+            (record.pendingCompletions ?? [])
+                .filter((item) => item.recipient === recipient)
+                .map((item) => ({ childId: record.id, item }))
+        )
+        for (const { childId, item } of pending) {
+            if (this.deliveryDetached) return
+            try {
+                if (this.unconfirmedIntents.has(item.communicationId)) {
+                    await this.checkpointDelivery(
+                        'intent-persisted',
+                        childId,
+                        item.recipient,
+                        item.runSequence,
+                        item.communicationId
+                    )
+                    this.unconfirmedIntents.delete(item.communicationId)
+                }
+                const observed = await this.probeRecipient(
+                    recipientRecord,
+                    item.communicationId
+                )
+                if (observed === 'accepted') {
+                    await this.acknowledgeCompletion(
+                        childId,
+                        item.runSequence,
+                        item.communicationId
+                    )
+                    continue
+                }
+                if (observed === 'unknown') continue
+                if (this.unconfirmedIntents.has(item.communicationId)) continue
+                const outstanding = this.outstandingDispatches.get(
+                    item.communicationId
+                )
+                if (outstanding) {
+                    const epoch =
+                        this.deliveryEpochs.get(recipient as string) ?? 0
+                    const retryEligible =
+                        options.forceRetry ||
+                        (options.terminal &&
+                            outstanding.epochAtDispatch < epoch)
+                    if (!retryEligible) continue
+                    this.clearOutstanding(item.communicationId)
+                }
+                await this.deliverCompletion(
+                    childId,
+                    item.runSequence,
+                    pendingCommunication(item),
+                    true
+                )
+            } catch {
+                // Keep the durable outbox entry for the next reconciliation.
+            }
+        }
+    }
+
     /** Coalesce retries after residency changes or freed execution slots. */
     private scheduleCompletionDrain(): void {
-        if (this.shutdownFlag) return
+        if (this.shutdownFlag || this.deliveryDetached) return
         this.completionDrainRequested = true
         if (this.completionDrain) return
         this.completionDrain = Promise.resolve()
             .then(async () => {
-                while (this.completionDrainRequested && !this.shutdownFlag) {
+                while (
+                    this.completionDrainRequested &&
+                    !this.shutdownFlag &&
+                    !this.deliveryDetached
+                ) {
                     this.completionDrainRequested = false
                     const recipients = new Set<AgentPath>()
                     for (const record of this.records.values()) {
@@ -1141,43 +1826,87 @@ export class SubagentCoordinator {
                         }
                     }
                     for (const recipient of recipients) {
-                        if (this.shutdownFlag) break
+                        if (this.shutdownFlag || this.deliveryDetached) break
                         await this.retryPendingCompletions(recipient)
                     }
                 }
             })
             .finally(() => {
                 this.completionDrain = undefined
-                if (this.completionDrainRequested && !this.shutdownFlag)
+                if (
+                    this.completionDrainRequested &&
+                    !this.shutdownFlag &&
+                    !this.deliveryDetached
+                )
                     this.scheduleCompletionDrain()
             })
     }
 
-    /**
-     * Queue-only delivery never starts an idle turn, but a running Pi loop
-     * only ingests mid-run input through its steering queue: steer when the
-     * target is streaming so a busy receiver sees the note before its next
-     * response, and append without triggering when it is idle.
-     */
-    private messageDelivery(id: AgentId): DeliveryOptions {
-        const streaming =
-            id === this.rootId
-                ? (this.options.isRootStreaming?.() ?? false)
-                : (this.runtimes.get(id)?.session.isStreaming ?? false)
-        return streaming
-            ? { triggerTurn: true, delivery: 'steer' }
-            : { triggerTurn: false }
+    private pinRuntime(id: AgentId): void {
+        this.runtimePins.set(id, (this.runtimePins.get(id) ?? 0) + 1)
     }
 
-    private async endpointFor(id: AgentId): Promise<CommunicationEndpoint> {
-        // Resolve by canonical path as well as identity. A restored or
-        // rehydrated registry must never try to open /root as a child session.
-        const record = this.records.get(id)
-        if (id === this.rootId || record?.path === ROOT_PATH) {
-            return this.options.rootEndpoint
+    private unpinRuntime(id: AgentId): void {
+        const remaining = (this.runtimePins.get(id) ?? 1) - 1
+        if (remaining > 0) this.runtimePins.set(id, remaining)
+        else this.runtimePins.delete(id)
+        this.notifyResidencyChange()
+    }
+
+    private notifyResidencyChange(): void {
+        this.residencyGeneration += 1
+        for (const resolve of [...this.residencyWaiters]) resolve()
+        this.residencyWaiters.clear()
+    }
+
+    private waitForResidencyChange(since: number): Promise<void> {
+        if (this.shutdownFlag || this.residencyGeneration !== since)
+            return Promise.resolve()
+        return new Promise((resolve) => {
+            this.residencyWaiters.add(resolve)
+            if (this.shutdownFlag || this.residencyGeneration !== since)
+                resolve()
+        })
+    }
+
+    /**
+     * Pin the runtime for the full operation. The pin is taken before the cold
+     * load so LRU cannot register then immediately evict the session before
+     * the caller receives its lease.
+     */
+    private async leaseRuntime(id: AgentId): Promise<RuntimeLease> {
+        this.pinRuntime(id)
+        let runtime: AgentRuntime
+        try {
+            runtime = await this.ensureLoaded(id)
+        } catch (error) {
+            this.unpinRuntime(id)
+            throw error
         }
-        const runtime = await this.ensureLoaded(id)
-        return runtime.endpoint!
+        let released = false
+        return {
+            runtime,
+            release: () => {
+                if (released) return
+                released = true
+                this.unpinRuntime(id)
+            },
+        }
+    }
+
+    private leaseExistingRuntime(id: AgentId): RuntimeLease | undefined {
+        const runtime = this.runtimes.get(id)
+        if (!runtime) return undefined
+        this.pinRuntime(id)
+        let released = false
+        return {
+            runtime,
+            release: () => {
+                if (released) return
+                released = true
+                this.unpinRuntime(id)
+            },
+        }
     }
 
     private ensureLoaded(id: AgentId): Promise<AgentRuntime> {
@@ -1214,13 +1943,22 @@ export class SubagentCoordinator {
             residency: 'loading',
         }))
         try {
-            return await this.residencyMutex.runExclusive(async () => {
-                const existing = this.runtimes.get(id)
-                if (existing) return existing
-                await this.evictOneIfRequired(id)
-                const runtime = await this.factory.open(record)
-                return await this.registerRuntime(record, runtime)
-            })
+            while (!this.shutdownFlag) {
+                const generation = this.residencyGeneration
+                const runtime = await this.residencyMutex.runExclusive(
+                    async () => {
+                        const existing = this.runtimes.get(id)
+                        if (existing) return existing
+                        if (!(await this.evictOneIfRequired(id)))
+                            return undefined
+                        const opened = await this.factory.open(record)
+                        return await this.registerRuntime(record, opened)
+                    }
+                )
+                if (runtime) return runtime
+                await this.waitForResidencyChange(generation)
+            }
+            throw new Error('session is shutting down')
         } catch (error) {
             this.setRecord(id, (previous) => ({
                 ...previous,
@@ -1238,15 +1976,22 @@ export class SubagentCoordinator {
         parentSnapshot: ParentExecutionSnapshot,
         fork: ForkTurns
     ): Promise<AgentRuntime> {
-        return await this.residencyMutex.runExclusive(async () => {
-            await this.evictOneIfRequired(record.id)
-            const runtime = await this.factory.create(
-                record,
-                parentSnapshot,
-                fork
-            )
-            return await this.registerRuntime(record, runtime)
-        })
+        while (!this.shutdownFlag) {
+            const generation = this.residencyGeneration
+            const runtime = await this.residencyMutex.runExclusive(async () => {
+                if (!(await this.evictOneIfRequired(record.id)))
+                    return undefined
+                const created = await this.factory.create(
+                    record,
+                    parentSnapshot,
+                    fork
+                )
+                return await this.registerRuntime(record, created)
+            })
+            if (runtime) return runtime
+            await this.waitForResidencyChange(generation)
+        }
+        throw new Error('session is shutting down')
     }
 
     private async registerRuntime(
@@ -1258,7 +2003,14 @@ export class SubagentCoordinator {
             throw new Error('session is shutting down')
         }
         this.observeRuntime(record, runtime)
-        runtime.endpoint = childEndpoint(record.path, runtime.session)
+        this.notifyResidencyChange()
+        runtime.endpoint = childEndpoint(
+            record.path,
+            runtime.session,
+            this.receiptsEnabled
+                ? sessionInsertionProbe(runtime.session)
+                : undefined
+        )
         this.runtimes.set(record.id, runtime)
         this.sessionBindings.set(runtime.session.sessionId, record.id)
         this.setRecord(record.id, (previous) => ({
@@ -1283,26 +2035,34 @@ export class SubagentCoordinator {
         record: AgentRecord
     ): Promise<ParentExecutionSnapshot> {
         if (record.path === ROOT_PATH) return this.options.getRootSnapshot()
-        const runtime = await this.ensureLoaded(record.id)
-        return {
-            path: record.path,
-            cwd: runtime.session.sessionManager.getCwd(),
-            model: {
-                provider:
-                    runtime.session.model?.provider ??
-                    parseModel(record.model).provider,
-                id: runtime.session.model?.id ?? parseModel(record.model).id,
-            },
-            thinkingLevel: runtime.session.thinkingLevel,
-            activeTools: runtime.session.getActiveToolNames(),
-            contextEntries: runtime.session.sessionManager.getBranch(),
-            sessionFile: runtime.session.sessionFile,
-            sessionId: runtime.session.sessionId,
+        const lease = await this.leaseRuntime(record.id)
+        try {
+            const runtime = lease.runtime
+            return {
+                path: record.path,
+                cwd: runtime.session.sessionManager.getCwd(),
+                model: {
+                    provider:
+                        runtime.session.model?.provider ??
+                        parseModel(record.model).provider,
+                    id:
+                        runtime.session.model?.id ??
+                        parseModel(record.model).id,
+                },
+                thinkingLevel: runtime.session.thinkingLevel,
+                activeTools: runtime.session.getActiveToolNames(),
+                contextEntries: runtime.session.sessionManager.getBranch(),
+                sessionFile: runtime.session.sessionFile,
+                sessionId: runtime.session.sessionId,
+            }
+        } finally {
+            lease.release()
         }
     }
 
-    private async evictOneIfRequired(exceptId: AgentId): Promise<void> {
-        if (this.runtimes.size < this.options.config.maxLoadedAgents) return
+    private async evictOneIfRequired(exceptId: AgentId): Promise<boolean> {
+        if (this.runtimes.size < this.options.config.maxLoadedAgents)
+            return true
         const candidates = [...this.records.values()]
             .filter((record) => record.id !== exceptId)
             .filter((record) => record.path !== ROOT_PATH)
@@ -1312,21 +2072,19 @@ export class SubagentCoordinator {
                     runtime &&
                     !runtime.session.isStreaming &&
                     !runtime.currentRun &&
+                    (this.runtimePins.get(record.id) ?? 0) === 0 &&
                     record.status._tag !== 'PendingInit' &&
                     record.status._tag !== 'Running'
                 )
             })
             .sort((left, right) => left.lastActivityAt - right.lastActivityAt)
         const victim = candidates[0]
-        if (!victim) {
-            throw new Error(
-                `No idle runtime can be evicted at maxLoadedAgents=${this.options.config.maxLoadedAgents}.`
-            )
-        }
+        if (!victim) return false
         const runtime = this.runtimes.get(victim.id)
-        if (!runtime) return
+        if (!runtime) return false
         this.captureRecentTurns(victim.id, runtime)
-        await runtime.dispose()
+        // Remove the residency before awaiting disposal. A concurrent
+        // ensureLoaded must not observe and pin a session that is closing.
         this.runtimes.delete(victim.id)
         this.setRecord(victim.id, (previous) => ({
             ...previous,
@@ -1337,6 +2095,9 @@ export class SubagentCoordinator {
             agentId: victim.id,
             residency: 'unloaded',
         })
+        await runtime.dispose()
+        this.notifyResidencyChange()
+        return true
     }
 
     private assertSpawnReservationAvailable(childPath: AgentPath): void {
@@ -1368,6 +2129,15 @@ export class SubagentCoordinator {
         if (!mutex) {
             mutex = new AgentMutex()
             this.mutexes.set(id, mutex)
+        }
+        return mutex
+    }
+
+    private ackMutex(id: AgentId): AgentMutex {
+        let mutex = this.ackMutexes.get(id)
+        if (!mutex) {
+            mutex = new AgentMutex()
+            this.ackMutexes.set(id, mutex)
         }
         return mutex
     }
@@ -1475,6 +2245,21 @@ function parseModel(value: string): { provider: string; id: string } {
     }
 }
 
+function pendingCommunication(
+    pending: PendingCompletion
+): InterAgentCommunication {
+    return {
+        id: pending.communicationId,
+        kind: 'result',
+        messageType: 'FINAL_ANSWER',
+        author: pending.author,
+        recipient: pending.recipient,
+        payload: pending.payload,
+        triggerTurn: true,
+        meta: pending.meta,
+    }
+}
+
 /** Transcript metadata for one terminal child result. */
 function completionMeta(
     record: AgentRecord,
@@ -1516,7 +2301,27 @@ function parseThinkingLevel(
 }
 
 function isAbortError(error: unknown): boolean {
-    return error instanceof Error && /abort/i.test(error.message)
+    if (!(error instanceof Error)) return false
+    if (error.name === 'AbortError') return true
+    const code = (error as { code?: unknown }).code
+    return code === 'ABORT_ERR' || code === 'ABORTED'
+}
+
+function assistantText(message: unknown): string | undefined {
+    if (!message || typeof message !== 'object') return undefined
+    const content = (message as { content?: unknown }).content
+    if (!Array.isArray(content)) return undefined
+    const text = content
+        .map((part) => {
+            if (!part || typeof part !== 'object') return ''
+            const value = part as { type?: unknown; text?: unknown }
+            return value.type === 'text' && typeof value.text === 'string'
+                ? value.text
+                : ''
+        })
+        .filter(Boolean)
+        .join('\n')
+    return text.length > 0 ? text : undefined
 }
 
 function withNote(message: string, note: string | null): string {
