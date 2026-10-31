@@ -1,0 +1,19 @@
+{
+    "name": "pi-goals",
+    "private": true,
+    "type": "module",
+    "pi": {
+        "extensions": ["./src/index.ts"]
+    },
+    "scripts": {
+        "check": "tsc --noEmit -p .",
+        "test": "node --test --experimental-strip-types test/*.test.ts"
+    },
+    "peerDependencies": {
+        "@earendil-works/pi-ai": "*",
+        "@earendil-works/pi-coding-agent": "^1.4.0",
+        "@earendil-works/pi-tui": "*",
+        "effect": "*",
+        "typebox": "*"
+    }
+}

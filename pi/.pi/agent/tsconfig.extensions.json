@@ -4,6 +4,7 @@
     "preserveSymlinks": true
   },
   "include": [
+    "extensions/goals/**/*.ts",
     "extensions/pi-zen-free/**/*.ts",
     "extensions/subagents/**/*.ts",
     "extensions/todowrite/**/*.ts"
