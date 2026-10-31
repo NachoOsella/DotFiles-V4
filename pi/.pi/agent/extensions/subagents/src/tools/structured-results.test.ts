@@ -37,10 +37,11 @@ const manager = {
     spawn: async (input: { taskName: string }) => ({
         path: `/root/${input.taskName}`,
         id: 'agent-id',
+        taskId: 'task-spawn-1',
     }),
     getRecordByPath: (path: string) => records[path as string],
     sendMessage: async () => undefined,
-    followup: async () => undefined,
+    followup: async () => ({ taskId: 'task-followup-1' }),
     wait: async () => ({ message: 'Wait completed.', timedOut: false }),
     interrupt: async () => ({ _tag: 'Interrupted' }),
     list: () => [

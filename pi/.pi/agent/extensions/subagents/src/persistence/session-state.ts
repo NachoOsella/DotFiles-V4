@@ -1,40 +1,77 @@
 import {
-    isPersistedStateV2,
+    isPersistedStateV3,
+    migratePersistedStateV2ToV3,
     parsePersistedStateV2,
-    type PersistedSubagentStateV2,
+    parsePersistedStateV3,
+    type PersistedSubagentStateV3,
 } from './schema.ts'
 
 export const SUBAGENTS_STATE_CUSTOM_TYPE = 'subagents-v3-state'
 export const SUBAGENT_META_CUSTOM_TYPE = 'subagents-v3-agent-meta'
 
-export type PersistedState = PersistedSubagentStateV2
+export type PersistedState = PersistedSubagentStateV3
 
-/**
- * Strict, honest guard. It is true only when the value already conforms to
- * the declared V2 shape; snapshots that need repair should go through
- * `parsePersistedState` instead.
- */
-export function isPersistedState(value: unknown): value is PersistedState {
-    return isPersistedStateV2(value)
+/** Parsed snapshot plus whether reading it changed the saved shape. */
+export interface PersistedStateRead {
+    readonly state: PersistedState
+    /** Set when a version 2 checkpoint was migrated in memory. */
+    readonly migratedFromVersion?: 2
+    /** True when normalization or migration changed the saved shape. */
+    readonly repaired: boolean
 }
 
 /**
- * Recovery normalizer for V2 snapshots.
+ * Strict, honest guard. It is true only when the value already conforms to
+ * the declared V3 shape; snapshots that need repair or migration should go
+ * through `parsePersistedState` instead.
+ */
+export function isPersistedState(value: unknown): value is PersistedState {
+    return isPersistedStateV3(value)
+}
+
+/**
+ * Read a snapshot and report migration or repair.
  *
- * Policy: a snapshot is discarded only when its envelope is unusable.
- * Within a usable snapshot every agent record is validated on its own and
- * malformed records are dropped, so one corrupt entry never discards valid
- * siblings. Recoverable fields (timestamps, counters, status tags, parent
- * paths, optional strings) are coerced to safe defaults. Returns undefined
+ * Version 3 goes through deep normalization. Version 2 is migrated in memory
+ * to version 3 with an empty task list and no archive markers, and is always
+ * reported as migrated/repaired so callers can rewrite the next checkpoint as
+ * version 3. Unknown versions are rejected rather than guessed.
+ */
+export function readPersistedState(
+    value: unknown
+): PersistedStateRead | undefined {
+    const v3 = parsePersistedStateV3(value)
+    if (v3 !== undefined) {
+        return { state: v3, repaired: !isPersistedStateV3(value) }
+    }
+    const v2 = parsePersistedStateV2(value)
+    if (v2 !== undefined) {
+        return {
+            state: migratePersistedStateV2ToV3(v2),
+            migratedFromVersion: 2,
+            repaired: true,
+        }
+    }
+    return undefined
+}
+
+/**
+ * Recovery normalizer for V3 snapshots, with in-memory V2 migration.
+ *
+ * A snapshot is discarded only when the envelope cannot be used at all.
+ * Within a usable snapshot every record is validated on its own and malformed
+ * records are dropped, so one corrupt entry never discards valid siblings.
+ * Recoverable fields (timestamps, counters, status tags, parent paths,
+ * optional strings, tasks) are coerced to safe defaults. Returns undefined
  * instead of throwing on anything unexpected.
  *
- * Older schemas (legacy V1 entries or the retired `subagents-v2-state`
- * custom type) are intentionally ignored, never migrated.
+ * Older V1 entries or the retired `subagents-v2-state` custom type are
+ * intentionally ignored, never migrated.
  */
 export function parsePersistedState(
     value: unknown
 ): PersistedState | undefined {
-    return parsePersistedStateV2(value)
+    return readPersistedState(value)?.state
 }
 
 export function snapshotAge(snapshot: PersistedState): number | undefined {
@@ -45,9 +82,9 @@ export function snapshotAge(snapshot: PersistedState): number | undefined {
 }
 
 /**
- * Find the latest usable V2 snapshot on the branch. A snapshot that declared
- * agents but recovered none is skipped so an earlier checkpoint can still
- * supply valid identities.
+ * Find the latest usable V3 snapshot on the branch, migrating V2 entries.
+ * A snapshot that declared agents but recovered none is skipped so an earlier
+ * checkpoint can still supply valid identities.
  */
 export function findLatestState(
     branch: readonly unknown[]

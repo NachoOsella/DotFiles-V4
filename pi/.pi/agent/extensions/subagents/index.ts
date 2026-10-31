@@ -286,8 +286,48 @@ export default function subagentsExtension(pi: ExtensionAPI) {
     }
 
     pi.registerCommand('agents', {
-        description: 'Inspect subagents',
-        handler: async (_args, ctx) => {
+        description: 'Inspect subagents, or archive/unarchive one',
+        handler: async (args, ctx) => {
+            const words = args.trim().split(/\s+/).filter(Boolean)
+            const action = words[0]?.toLowerCase()
+            const target = words[1]
+            if (action === 'archive' || action === 'unarchive') {
+                if (words.length > 2) {
+                    reportDiagnostic(
+                        ctx,
+                        'Usage',
+                        new Error(`${action} takes one agent path`)
+                    )
+                    return
+                }
+                if (!target) {
+                    reportDiagnostic(
+                        ctx,
+                        action === 'archive'
+                            ? 'Usage: /agents archive <path>'
+                            : 'Usage: /agents unarchive <path>',
+                        new Error('a canonical agent path is required')
+                    )
+                    return
+                }
+                try {
+                    const manager = getCoordinator()
+                    const result =
+                        action === 'archive'
+                            ? await manager.archive(ROOT_PATH, target)
+                            : await manager.unarchive(ROOT_PATH, target)
+                    publishSubagentInfo(manager)
+                    if (ctx.hasUI) {
+                        ctx.ui.notify(
+                            `${result.path} ${result.archived ? 'archived' : 'restored'}.`,
+                            'info'
+                        )
+                    }
+                } catch (error) {
+                    reportDiagnostic(ctx, `Cannot ${action} agent`, error)
+                }
+                return
+            }
             await showAgentsModal(getCoordinator(), ctx)
         },
     })

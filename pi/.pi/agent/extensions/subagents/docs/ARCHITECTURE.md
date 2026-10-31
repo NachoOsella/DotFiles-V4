@@ -86,6 +86,19 @@ If no execution slot is available, the supervisor calls `session.abort()` at
 function with an already-aborted signal, so providers must honor that signal.
 The extension message remains in the child transcript for a later follow-up.
 
+## Tasks and archival
+
+Every `spawn_agent` and `followup_task` creates an `AgentTask` with a bounded
+objective, the submitting agent, the communication id, and the run sequence that
+finally executed it. Settlement marks it completed or failed with a transcript
+reference, and completion metadata echoes the task id. Tasks are metadata for
+correlation, not a second scheduler: Pi still owns queues and run ordering.
+
+Archival is an operator command, not a model tool. It requires a terminal,
+settled agent with no undelivered completion, keeps the record and transcript
+immutable, frees one identity slot, and rejects later work with `agent_archived`.
+Paths are never reused, and unarchive restores the same identity.
+
 ## Limits
 
 `src/core/limits.ts` resolves the optional `limits` block into a policy and
@@ -166,6 +179,10 @@ Persistent children live below:
 The root session stores only the V3 graph snapshot. Child transcripts remain in
 their own Pi session files. Restoring the root restores unloaded identities;
 `SessionManager.open()` is called only when a target is used again.
+
+Snapshots are version 3. Version 2 checkpoints stay readable: they migrate in
+memory with an empty task list and no archived flags, then the next checkpoint
+writes version 3. Unknown versions are rejected rather than guessed.
 
 `src/core/session-recovery.ts` validates the saved file before opening it and
 the opened identity after: expected directory, `.jsonl` suffix and session-id

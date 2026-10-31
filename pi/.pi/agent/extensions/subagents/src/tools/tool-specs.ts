@@ -177,6 +177,12 @@ export const ListAgentsParams = Type.Object(
                 description: 'Canonical /root/... subtree prefix.',
             })
         ),
+        include_archived: Type.Optional(
+            Type.Boolean({
+                description:
+                    'Include archived agents, which keep their record but accept no work.',
+            })
+        ),
     },
     { additionalProperties: false }
 )
@@ -192,12 +198,26 @@ export const SpawnAgentOutput = Type.Object(
         ),
         thinking_level: Type.Optional(Type.String()),
         fork_turns: Type.Optional(Type.String()),
+        task_id: Type.Optional(
+            Type.String({
+                description:
+                    'Identity of the task submitted for this spawn; completion metadata echoes it.',
+            })
+        ),
     },
     { additionalProperties: false }
 )
 
 export const DeliveryOutput = Type.Object(
-    { delivered: Type.Boolean() },
+    {
+        delivered: Type.Boolean(),
+        task_id: Type.Optional(
+            Type.String({
+                description:
+                    'Identity of the task submitted by this call; completion metadata echoes it.',
+            })
+        ),
+    },
     { additionalProperties: false }
 )
 
@@ -243,6 +263,24 @@ export const ListAgentsOutput = Type.Object(
                         description:
                             'An undelivered completion for this agent is waiting in the outbox.',
                     }),
+                    archived: Type.Optional(
+                        Type.Boolean({
+                            description:
+                                'Archived agents keep identity, usage and transcript but accept no work.',
+                        })
+                    ),
+                    current_task: Type.Optional(
+                        Type.Object(
+                            {
+                                task_id: Type.String(),
+                                kind: Type.String(),
+                                status: Type.String(),
+                                objective: Type.String(),
+                                run_sequence: Type.Optional(Type.Number()),
+                            },
+                            { additionalProperties: false }
+                        )
+                    ),
                     has_pending_activity: Type.Optional(
                         Type.Boolean({
                             description:

@@ -15,10 +15,13 @@ import {
 } from '../domain/agent-path.ts'
 import { AgentStatus, type AgentResidency } from '../domain/agent-status.ts'
 import { ActivityFeed } from '../ui/activity-feed.ts'
+import { resolveSpawnContext } from './context-policy.ts'
 import type { ThinkingLevel, AgentMessage } from '@earendil-works/pi-agent-core'
 import type {
     AgentLimitReached,
     AgentRecord,
+    AgentTask,
+    AgentTaskKind,
     AgentUsageTotals,
     PendingCompletion,
 } from '../domain/agent-record.ts'
@@ -82,12 +85,42 @@ import type {
     SubagentEvent,
     SubagentLimitsSnapshot,
 } from '../domain/events.ts'
-import type { PersistedSubagentStateV2 } from '../persistence/schema.ts'
+import type { PersistedSubagentStateV3 } from '../persistence/schema.ts'
 import { SUBAGENT_META_CUSTOM_TYPE } from '../persistence/session-state.ts'
 import {
     restoreAgentRecords,
+    restoreAgentTasks,
     serializeAgentRecords,
 } from '../persistence/record-snapshot.ts'
+
+export interface ListedTaskSummary {
+    readonly id: string
+    readonly kind: AgentTaskKind
+    readonly status: AgentTask['status']
+    readonly objective: string
+    readonly runSequence?: number
+}
+
+export interface ArchiveResult {
+    readonly path: AgentPath
+    readonly archived: boolean
+    readonly archivedAt?: number
+}
+
+export class AgentArchivedError extends Error {
+    readonly _tag = 'AgentArchived'
+    readonly code = 'agent_archived'
+    readonly path: string
+    readonly guidance =
+        'Use a non-archived agent path or spawn a new identity; archived paths are never reused.'
+    constructor(path: string) {
+        super(
+            `[agent_archived] Agent "${path}" is archived. Use a non-archived agent path or spawn a new identity; archived paths are never reused.`
+        )
+        this.name = 'AgentArchivedError'
+        this.path = path
+    }
+}
 
 export interface ListedAgent {
     readonly path: AgentPath
@@ -98,6 +131,9 @@ export interface ListedAgent {
     readonly parentPath: AgentPath | null
     /** Stable blocked reason when a cold reopen failed. */
     readonly blockedReason?: string
+    readonly archived: boolean
+    readonly archivedAt?: number
+    readonly currentTask?: ListedTaskSummary
     /** Undelivered completion intent in the outbox for this agent. */
     readonly hasPendingMail: boolean
     /** WaitHub activity observed for this agent. */
@@ -108,6 +144,9 @@ export interface ListedAgent {
 }
 
 type TimerHandle = ReturnType<typeof setTimeout> | number
+
+/** Per-agent task history cap. Active tasks are always retained. */
+export const MAX_RETAINED_TASKS_PER_AGENT = 50
 
 export interface CoordinatorSpawnOptions {
     readonly caller: AgentPath
@@ -123,6 +162,7 @@ export interface CoordinatorSpawnOptions {
 export interface SpawnResult {
     readonly path: AgentPath
     readonly id: AgentId
+    readonly taskId: string
 }
 
 export type WaitWakeReason = 'mailbox' | 'steer' | 'timeout'
@@ -234,6 +274,7 @@ export class SubagentCoordinator {
     private readonly completionDeliveries = new Map<string, Promise<void>>()
     private completionDrain?: Promise<void>
     private completionDrainRequested = false
+    private readonly taskHistory = new Map<string, AgentTask[]>()
     private readonly deliveryCheckpointListeners =
         new Set<DeliveryCheckpointListener>()
     private readonly outstandingDispatches = new Map<
@@ -488,15 +529,25 @@ export class SubagentCoordinator {
         return record.path
     }
 
-    list(from: AgentPath, prefix?: string): ListedAgent[] {
+    list(
+        from: AgentPath,
+        prefix?: string,
+        options: { readonly includeArchived?: boolean } = {}
+    ): ListedAgent[] {
         void from
         return [...this.records.values()]
             .filter((record) => record.path !== ROOT_PATH)
+            .filter(
+                (record) =>
+                    options.includeArchived === true ||
+                    record.archivedAt === undefined
+            )
             .filter(
                 (record) => !prefix || pathMatchesPrefix(record.path, prefix)
             )
             .map((record) => {
                 const runtime = this.runtimes.get(record.id)
+                const currentTask = this.currentTaskSummary(record.path)
                 return {
                     path: record.path,
                     status: record.status._tag,
@@ -507,6 +558,11 @@ export class SubagentCoordinator {
                     ...(record.blocked
                         ? { blockedReason: record.blocked.reason }
                         : {}),
+                    archived: record.archivedAt !== undefined,
+                    ...(record.archivedAt !== undefined
+                        ? { archivedAt: record.archivedAt }
+                        : {}),
+                    ...(currentTask ? { currentTask } : {}),
                     hasPendingMail: this.hasUndeliveredCompletion(record.path),
                     hasPendingActivity: this.waitHub.hasPending(
                         record.path as string
@@ -527,6 +583,12 @@ export class SubagentCoordinator {
         return record
     }
 
+    private assertNotArchived(record: AgentRecord): void {
+        if (record.archivedAt !== undefined) {
+            throw new AgentArchivedError(record.path as string)
+        }
+    }
+
     async spawn(options: CoordinatorSpawnOptions): Promise<SpawnResult> {
         if (this.shutdownFlag) {
             throw new AgentSpawnFailedError('session is shutting down')
@@ -538,7 +600,21 @@ export class SubagentCoordinator {
         }
         const caller = this.getRecordByPath(options.caller)
         if (!caller) throw new AgentNotFoundError(options.caller as string)
-        const fork = parseForkTurns(options.forkTurns)
+        this.assertNotArchived(caller)
+        // An explicit request decides role inheritance before the role's own
+        // context policy can adjust the fork, so a policy cannot change which
+        // role a caller implicitly inherits.
+        const requestedFork =
+            options.forkTurns === undefined
+                ? undefined
+                : parseForkTurns(options.forkTurns)
+        const inheritsRole =
+            requestedFork === undefined || requestedFork._tag === 'All'
+        const selectedRole = resolveRole(
+            this.options.config,
+            options.agentType ?? (inheritsRole ? caller.role : undefined)
+        )
+        const fork = resolveSpawnContext(options.forkTurns, selectedRole).fork
         if (
             fork._tag === 'All' &&
             (options.model !== undefined ||
@@ -561,10 +637,7 @@ export class SubagentCoordinator {
         const childPath = joinAgentPath(options.caller, options.taskName)
         const parentSnapshot = await this.snapshotFor(caller)
         const inheritsExecution = fork._tag === 'All'
-        const role = resolveRole(
-            this.options.config,
-            options.agentType ?? (inheritsExecution ? caller.role : undefined)
-        )
+        const role = selectedRole
         const thinkingOverride = parseThinkingLevel(options.reasoningEffort)
         const model = inheritsExecution
             ? (role.model ?? formatModel(parentSnapshot.model))
@@ -621,7 +694,20 @@ export class SubagentCoordinator {
                 payload: options.message,
                 sourceCallId: options.callId,
             })
-            await this.startRun(record.id, comm, spawnPermit)
+            const task = this.createTask({
+                agentPath: childPath,
+                kind: 'spawn',
+                submittedBy: caller.path,
+                communicationId: comm.id,
+                payload: options.message,
+            })
+            await this.startRun(
+                record.id,
+                comm,
+                spawnPermit,
+                undefined,
+                task.id
+            )
             spawnPermit = undefined
             this.emit({
                 _tag: 'ActivityStarted',
@@ -630,7 +716,7 @@ export class SubagentCoordinator {
                 agentPath: childPath,
                 parentTurnId: record.initiatingTurnId as never,
             })
-            return { path: childPath, id: record.id }
+            return { path: childPath, id: record.id, taskId: task.id }
         } catch (error) {
             spawnPermit?.release()
             await this.residencyMutex.runExclusive(async () => {
@@ -638,6 +724,7 @@ export class SubagentCoordinator {
                 if (runtime) await runtime.dispose().catch(() => undefined)
                 this.runtimes.delete(record.id)
             })
+            this.taskHistory.delete(childPath as string)
             await this.registryMutex.runExclusive(async () => {
                 this.pathIndex.delete(childPath as string)
                 this.records.delete(record.id)
@@ -656,6 +743,7 @@ export class SubagentCoordinator {
     }): Promise<void> {
         assertNonEmptyMessage(args.message)
         const target = this.resolve(args.caller, args.target)
+        this.assertNotArchived(target)
         const root = target.path === ROOT_PATH || target.id === this.rootId
         const lease = root ? undefined : await this.leaseRuntime(target.id)
         const endpoint = root
@@ -697,12 +785,13 @@ export class SubagentCoordinator {
         target: string
         message: string
         callId?: ToolCallId
-    }): Promise<void> {
+    }): Promise<{ taskId: string }> {
         assertNonEmptyMessage(args.message)
         const targetPath = resolveTarget(args.caller, args.target)
         if (isRootPath(targetPath)) throw new RootFollowupForbiddenError()
         const target = this.getRecordByPath(targetPath)
         if (!target) throw new AgentNotFoundError(targetPath as string)
+        this.assertNotArchived(target)
         this.checkLimitAdmission()
         const lease = await this.leaseRuntime(target.id)
         const runtime = lease.runtime
@@ -713,9 +802,19 @@ export class SubagentCoordinator {
             payload: args.message,
             sourceCallId: args.callId,
         })
+        const task = this.createTask({
+            agentPath: target.path,
+            kind: 'followup',
+            submittedBy: args.caller,
+            communicationId: comm.id,
+            payload: args.message,
+        })
         try {
             await this.mutex(target.id).runExclusive(async () => {
                 if (runtime.session.isStreaming) {
+                    if (runtime.runSequence > 0) {
+                        this.attachTaskToRun(task.id, runtime.runSequence)
+                    }
                     await runtime.endpoint!.send(comm, {
                         triggerTurn: true,
                         delivery: 'steer',
@@ -726,8 +825,17 @@ export class SubagentCoordinator {
                 if (runtime.currentRun) {
                     await runtime.currentRun.catch(() => undefined)
                 }
-                await this.startRun(target.id, comm)
+                await this.startRun(
+                    target.id,
+                    comm,
+                    undefined,
+                    undefined,
+                    task.id
+                )
             })
+        } catch (error) {
+            this.failTask(task.id, runtime.sessionFile)
+            throw error
         } finally {
             lease.release()
         }
@@ -738,6 +846,7 @@ export class SubagentCoordinator {
             agentId: target.id,
             agentPath: target.path,
         })
+        return { taskId: task.id }
     }
 
     async interrupt(args: {
@@ -751,6 +860,7 @@ export class SubagentCoordinator {
         }
         const target = this.getRecordByPath(targetPath)
         if (!target) throw new AgentNotFoundError(targetPath as string)
+        this.assertNotArchived(target)
         const lease = this.leaseExistingRuntime(target.id)
         const runtime = lease?.runtime
         if (!runtime?.session.isStreaming && !runtime?.currentRun) {
@@ -771,6 +881,145 @@ export class SubagentCoordinator {
             agentPath: target.path,
         })
         return this.records.get(target.id)?.status ?? AgentStatus.interrupted()
+    }
+
+    async archive(from: AgentPath, target: string): Promise<ArchiveResult> {
+        const path = resolveTarget(from, target)
+        if (isRootPath(path)) {
+            throw new AgentSpawnFailedError('/root cannot be archived.')
+        }
+        const record = this.getRecordByPath(path)
+        if (!record) throw new AgentNotFoundError(path as string)
+        let archivedAt!: number
+        await this.mutex(record.id).runExclusive(async () => {
+            const current = this.getRecordByPath(path)
+            if (!current) throw new AgentNotFoundError(path as string)
+            if (current.archivedAt !== undefined) {
+                throw new AgentSpawnFailedError(
+                    `agent_archived: ${path} is already archived.`
+                )
+            }
+            if (!isTerminalStatus(current.status)) {
+                throw new AgentSpawnFailedError(
+                    `agent_archived: ${path} is not terminal (${current.status._tag}). Wait for completion or interrupt it first.`
+                )
+            }
+            const runtime = this.runtimes.get(current.id)
+            if (
+                runtime &&
+                (runtime.currentRun !== undefined ||
+                    runtime.phase !== 'idle' ||
+                    runtime.session.isStreaming)
+            ) {
+                throw new AgentSpawnFailedError(
+                    `agent_archived: ${path} is still settling its final run. Retry archive after settlement.`
+                )
+            }
+            const liveDescendant = [...this.records.values()].find(
+                (candidate) =>
+                    candidate.path !== current.path &&
+                    pathMatchesPrefix(candidate.path, current.path as string) &&
+                    (!isTerminalStatus(candidate.status) ||
+                        this.hasTrackedRun(candidate.id))
+            )
+            if (liveDescendant) {
+                throw new AgentSpawnFailedError(
+                    `agent_archived: ${path} still has a live descendant ${liveDescendant.path} (${liveDescendant.status._tag}). Archive descendants after they settle.`
+                )
+            }
+            if ((this.runtimePins.get(current.id) ?? 0) > 0) {
+                throw new AgentSpawnFailedError(
+                    `agent_archived: ${path} has an in-flight operation. Retry archive after it finishes.`
+                )
+            }
+            if ((current.pendingCompletions ?? []).length > 0) {
+                throw new AgentSpawnFailedError(
+                    `agent_archived: ${path} still owns an undelivered completion. Retry delivery before archiving.`
+                )
+            }
+            if (this.hasUndeliveredCompletion(path)) {
+                throw new AgentSpawnFailedError(
+                    `agent_archived: an undelivered completion still names ${path}. Retry delivery before archiving.`
+                )
+            }
+            archivedAt = Date.now()
+            this.setRecord(current.id, (previous) => ({
+                ...previous,
+                archivedAt,
+            }))
+            this.markTasksArchived(current.path, archivedAt)
+        })
+        const pendingLoad = this.loading.get(record.id)
+        if (pendingLoad) await pendingLoad.catch(() => undefined)
+        const lease = this.leaseExistingRuntime(record.id)
+        if (lease) {
+            try {
+                await lease.runtime.dispose().catch(() => undefined)
+                this.runtimes.delete(record.id)
+                this.setRecord(record.id, (previous) => ({
+                    ...previous,
+                    residency: 'unloaded',
+                }))
+                this.emit({
+                    _tag: 'ResidencyChanged',
+                    agentId: record.id,
+                    residency: 'unloaded',
+                })
+            } finally {
+                lease.release()
+            }
+        }
+        return { path, archived: true, archivedAt }
+    }
+
+    private hasTrackedRun(id: AgentId): boolean {
+        const runtime = this.runtimes.get(id)
+        return Boolean(
+            runtime &&
+            (runtime.currentRun !== undefined ||
+                runtime.phase !== 'idle' ||
+                runtime.session.isStreaming)
+        )
+    }
+
+    private markTasksArchived(path: AgentPath, archivedAt: number): void {
+        const tasks = this.taskHistory.get(path as string)
+        if (!tasks) return
+        this.taskHistory.set(
+            path as string,
+            tasks.map((task) =>
+                task.status === 'active'
+                    ? {
+                          ...task,
+                          status: 'archived',
+                          completedAt: task.completedAt ?? archivedAt,
+                      }
+                    : task
+            )
+        )
+    }
+
+    async unarchive(from: AgentPath, target: string): Promise<ArchiveResult> {
+        const path = resolveTarget(from, target)
+        if (isRootPath(path)) {
+            throw new AgentSpawnFailedError('/root cannot be unarchived.')
+        }
+        const record = this.getRecordByPath(path)
+        if (!record) throw new AgentNotFoundError(path as string)
+        await this.mutex(record.id).runExclusive(async () => {
+            const current = this.getRecordByPath(path)
+            if (!current) throw new AgentNotFoundError(path as string)
+            if (current.archivedAt === undefined) {
+                throw new AgentSpawnFailedError(
+                    `agent_archived: ${path} is not archived.`
+                )
+            }
+            this.setRecord(current.id, (previous) => ({
+                ...previous,
+                archivedAt: undefined,
+            }))
+        })
+        return { path, archived: false }
     }
 
     async wait(args: {
@@ -855,8 +1104,12 @@ export class SubagentCoordinator {
         }
     }
 
-    serialize(rootSessionId: string): PersistedSubagentStateV2 {
-        return serializeAgentRecords(this.records.values(), rootSessionId)
+    serialize(rootSessionId: string): PersistedSubagentStateV3 {
+        return serializeAgentRecords(
+            this.records.values(),
+            rootSessionId,
+            this.allTasks()
+        )
     }
 
     /**
@@ -890,6 +1143,21 @@ export class SubagentCoordinator {
             if (tokens > 0) this.budget.record(tokens)
             added = true
         }
+        const restoredTaskPaths = new Set<string>()
+        for (const persisted of restoreAgentTasks(
+            state,
+            this.options.rootSessionId()
+        )) {
+            if (!this.pathIndex.has(persisted.agentPath)) continue
+            const tasks = this.taskHistory.get(persisted.agentPath) ?? []
+            if (tasks.some((task) => task.id === persisted.id)) continue
+            tasks.push({ ...persisted } as AgentTask)
+            this.taskHistory.set(persisted.agentPath, tasks)
+            restoredTaskPaths.add(persisted.agentPath)
+        }
+        for (const path of restoredTaskPaths) {
+            this.pruneTasks(path as AgentPath)
+        }
         if (added) this.emitLimitsChanged()
     }
 
@@ -897,14 +1165,20 @@ export class SubagentCoordinator {
         id: AgentId,
         comm: InterAgentCommunication,
         permit?: ExecutionPermit,
-        receipt?: DeliveryDispatchReceipt
+        receipt?: DeliveryDispatchReceipt,
+        taskId?: string
     ): Promise<void> {
         if (this.shutdownFlag) throw new Error('session is shutting down')
-        const runtime = this.runtimes.get(id)
-        if (!this.records.has(id) || !runtime)
+        const record = this.records.get(id)
+        if (!record || !this.runtimes.has(id))
             throw new AgentNotFoundError(String(id))
+        this.assertNotArchived(record)
+        const runtime = this.runtimes.get(id)!
         if (runtime.session.isStreaming && !runtime.interruptRequested) {
             permit?.release()
+            if (taskId && runtime.runSequence > 0) {
+                this.attachTaskToRun(taskId, runtime.runSequence)
+            }
             if (receipt) {
                 if (this.deliveryDetached) return
                 this.markOutstanding(
@@ -933,6 +1207,9 @@ export class SubagentCoordinator {
         if (this.shutdownFlag) throw new Error('session is shutting down')
         if (runtime.session.isStreaming) {
             permit?.release()
+            if (taskId && runtime.runSequence > 0) {
+                this.attachTaskToRun(taskId, runtime.runSequence)
+            }
             if (receipt) {
                 if (this.deliveryDetached) return
                 this.markOutstanding(
@@ -959,6 +1236,7 @@ export class SubagentCoordinator {
             runtime,
             permit ?? this.limiter.tryAcquire()
         )
+        if (taskId) this.attachTaskToRun(taskId, run.sequence)
         if (receipt) {
             if (this.deliveryDetached) {
                 run.finish()
@@ -1265,18 +1543,36 @@ export class SubagentCoordinator {
                     'final',
                     limitReached.detail
                 )
+                this.completeTasks(
+                    record.path,
+                    sequence,
+                    'failed',
+                    runtime.session.sessionFile ?? record.sessionFile
+                )
                 await this.safeDeliverCompletion(record, sequence, status)
             } else if (interrupted) {
                 this.setRecord(id, (previous) => ({
                     ...previous,
                     status: AgentStatus.interrupted(),
                 }))
+                this.completeTasks(
+                    record.path,
+                    sequence,
+                    'failed',
+                    runtime.session.sessionFile ?? record.sessionFile
+                )
             } else if (failure) {
                 const message =
                     failure instanceof Error ? failure.message : String(failure)
                 const status = AgentStatus.errored(message)
                 this.setRecord(id, (previous) => ({ ...previous, status }))
                 this.activityFeed.push(record.path, 'final', message)
+                this.completeTasks(
+                    record.path,
+                    sequence,
+                    'failed',
+                    runtime.session.sessionFile ?? record.sessionFile
+                )
                 await this.safeDeliverCompletion(record, sequence, status)
             } else {
                 const status = AgentStatus.completed(
@@ -1297,6 +1593,12 @@ export class SubagentCoordinator {
                 if (status._tag === 'Completed' && status.message) {
                     this.activityFeed.push(record.path, 'final', status.message)
                 }
+                this.completeTasks(
+                    record.path,
+                    sequence,
+                    'completed',
+                    runtime.session.sessionFile ?? record.sessionFile
+                )
                 await this.safeDeliverCompletion(record, sequence, status)
             }
         } finally {
@@ -1450,6 +1752,7 @@ export class SubagentCoordinator {
             sessionId: current.sessionId,
         })
         if (formatted === null || !record.parentPath) return
+        const task = this.taskForRun(record.path, sequence)
         const existing = (current.pendingCompletions ?? []).find(
             (pending) => pending.runSequence === sequence
         )
@@ -1464,7 +1767,7 @@ export class SubagentCoordinator {
                 payload: formatted.payload,
                 triggerTurn: true,
                 meta: {
-                    ...completionMeta(current, status),
+                    ...completionMeta(current, status, task),
                     ...(formatted.truncated ? { truncated: true } : {}),
                     ...(formatted.fullResultRef
                         ? { fullResultRef: formatted.fullResultRef }
@@ -1541,6 +1844,7 @@ export class SubagentCoordinator {
         }
         const parent = this.getRecordByPath(communication.recipient)
         if (!parent) throw new AgentNotFoundError(communication.recipient)
+        this.assertNotArchived(parent)
         if (this.deliveryDetached) return
         if (this.unconfirmedIntents.has(communication.id)) return
 
@@ -1605,6 +1909,9 @@ export class SubagentCoordinator {
                 const runtime = parentLease!.runtime
                 await this.mutex(parent.id).runExclusive(async () => {
                     if (this.deliveryDetached) return
+                    const parentNow = this.records.get(parent.id)
+                    if (!parentNow) return
+                    this.assertNotArchived(parentNow)
                     const current = this.records.get(childId)
                     if (
                         !current ||
@@ -1919,6 +2226,144 @@ export class SubagentCoordinator {
         }
     }
 
+    private pruneTasks(path: AgentPath): void {
+        const tasks = this.taskHistory.get(path as string)
+        if (!tasks || tasks.length <= MAX_RETAINED_TASKS_PER_AGENT) return
+        const active = tasks.filter((task) => task.status === 'active')
+        const budget = Math.max(0, MAX_RETAINED_TASKS_PER_AGENT - active.length)
+        const retained = new Set(
+            active
+                .map((task) => task.id)
+                .concat(
+                    tasks
+                        .filter((task) => task.status !== 'active')
+                        .slice(0, budget)
+                        .map((task) => task.id)
+                )
+        )
+        this.taskHistory.set(
+            path as string,
+            tasks.filter((task) => retained.has(task.id))
+        )
+    }
+
+    private allTasks(): AgentTask[] {
+        return [...this.taskHistory.values()]
+            .flat()
+            .sort((left, right) => right.createdAt - left.createdAt)
+    }
+
+    tasks(path?: AgentPath): readonly AgentTask[] {
+        const tasks = path
+            ? [...(this.taskHistory.get(path as string) ?? [])]
+            : this.allTasks()
+        return tasks
+            .sort((left, right) => right.createdAt - left.createdAt)
+            .map((task) => ({ ...task }))
+    }
+
+    private currentTaskSummary(path: AgentPath): ListedTaskSummary | undefined {
+        const task = this.taskHistory.get(path as string)?.[0]
+        if (!task) return undefined
+        return {
+            id: task.id,
+            kind: task.kind,
+            status: task.status,
+            objective: task.objective,
+            ...(task.runSequence !== undefined
+                ? { runSequence: task.runSequence }
+                : {}),
+        }
+    }
+
+    private createTask(args: {
+        agentPath: AgentPath
+        kind: AgentTaskKind
+        submittedBy: AgentPath
+        communicationId: string
+        payload: string
+        createdAt?: number
+    }): AgentTask {
+        const task: AgentTask = {
+            id: `task-${newCommunicationId()}`,
+            agentPath: args.agentPath,
+            objective: boundedObjective(args.payload),
+            kind: args.kind,
+            submittedBy: args.submittedBy,
+            communicationId: args.communicationId,
+            status: 'active',
+            createdAt: args.createdAt ?? Date.now(),
+        }
+        const tasks = this.taskHistory.get(args.agentPath as string) ?? []
+        tasks.unshift(task)
+        this.taskHistory.set(args.agentPath as string, tasks)
+        this.pruneTasks(args.agentPath)
+        return task
+    }
+
+    private attachTaskToRun(taskId: string, runSequence: number): void {
+        for (const [path, tasks] of this.taskHistory) {
+            const index = tasks.findIndex((task) => task.id === taskId)
+            if (index < 0) continue
+            const task = tasks[index]!
+            if (task.status !== 'active' || task.runSequence !== undefined)
+                return
+            tasks[index] = { ...task, runSequence }
+            this.taskHistory.set(path, tasks)
+            return
+        }
+    }
+
+    private completeTasks(
+        path: AgentPath,
+        runSequence: number,
+        status: 'completed' | 'failed',
+        resultRef?: string
+    ): void {
+        const tasks = this.taskHistory.get(path as string)
+        if (!tasks) return
+        const completedAt = Date.now()
+        this.taskHistory.set(
+            path as string,
+            tasks.map((task) =>
+                task.status === 'active' && task.runSequence === runSequence
+                    ? {
+                          ...task,
+                          status,
+                          completedAt,
+                          ...(resultRef ? { resultRef } : {}),
+                      }
+                    : task
+            )
+        )
+    }
+
+    private failTask(taskId: string, resultRef?: string): void {
+        for (const [path, tasks] of this.taskHistory) {
+            const index = tasks.findIndex((task) => task.id === taskId)
+            if (index < 0) continue
+            const task = tasks[index]!
+            if (task.status !== 'active') return
+            tasks[index] = {
+                ...task,
+                status: 'failed',
+                completedAt: Date.now(),
+                ...(resultRef ? { resultRef } : {}),
+            }
+            this.taskHistory.set(path, tasks)
+            return
+        }
+    }
+
+    private taskForRun(
+        path: AgentPath,
+        runSequence: number
+    ): AgentTask | undefined {
+        return (this.taskHistory.get(path as string) ?? []).find(
+            (task) => task.runSequence === runSequence
+        )
+    }
+
     private hasUndeliveredCompletion(recipient: AgentPath): boolean {
         return [...this.records.values()].some((record) =>
             (record.pendingCompletions ?? []).some(
@@ -2120,6 +2565,9 @@ export class SubagentCoordinator {
     }
 
     private ensureLoaded(id: AgentId): Promise<AgentRuntime> {
+        const record = this.records.get(id)
+        if (!record) return Promise.reject(new AgentNotFoundError(String(id)))
+        this.assertNotArchived(record)
         const existing = this.runtimes.get(id)
         if (existing) {
             if (this.records.get(id)?.blocked) {
@@ -2132,8 +2580,6 @@ export class SubagentCoordinator {
         }
         const pending = this.loading.get(id)
         if (pending) return pending
-        const record = this.records.get(id)
-        if (!record) return Promise.reject(new AgentNotFoundError(String(id)))
 
         const load = this.loadRuntime(id, record)
         this.trackLoading(id, load)
@@ -2156,6 +2602,7 @@ export class SubagentCoordinator {
         id: AgentId,
         record: AgentRecord
     ): Promise<AgentRuntime> {
+        this.assertNotArchived(record)
         this.setRecord(id, (previous) => ({
             ...previous,
             residency: 'loading',
@@ -2262,6 +2709,7 @@ export class SubagentCoordinator {
     private async snapshotFor(
         record: AgentRecord
     ): Promise<ParentExecutionSnapshot> {
+        this.assertNotArchived(record)
         if (record.path === ROOT_PATH) return this.options.getRootSnapshot()
         const lease = await this.leaseRuntime(record.id)
         try {
@@ -2335,7 +2783,10 @@ export class SubagentCoordinator {
         if (this.childDepth(childPath) > this.maxDepth()) {
             throw new AgentSpawnFailedError('Agent depth limit reached.')
         }
-        const childCount = this.records.size - 1
+        const childCount = [...this.records.values()].filter(
+            (record) =>
+                record.path !== ROOT_PATH && record.archivedAt === undefined
+        ).length
         if (childCount >= this.options.config.maxAgents) {
             throw new AgentCapacityReachedError(
                 this.options.config.maxAgents,
@@ -2473,6 +2924,23 @@ function parseModel(value: string): { provider: string; id: string } {
     }
 }
 
+function isTerminalStatus(status: AgentRecord['status']): boolean {
+    return (
+        status._tag === 'Completed' ||
+        status._tag === 'Errored' ||
+        status._tag === 'Interrupted' ||
+        status._tag === 'Shutdown' ||
+        status._tag === 'NotFound'
+    )
+}
+
+function boundedObjective(payload: string): string {
+    const compact = payload.replace(/\s+/g, ' ').trim()
+    const chars = Array.from(compact)
+    if (chars.length <= 200) return compact
+    return `${chars.slice(0, 199).join('')}…`
+}
+
 function usageTokens(usage: AgentUsageTotals | undefined): number {
     if (!usage) return 0
     const total =
@@ -2498,7 +2966,8 @@ function pendingCommunication(
 /** Transcript metadata for one terminal child result. */
 function completionMeta(
     record: AgentRecord,
-    status: AgentRecord['status']
+    status: AgentRecord['status'],
+    task?: AgentTask
 ): FinalAnswerMeta {
     const usage = record.usage
     const tokens = usage
@@ -2513,6 +2982,10 @@ function completionMeta(
         ...(tokens > 0 ? { tokens } : {}),
         ...(usage && usage.cost > 0 ? { cost: usage.cost } : {}),
         ...(status._tag === 'Errored' ? { failed: true } : {}),
+        ...(task ? { taskId: task.id } : {}),
+        ...(task?.runSequence !== undefined
+            ? { runSequence: task.runSequence }
+            : {}),
     }
 }
 

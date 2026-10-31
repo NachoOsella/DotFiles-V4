@@ -231,6 +231,82 @@ These recommendations require deliberate product/schema decisions and are not hi
 
 Preserve the existing six-tool compatibility layer. Any additional versioned interfaces get their own plan section, tests, and migration notes before agents implement them.
 
+### M3 execution plan
+
+M3 starts after the M2 commit (`77cf202`). It introduces snapshot version 3 and
+additive public fields. Existing tool inputs, the six-tool family, native queues,
+and default behavior stay intact. Archival is an operator command, not a seventh
+model-facing tool, so delegation semantics do not silently grow.
+
+Frozen contracts:
+
+```ts
+// domain/agent-record.ts
+export type AgentTaskKind = 'spawn' | 'followup'
+export type AgentTaskStatus = 'active' | 'completed' | 'failed' | 'archived'
+export interface AgentTask {
+    readonly id: string
+    readonly agentPath: AgentPath
+    readonly objective: string   // bounded, never a full payload
+    readonly kind: AgentTaskKind
+    readonly submittedBy: AgentPath
+    readonly communicationId: string
+    readonly runSequence?: number
+    readonly status: AgentTaskStatus
+    readonly createdAt: number
+    readonly completedAt?: number
+    readonly resultRef?: string
+}
+
+// persistence/schema.ts
+export interface PersistedSubagentStateV3 {
+    readonly version: 3
+    readonly rootSessionId: string
+    readonly persistedAt: number
+    readonly agents: readonly PersistedSubagentV3[]
+    readonly tasks: readonly PersistedTaskV3[]
+}
+export function parsePersistedStateV3(value: unknown): PersistedSubagentStateV3 | undefined
+export function isPersistedStateV3(value: unknown): value is PersistedSubagentStateV3
+```
+
+Migration policy: reading a version 2 snapshot migrates it in memory to version
+3 with an empty task list and no archived agents, then the next checkpoint
+writes version 3. Version 2 stays readable indefinitely; unknown versions are
+rejected rather than guessed. The custom entry type `subagents-v3-state` is
+unchanged.
+
+Archive policy: only terminal agents can be archived, never `/root`. An archived
+agent keeps its record, usage, transcript, and identity; it stops counting
+against `maxAgents`, is excluded from the default listing, and rejects message,
+follow-up, and interrupt with `agent_archived`. Archival is refused while an
+undelivered completion names that agent. Archived paths are never reused.
+
+Role context policy: roles may declare `context: { mode: 'inherit' | 'none' |
+'lastN', turns?: number }`. An explicit `fork_turns` argument always wins; the
+role policy applies only when the caller omits it; `inherit` keeps the current
+default. Resolution is pure and returns its source so tests and diagnostics can
+explain the choice.
+
+Public surface additions are additive and optional: `task_id` on spawn and
+follow-up outputs, `task_id` and `run_sequence` in completion metadata,
+`archived` and a bounded `current_task` summary in `list_agents`. The `/agents`
+command gains `archive` and `unarchive`.
+
+Ownership:
+
+| Worker | Files | Deliverable |
+| --- | --- | --- |
+| A | `src/persistence/schema.ts`, `src/persistence/record-snapshot.ts`, `src/persistence/session-state.ts`, new `src/persistence/schema-v3.test.ts` | Version 3 schema, migration, validation, serializer |
+| B | `src/core/coordinator.ts`, `src/domain/agent-record.ts`, `src/domain/communication.ts`, `src/domain/events.ts`, new `src/core/task-lifecycle.test.ts`, new `src/core/archive.test.ts` | Task lifecycle, quota release, archive semantics |
+| C | `src/config/config.ts`, `src/config/roles.ts`, new `src/core/context-policy.ts`, `src/core/context-policy.test.ts`, `src/config/role-context.test.ts` | Role context policy and pure resolver |
+| Root | `index.ts`, `src/tools/*`, docs, `docs/EVALUATIONS.md` | Additive outputs, archive command, integration, evaluation protocol |
+
+Verification: worker suites, `npm run test:subagents`, host suite, both type
+checks, full `npm test`, and an independent review of migration correctness,
+task/run correlation, quota release, and archive races. Live-model evaluation is
+documented but not executed without an explicit bounded budget.
+
 ## Status ledger
 
 | Work | Owner | State | Evidence |
@@ -243,7 +319,8 @@ Preserve the existing six-tool compatibility layer. Any additional versioned int
 | M1 independent review | Review worker | Complete | Concurrent rollback, failed disposal, failed-retirement retention, pre-checkpoint shutdown, and Pi 1.0 prompt gap addressed |
 | M1 verification | Root | Complete | Workspace 238 pass / 6 expected skips; supported host 243 pass / 1 expected skip; full workspace 522 pass / 6 expected skips; both type-checks pass |
 | M2 bounded execution/recovery | A: policy/config · B: enforcement · C: reopen | Complete | Limits 17 focused, run-limits 11, list-semantics 4, session-recovery 15, tool schema 12; unlimited path regression; review P1 blocked-state fixed |
-| M3 versioned features/evaluations | Reassigned after M2 | Not started | Requires explicit interface and evaluation design |
+| M3 versioned features | A: schema v3 · B: tasks/archive · C: role context | Complete | Schema 12, task/archive 14, context 14, wiring 1; v2 migrates; review P1 limit-task and archive-descendant fixed |
+| M3 model-level evaluations | Root | Specified, not run | Protocol and budget in docs/EVALUATIONS.md; no provider spend without approval |
 
 ## Milestone 2 execution plan
 
@@ -396,6 +473,20 @@ Logs: `/tmp/pi-subagents-m2-host.log`, `/tmp/pi-subagents-m2-all.log`,
 `/tmp/pi-subagents-m2-format.log`. The benchmark shows usage parsing is cheap
 and snapshot duplication is the real cost, so incremental usage accounting is
 not justified in M2.
+
+## M3 verification
+
+| Command / target | Result |
+| --- | --- |
+| `npm run test:subagents`, workspace Pi 1.0.0 | 337 tests: 331 pass, 6 supported-host entry skips, zero failures |
+| Supplemental host suite, Pi 1.4.0 | 337 tests: 336 pass, 1 unsupported-host skip, zero failures |
+| `npm test`, full workspace, serial | 621 tests: 615 pass, 6 expected entry skips, zero failures |
+| `npm run check:extensions` | Exit 0 with the cached compiler |
+| `bench/benchmarks.ts` | spawn 22.2 ms, cold reopen 4.5 ms, snapshot numbers unchanged |
+
+Logs: `/tmp/pi-subagents-m3-final-workspace.log`,
+`/tmp/pi-subagents-m3-final-host.log`, `/tmp/pi-subagents-m3-final-all.log`,
+`/tmp/pi-subagents-m3-format.log`.
 
 ## Completion report requirements
 

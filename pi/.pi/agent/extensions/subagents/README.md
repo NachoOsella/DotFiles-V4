@@ -118,11 +118,34 @@ selects configured role defaults.
 
 Optional extension settings can be placed under `subagents` in `settings.json`,
 or supplied as JSON through `SUBAGENTS_CONFIG` / `SUBAGENTS_CONFIG_PATH`.
-Configured `roles` are exposed as `agent_type` choices in the spawn schema.
+Configured `roles` are exposed as `agent_type` choices in the spawn schema. A
+role may also choose spawn context with `context: { mode: "inherit" | "none" |
+"lastN", turns: N }`. An explicit `fork_turns` argument always wins, then the
+role policy, then the full-history default.
 Explicit JSON and files accept either the raw extension configuration or an
 object containing `subagents`. Malformed JSON, unreadable explicit files, and
 invalid integer overrides disable the extension with a diagnostic rather than
 silently enabling defaults. `SUBAGENTS_DISABLED=1` takes precedence.
+
+## Tasks and archival
+
+Each `spawn_agent` and `followup_task` creates a task record with a bounded
+objective, its submitting agent, the run it started, and a result reference.
+`spawn_agent` and `followup_task` return `task_id`; a completed result carries
+the matching `taskId` and `runSequence` in its metadata.
+
+Archive a settled agent to free an identity slot without losing its record,
+usage, or transcript:
+
+```text
+/agents archive /root/reviewer
+/agents unarchive /root/reviewer
+```
+
+Archived agents stay hidden from `list_agents` unless `include_archived` is set,
+reject message, follow-up, interrupt, and load with `agent_archived`, and never
+release their path for a different identity. Archival is refused while a run is
+still settling or a completion is undelivered.
 
 ## Recovery and inspection
 
@@ -167,9 +190,10 @@ Tests sit beside the modules they exercise. Start with `index.ts` for Pi wiring,
 `src/core/coordinator.ts` for execution, and `src/persistence/schema.ts` for the
 saved-data contract.
 
-Only snapshot schema `version: 2` under `subagents-v3-state` is supported.
-Retired snapshots are ignored, not migrated. Existing session files are not
-deleted. Old settings aliases are ignored; use `maxConcurrentExecutions`,
+Snapshot schema `version: 3` is written under `subagents-v3-state`. Version 2
+checkpoints are still read and migrated in memory, then rewritten as version 3;
+unknown versions are rejected rather than guessed. Existing session files are
+not deleted. Old settings aliases are ignored; use `maxConcurrentExecutions`,
 `maxLoadedAgents`, and `wait.{minTimeoutMs,defaultTimeoutMs,maxTimeoutMs}` under
 `settings.json.subagents`.
 
@@ -199,4 +223,5 @@ The extension-local `npm test` runs `src/*/*.test.ts`.
 Docs: `docs/PI_API_BINDINGS.md`, `docs/ARCHITECTURE.md`,
 `docs/CODEX_PARITY.md`, `docs/HARNESS_REVIEW.md`,
 `docs/IMPLEMENTATION_PLAN.md`, `docs/M1_IMPLEMENTATION.md`, and
-`docs/M2_IMPLEMENTATION.md`.
+`docs/M2_IMPLEMENTATION.md`, `docs/M3_IMPLEMENTATION.md`, and
+`docs/EVALUATIONS.md`.

@@ -147,7 +147,10 @@ export function buildToolHandlers() {
                 callId: toolCallId as ToolCallId,
             })
             if (manager.getConfig().hideSpawnAgentMetadata) {
-                return structuredResult({ task_name: result.path })
+                return structuredResult({
+                    task_name: result.path,
+                    task_id: result.taskId,
+                })
             }
             const record = manager.getRecordByPath(result.path)
             return structuredResult({
@@ -158,6 +161,7 @@ export function buildToolHandlers() {
                     ? { thinking_level: record.thinkingLevel }
                     : {}),
                 ...(params.fork_turns ? { fork_turns: params.fork_turns } : {}),
+                task_id: result.taskId,
             })
         },
         async send(
@@ -180,13 +184,16 @@ export function buildToolHandlers() {
             params: { target: string; message: string },
             toolCallId: string
         ) {
-            await manager.followup({
+            const result = await manager.followup({
                 caller,
                 target: params.target,
                 message: params.message,
                 callId: toolCallId as ToolCallId,
             })
-            return structuredResult({ delivered: true })
+            return structuredResult({
+                delivered: true,
+                task_id: result.taskId,
+            })
         },
         async wait(
             manager: SubagentCoordinator,
@@ -225,9 +232,11 @@ export function buildToolHandlers() {
         list(
             manager: SubagentCoordinator,
             caller: AgentPath,
-            params: { path_prefix?: string }
+            params: { path_prefix?: string; include_archived?: boolean }
         ) {
-            const agents = manager.list(caller, params.path_prefix)
+            const agents = manager.list(caller, params.path_prefix, {
+                includeArchived: params.include_archived === true,
+            })
             return structuredResult({
                 agents: agents.map((agent) => ({
                     agent_name: agent.path,
@@ -245,6 +254,26 @@ export function buildToolHandlers() {
                     ...(agent.blockedReason === undefined
                         ? {}
                         : { blocked_reason: agent.blockedReason }),
+                    ...(agent.archived === undefined
+                        ? {}
+                        : { archived: agent.archived }),
+                    ...(agent.currentTask === undefined
+                        ? {}
+                        : {
+                              current_task: {
+                                  task_id: agent.currentTask.id,
+                                  kind: agent.currentTask.kind,
+                                  status: agent.currentTask.status,
+                                  objective: agent.currentTask.objective,
+                                  ...(agent.currentTask.runSequence ===
+                                  undefined
+                                      ? {}
+                                      : {
+                                            run_sequence:
+                                                agent.currentTask.runSequence,
+                                        }),
+                              },
+                          }),
                     running: agent.running,
                     waiting: agent.waiting,
                 })),

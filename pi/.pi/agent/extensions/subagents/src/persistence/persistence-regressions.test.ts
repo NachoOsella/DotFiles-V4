@@ -10,6 +10,8 @@ import {
 } from './session-state.ts'
 import {
     isPersistedStateV2,
+    isPersistedStateV3,
+    migratePersistedStateV2ToV3,
     parsePersistedStateV2,
     type PersistedSubagentStateV2,
 } from './schema.ts'
@@ -38,12 +40,15 @@ function agent(
     }
 }
 
-function v2(agents: readonly unknown[], persistedAt: unknown = PERSISTED_AT) {
+function v2(
+    agents: readonly unknown[],
+    persistedAt: unknown = PERSISTED_AT
+): PersistedSubagentStateV2 {
     return {
         version: 2,
         rootSessionId: 'root-session',
-        persistedAt,
-        agents,
+        persistedAt: persistedAt as number,
+        agents: agents as PersistedSubagentStateV2['agents'],
     }
 }
 
@@ -99,12 +104,29 @@ function representativeSnapshot(): PersistedSubagentStateV2 {
 }
 
 describe('persisted snapshot roundtrip', () => {
-    it('keeps a representative current snapshot unchanged', () => {
+    it('keeps a representative current snapshot stable through V3 migration', () => {
         const snapshot = representativeSnapshot()
-        assert.equal(isPersistedState(snapshot), true)
         assert.equal(isPersistedStateV2(snapshot), true)
-        assert.deepEqual(parsePersistedState(snapshot), snapshot)
+        assert.equal(isPersistedState(snapshot), false)
+
+        const migrated = migratePersistedStateV2ToV3(snapshot)
+        assert.deepEqual(parsePersistedState(snapshot), migrated)
         assert.deepEqual(parsePersistedStateV2(snapshot), snapshot)
+        assert.equal(isPersistedStateV3(migrated), true)
+
+        // Reading a V2 checkpoint migrates it, and the next checkpoint is V3.
+        const serialized = serializeAgentRecords(
+            restoreAgentRecords(snapshot, 'root-session'),
+            'root-session'
+        )
+        assert.equal(serialized.version, 3)
+        assert.deepEqual(serialized.tasks, [])
+        assert.deepEqual(
+            JSON.parse(JSON.stringify(serialized.agents)),
+            snapshot.agents
+        )
+        assert.equal(isPersistedStateV3(serialized), true)
+        assert.equal(isPersistedStateV2(serialized), false)
     })
 
     it('finds and returns the snapshot from a session branch', () => {
@@ -115,7 +137,7 @@ describe('persisted snapshot roundtrip', () => {
         session.appendCustomEntry(SUBAGENTS_STATE_CUSTOM_TYPE, snapshot)
         session.appendCustomEntry('unrelated', { nope: true })
         const found = findLatestState(session.getBranch())
-        assert.deepEqual(found, snapshot)
+        assert.deepEqual(found, migratePersistedStateV2ToV3(snapshot))
         assert.equal(snapshotAge(found!), PERSISTED_AT)
     })
 })
@@ -300,7 +322,7 @@ describe('malformed V2 records recover per record', () => {
     it('coerces a nonfinite persistedAt to zero', () => {
         const parsed = parseV2(v2([agent()], Number.NaN))
         assert.equal(parsed.persistedAt, 0)
-        assert.equal(snapshotAge(parsed), 0)
+        assert.equal(snapshotAge(migratePersistedStateV2ToV3(parsed)), 0)
     })
 })
 
@@ -411,10 +433,16 @@ describe('strict guards stay honest', () => {
         )
     })
 
-    it('is true for a canonical empty snapshot', () => {
-        const empty = v2([], PERSISTED_AT)
-        assert.equal(isPersistedStateV2(empty), true)
-        assert.deepEqual(parsePersistedState(empty), empty)
+    it('is true for a canonical empty V3 snapshot', () => {
+        const emptyV2 = v2([], PERSISTED_AT)
+        assert.equal(isPersistedStateV2(emptyV2), true)
+        assert.equal(isPersistedState(emptyV2), false)
+
+        const emptyV3 = migratePersistedStateV2ToV3(emptyV2)
+        assert.equal(isPersistedStateV3(emptyV3), true)
+        assert.equal(isPersistedState(emptyV3), true)
+        assert.deepEqual(parsePersistedState(emptyV3), emptyV3)
+        assert.deepEqual(parsePersistedState(emptyV2), emptyV3)
     })
 
     it('rejects values that are not snapshots', () => {
@@ -462,7 +490,8 @@ describe('parse to restore to serialize safety', () => {
         )
         const serialized = serializeAgentRecords(records, 'root-session')
         assert.equal(serialized.agents.length, 1)
-        assert.equal(isPersistedStateV2(serialized), true)
+        assert.equal(isPersistedStateV3(serialized), true)
+        assert.equal(isPersistedStateV2(serialized), false)
     })
 
     it('drops foreign-root records through restore and serialize', () => {
@@ -519,11 +548,9 @@ describe('findLatestState recovery policy', () => {
         )
         const found = findLatestState(session.getBranch())
         assert.equal(found?.persistedAt, 200)
-        assert.equal(found?.version === 2 ? found.agents.length : -1, 1)
-        assert.equal(
-            found?.version === 2 ? found.agents[0]?.task : undefined,
-            'latest'
-        )
+        assert.equal(found?.version, 3)
+        assert.equal(found?.agents.length, 1)
+        assert.equal(found?.agents[0]?.task, 'latest')
     })
 
     it('prefers a legitimate empty newer snapshot over an older one', () => {

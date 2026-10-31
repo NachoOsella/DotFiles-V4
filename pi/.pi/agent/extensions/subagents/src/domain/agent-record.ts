@@ -28,6 +28,24 @@ export interface SessionToolCallCount {
     readonly count: number
 }
 
+export type AgentTaskKind = 'spawn' | 'followup'
+export type AgentTaskStatus = 'active' | 'completed' | 'failed' | 'archived'
+
+/** One submission and its correlation to a native child run. */
+export interface AgentTask {
+    readonly id: string
+    readonly agentPath: AgentPath
+    readonly objective: string
+    readonly kind: AgentTaskKind
+    readonly submittedBy: AgentPath
+    readonly communicationId: string
+    readonly runSequence?: number
+    readonly status: AgentTaskStatus
+    readonly createdAt: number
+    readonly completedAt?: number
+    readonly resultRef?: string
+}
+
 /** A saved identity that cannot be reopened under current host state. */
 export interface AgentBlockedInfo {
     readonly code: string
@@ -85,6 +103,8 @@ export interface AgentRecord {
     readonly limitReached?: AgentLimitReached
     /** Present when a cold reopen failed for a stable, actionable reason. */
     readonly blocked?: AgentBlockedInfo
+    /** Terminal identities stop counting against the logical quota. */
+    readonly archivedAt?: number
     readonly lastResult?: string
     readonly initiatingTurnId?: string
     /** Initial spawn prompt (the NEW_TASK payload) for UI display. */

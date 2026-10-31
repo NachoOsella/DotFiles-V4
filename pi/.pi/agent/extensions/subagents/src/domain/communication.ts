@@ -27,6 +27,10 @@ export interface FinalAnswerMeta {
     readonly truncated?: boolean
     /** Child transcript file retaining the full result. */
     readonly fullResultRef?: string
+    /** Task submission that produced this final answer. */
+    readonly taskId?: string
+    /** Native run sequence correlated with the submission. */
+    readonly runSequence?: number
 }
 
 export interface InterAgentCommunication {

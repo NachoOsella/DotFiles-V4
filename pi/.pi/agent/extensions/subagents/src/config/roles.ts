@@ -1,11 +1,22 @@
 import type { ThinkingLevel } from '@earendil-works/pi-agent-core'
 import type { CodexSubagentsConfig } from './config.ts'
 
+/** Role-selected spawn context policy; omitted leaves the default fork. */
+export type RoleContextPolicy =
+    | { readonly mode: 'inherit' }
+    | { readonly mode: 'none' }
+    | { readonly mode: 'lastN'; readonly turns: number }
+
 export interface AgentRole {
     readonly description?: string
     readonly promptAppend?: string
     readonly model?: string
     readonly thinkingLevel?: ThinkingLevel
+    /**
+     * Spawn context selection used when the caller omits fork_turns.
+     * `inherit` keeps the default full fork; an explicit request always wins.
+     */
+    readonly context?: RoleContextPolicy
     /**
      * Legacy additive tool list. These names join the caller's active tools.
      * Restrictions are opt-in through allowTools/denyTools.

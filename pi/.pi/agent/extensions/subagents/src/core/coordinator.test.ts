@@ -5,7 +5,10 @@ import { DEFAULT_SUBAGENTS_CONFIG } from '../config/config.ts'
 import { SubagentCoordinator } from './coordinator.ts'
 import { makeAgentRuntime, type AgentRuntime } from './agent-runtime.ts'
 import type { AgentPath } from '../domain/ids.ts'
-import type { InterAgentCommunication } from '../domain/communication.ts'
+import type {
+    ForkTurns,
+    InterAgentCommunication,
+} from '../domain/communication.ts'
 import type { DeliveryOptions } from './transport.ts'
 import type { ParentExecutionSnapshot } from '../domain/parent-snapshot.ts'
 import type { AgentRecord } from '../domain/agent-record.ts'
@@ -149,6 +152,7 @@ function createHarness(options?: {
     onFinalStarted?: () => void
     roles?: typeof DEFAULT_SUBAGENTS_CONFIG.roles
     isRootStreaming?: () => boolean
+    onCreateFork?: (fork: ForkTurns) => void
 }): Harness {
     const sessions = new Map<string, FakeSession>()
     const opens = { count: 0 }
@@ -176,7 +180,8 @@ function createHarness(options?: {
         })
     }
     const factory: SubagentSessionFactory = {
-        async create(record) {
+        async create(record, _parent, fork) {
+            options?.onCreateFork?.(fork)
             options?.onCreateStarted?.()
             if (options?.createGate) await options.createGate.promise
             return makeRuntime(record)
@@ -401,6 +406,43 @@ test('concurrent cold loads serialize global residency admission', async () => {
             .filter((agent) => agent.residency === 'loaded').length,
         1
     )
+    await harness.coordinator.shutdown()
+})
+
+test('role context policy chooses the fork without overriding an explicit request', async () => {
+    const forks: ForkTurns[] = []
+    const harness = createHarness({
+        onCreateFork: (fork) => forks.push(fork),
+        roles: {
+            reviewer: { context: { mode: 'none' } },
+            scout: { context: { mode: 'lastN', turns: 2 } },
+        },
+    })
+    await harness.coordinator.spawn({
+        caller: ROOT_PATH,
+        taskName: 'review',
+        message: 'review',
+        agentType: 'reviewer',
+    })
+    assert.deepEqual(forks[0], { _tag: 'None' })
+
+    await harness.coordinator.spawn({
+        caller: ROOT_PATH,
+        taskName: 'scout',
+        message: 'scout',
+        agentType: 'scout',
+    })
+    assert.deepEqual(forks[1], { _tag: 'LastN', turns: 2 })
+
+    // An explicit request always wins over the role policy.
+    await harness.coordinator.spawn({
+        caller: ROOT_PATH,
+        taskName: 'forced',
+        message: 'forced',
+        agentType: 'reviewer',
+        forkTurns: 'all',
+    })
+    assert.deepEqual(forks[2], { _tag: 'All' })
     await harness.coordinator.shutdown()
 })
 

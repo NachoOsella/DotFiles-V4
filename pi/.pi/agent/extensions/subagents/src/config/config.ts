@@ -5,7 +5,7 @@
  * core resolved V2 settings (limits, hints, wait values)
  */
 
-import type { AgentRole } from './roles.ts'
+import type { AgentRole, RoleContextPolicy } from './roles.ts'
 
 /** Optional runtime bounds. Omitted fields are unlimited. */
 export interface SubagentLimitsConfig {
@@ -391,6 +391,7 @@ export function decodeConfig(input: unknown): CodexSubagentsConfig {
                 role.denyTools === undefined
                     ? undefined
                     : asToolList(role.denyTools)
+            const context = decodeRoleContext(name, role.context)
             roles[name] = {
                 ...(typeof role.description === 'string'
                     ? { description: role.description }
@@ -410,6 +411,7 @@ export function decodeConfig(input: unknown): CodexSubagentsConfig {
                 ...(tools ? { tools } : {}),
                 ...(allowTools ? { allowTools } : {}),
                 ...(denyTools ? { denyTools } : {}),
+                ...(context ? { context } : {}),
             }
         }
         ;(out as { roles: Record<string, AgentRole> }).roles = roles
@@ -437,6 +439,50 @@ export function decodeConfig(input: unknown): CodexSubagentsConfig {
         ).proactiveAt = raw.proactiveAt as CodexSubagentsConfig['proactiveAt']
     }
     return out
+}
+
+/** Validate one role context policy; omitted keeps the default fork. */
+function decodeRoleContext(
+    roleName: string,
+    value: unknown
+): RoleContextPolicy | undefined {
+    if (value === undefined) return undefined
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+        throw new ConfigValidationError(
+            `role "${roleName}" context must be an object`
+        )
+    }
+    const context = value as Record<string, unknown>
+    for (const key of Object.keys(context)) {
+        if (key !== 'mode' && key !== 'turns') {
+            throw new ConfigValidationError(
+                `role "${roleName}" context has unknown key "${key}"`
+            )
+        }
+    }
+    if (context.mode === 'inherit' || context.mode === 'none') {
+        if (context.turns !== undefined) {
+            throw new ConfigValidationError(
+                `role "${roleName}" context.turns is only allowed with mode "lastN"`
+            )
+        }
+        return { mode: context.mode }
+    }
+    if (context.mode === 'lastN') {
+        if (
+            typeof context.turns !== 'number' ||
+            !Number.isSafeInteger(context.turns) ||
+            context.turns < 1
+        ) {
+            throw new ConfigValidationError(
+                `role "${roleName}" context.turns must be a positive integer for mode "lastN"`
+            )
+        }
+        return { mode: 'lastN', turns: context.turns }
+    }
+    throw new ConfigValidationError(
+        `role "${roleName}" context.mode must be "inherit", "none", or "lastN"`
+    )
 }
 
 /** Clamp a requested wait timeout to the active wait bounds. */

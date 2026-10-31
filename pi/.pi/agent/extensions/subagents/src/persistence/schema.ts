@@ -49,6 +49,40 @@ export interface PersistedSubagentStateV2 {
     readonly agents: readonly PersistedSubagentV2[]
 }
 
+/** Task kind recorded on a version 3 snapshot. */
+export type PersistedTaskKind = 'spawn' | 'followup'
+
+/** Task lifecycle status recorded on a version 3 snapshot. */
+export type PersistedTaskStatus = 'active' | 'completed' | 'failed' | 'archived'
+
+/** Durable task assignment correlated with a communication and run. */
+export interface PersistedTaskV3 {
+    readonly id: string
+    readonly agentPath: string
+    readonly objective: string
+    readonly kind: PersistedTaskKind
+    readonly submittedBy: string
+    readonly communicationId: string
+    readonly runSequence?: number
+    readonly status: PersistedTaskStatus
+    readonly createdAt: number
+    readonly completedAt?: number
+    readonly resultRef?: string
+}
+
+/** Version 2 agent record plus the archive marker. */
+export interface PersistedSubagentV3 extends PersistedSubagentV2 {
+    readonly archivedAt?: number
+}
+
+export interface PersistedSubagentStateV3 {
+    readonly version: 3
+    readonly rootSessionId: string
+    readonly persistedAt: number
+    readonly agents: readonly PersistedSubagentV3[]
+    readonly tasks: readonly PersistedTaskV3[]
+}
+
 /**
  * Deep-normalizing parser for V2 snapshots. Returns undefined only when the
  * envelope cannot be used at all. Malformed agent records are dropped and
@@ -118,6 +152,226 @@ function normalizePersistedStateV2(
             rootSessionId: raw.rootSessionId,
             persistedAt,
             agents,
+        },
+        repaired,
+    }
+}
+
+/**
+ * Deep-normalizing parser for V3 snapshots with the V2 repair philosophy:
+ * drop records that cannot be addressed, coerce recoverable fields, and never
+ * let one malformed record discard the rest. Duplicate agent identities and
+ * task ids keep the first occurrence.
+ */
+export function parsePersistedStateV3(
+    value: unknown
+): PersistedSubagentStateV3 | undefined {
+    return normalizePersistedStateV3(value)?.value
+}
+
+/** Strict guard: true only when V3 normalization would make no repairs. */
+export function isPersistedStateV3(
+    value: unknown
+): value is PersistedSubagentStateV3 {
+    const normalized = normalizePersistedStateV3(value)
+    return normalized !== undefined && !normalized.repaired
+}
+
+/**
+ * Migrate a parsed V2 snapshot to the V3 envelope.
+ *
+ * Version 2 stays readable indefinitely. Migration adds an empty task list and
+ * no archive markers; the next checkpoint serializes real V3 state.
+ */
+export function migratePersistedStateV2ToV3(
+    state: PersistedSubagentStateV2
+): PersistedSubagentStateV3 {
+    return {
+        version: 3,
+        rootSessionId: state.rootSessionId,
+        persistedAt: state.persistedAt,
+        agents: state.agents,
+        tasks: [],
+    }
+}
+
+function normalizePersistedStateV3(
+    value: unknown
+): Normalized<PersistedSubagentStateV3> | undefined {
+    const raw = asRecord(value)
+    if (
+        raw === undefined ||
+        raw.version !== 3 ||
+        typeof raw.rootSessionId !== 'string' ||
+        !Array.isArray(raw.agents)
+    ) {
+        return undefined
+    }
+    let repaired = false
+    const persistedAt = finiteNumber(raw.persistedAt, 0)
+    if (persistedAt !== raw.persistedAt) repaired = true
+
+    const seenIds = new Set<string>()
+    const seenPaths = new Set<string>()
+    const agents: PersistedSubagentV3[] = []
+    for (const candidate of raw.agents) {
+        const parsed = normalizePersistedSubagentV3(
+            candidate,
+            raw.rootSessionId,
+            persistedAt
+        )
+        if (parsed === undefined) {
+            repaired = true
+            continue
+        }
+        if (seenIds.has(parsed.value.id) || seenPaths.has(parsed.value.path)) {
+            repaired = true
+            continue
+        }
+        if (parsed.repaired) repaired = true
+        seenIds.add(parsed.value.id)
+        seenPaths.add(parsed.value.path)
+        agents.push(parsed.value)
+    }
+
+    const tasks = normalizePersistedTasks(raw.tasks, persistedAt)
+    if (tasks.repaired) repaired = true
+
+    return {
+        value: {
+            version: 3,
+            rootSessionId: raw.rootSessionId,
+            persistedAt,
+            agents,
+            tasks: tasks.value,
+        },
+        repaired,
+    }
+}
+
+function normalizePersistedSubagentV3(
+    value: unknown,
+    snapshotRootSessionId: string,
+    fallbackTimestamp: number
+): Normalized<PersistedSubagentV3> | undefined {
+    const base = normalizePersistedSubagentV2(
+        value,
+        snapshotRootSessionId,
+        fallbackTimestamp
+    )
+    if (base === undefined) return undefined
+    const raw = asRecord(value)
+    if (raw === undefined) return undefined
+
+    let repaired = base.repaired
+    let archivedAt: number | undefined
+    if (raw.archivedAt !== undefined) {
+        archivedAt = finiteNumber(raw.archivedAt, fallbackTimestamp)
+        if (archivedAt !== raw.archivedAt) repaired = true
+    }
+    return {
+        value: {
+            ...base.value,
+            ...(archivedAt !== undefined ? { archivedAt } : {}),
+        },
+        repaired,
+    }
+}
+
+function normalizePersistedTasks(
+    value: unknown,
+    fallbackTimestamp: number
+): Normalized<PersistedTaskV3[]> {
+    if (!Array.isArray(value)) {
+        // A V3 checkpoint always carries the list. Treat a missing or malformed
+        // list as recoverable empty state, not as an unusable envelope.
+        return { value: [], repaired: true }
+    }
+    let repaired = false
+    const seenIds = new Set<string>()
+    const tasks: PersistedTaskV3[] = []
+    for (const candidate of value) {
+        const parsed = normalizePersistedTask(candidate, fallbackTimestamp)
+        if (parsed === undefined) {
+            repaired = true
+            continue
+        }
+        if (seenIds.has(parsed.value.id)) {
+            repaired = true
+            continue
+        }
+        if (parsed.repaired) repaired = true
+        seenIds.add(parsed.value.id)
+        tasks.push(parsed.value)
+    }
+    return { value: tasks, repaired }
+}
+
+function normalizePersistedTask(
+    value: unknown,
+    fallbackTimestamp: number
+): Normalized<PersistedTaskV3> | undefined {
+    const raw = asRecord(value)
+    if (raw === undefined) return undefined
+    const id = nonEmptyString(raw.id)
+    const agentPath = parseChildPath(raw.agentPath)
+    const objective = nonEmptyString(raw.objective)
+    const submittedBy = parseCanonicalPath(raw.submittedBy)
+    const communicationId = nonEmptyString(raw.communicationId)
+    if (
+        id === undefined ||
+        agentPath === undefined ||
+        objective === undefined ||
+        submittedBy === undefined ||
+        communicationId === undefined
+    ) {
+        return undefined
+    }
+    const kind = raw.kind
+    if (kind !== 'spawn' && kind !== 'followup') return undefined
+    const status = raw.status
+    if (
+        status !== 'active' &&
+        status !== 'completed' &&
+        status !== 'failed' &&
+        status !== 'archived'
+    ) {
+        return undefined
+    }
+
+    let repaired = false
+    const createdAt = finiteNumber(raw.createdAt, fallbackTimestamp)
+    if (createdAt !== raw.createdAt) repaired = true
+
+    let runSequence: number | undefined
+    if (raw.runSequence !== undefined) {
+        runSequence = finiteInteger(raw.runSequence, 0)
+        if (runSequence !== raw.runSequence) repaired = true
+    }
+    let completedAt: number | undefined
+    if (raw.completedAt !== undefined) {
+        completedAt = finiteNumber(raw.completedAt, fallbackTimestamp)
+        if (completedAt !== raw.completedAt) repaired = true
+    }
+    let resultRef: string | undefined
+    if (raw.resultRef !== undefined) {
+        resultRef = optionalString(raw.resultRef)
+        if (resultRef === undefined) repaired = true
+    }
+
+    return {
+        value: {
+            id,
+            agentPath,
+            objective,
+            kind,
+            submittedBy,
+            communicationId,
+            status,
+            createdAt,
+            ...(runSequence !== undefined ? { runSequence } : {}),
+            ...(completedAt !== undefined ? { completedAt } : {}),
+            ...(resultRef !== undefined ? { resultRef } : {}),
         },
         repaired,
     }
@@ -394,6 +648,8 @@ function normalizeFinalAnswerMeta(
         failed?: boolean
         truncated?: boolean
         fullResultRef?: string
+        taskId?: string
+        runSequence?: number
     } = { model }
     const role = optionalString(raw.role)
     if (role !== undefined) meta.role = role
@@ -422,6 +678,23 @@ function normalizeFinalAnswerMeta(
         const reference = nonEmptyString(raw.fullResultRef)
         if (reference !== undefined) meta.fullResultRef = reference
         else repaired = true
+    }
+    if (raw.taskId !== undefined) {
+        const taskId = nonEmptyString(raw.taskId)
+        if (taskId !== undefined) meta.taskId = taskId
+        else repaired = true
+    }
+    if (raw.runSequence !== undefined) {
+        if (
+            typeof raw.runSequence === 'number' &&
+            Number.isSafeInteger(raw.runSequence) &&
+            raw.runSequence >= 0
+        ) {
+            meta.runSequence = raw.runSequence
+        } else {
+            // Do not invent run 0: losing correlation is safer than claiming it.
+            repaired = true
+        }
     }
     return { value: meta, repaired }
 }

@@ -3,21 +3,23 @@ import type { AgentRecord } from '../domain/agent-record.ts'
 import { AgentStatus } from '../domain/agent-status.ts'
 import type { AgentId, AgentPath } from '../domain/ids.ts'
 import { parsePersistedState } from './session-state.ts'
-import type { PersistedSubagentStateV2 } from './schema.ts'
+import type { PersistedSubagentStateV3, PersistedTaskV3 } from './schema.ts'
 
 /**
  * Snapshot logical identities only, never live sessions or execution state.
  * @param records Registry records; the root is omitted.
  * @param rootSessionId Root identity for records without an explicit root.
- * @returns A V2 snapshot compatible with native session custom entries.
+ * @param tasks Durable task assignments to persist with the identities.
+ * @returns A V3 snapshot compatible with native session custom entries.
  * @throws If a child record has an invalid provider/model identity.
  */
 export function serializeAgentRecords(
     records: Iterable<AgentRecord>,
-    rootSessionId: string
-): PersistedSubagentStateV2 {
+    rootSessionId: string,
+    tasks: Iterable<PersistedTaskV3> = []
+): PersistedSubagentStateV3 {
     return {
-        version: 2,
+        version: 3,
         rootSessionId,
         persistedAt: Date.now(),
         agents: [...records]
@@ -46,7 +48,29 @@ export function serializeAgentRecords(
                 lastResult: record.lastResult,
                 task: record.task,
                 usage: record.usage,
+                ...(archivedAtOf(record) !== undefined
+                    ? { archivedAt: archivedAtOf(record) }
+                    : {}),
             })),
+        tasks: [...tasks].map((task) => ({
+            id: task.id,
+            agentPath: task.agentPath,
+            objective: task.objective,
+            kind: task.kind,
+            submittedBy: task.submittedBy,
+            communicationId: task.communicationId,
+            ...(task.runSequence !== undefined
+                ? { runSequence: task.runSequence }
+                : {}),
+            status: task.status,
+            createdAt: task.createdAt,
+            ...(task.completedAt !== undefined
+                ? { completedAt: task.completedAt }
+                : {}),
+            ...(task.resultRef !== undefined
+                ? { resultRef: task.resultRef }
+                : {}),
+        })),
     }
 }
 
@@ -93,7 +117,38 @@ export function restoreAgentRecords(
         lastResult: persisted.lastResult,
         task: persisted.task,
         usage: persisted.usage,
+        ...(persisted.archivedAt !== undefined
+            ? { archivedAt: persisted.archivedAt }
+            : {}),
     }))
+}
+
+/**
+ * Restore durable task assignments alongside records.
+ * @param value A saved V2 or V3 snapshot, possibly malformed.
+ * @param rootSessionId Active root, or 'unknown-root' before root discovery.
+ * @returns Recovered tasks, or an empty array for unusable/foreign data.
+ */
+export function restoreAgentTasks(
+    value: unknown,
+    rootSessionId: string
+): PersistedTaskV3[] {
+    const state = parsePersistedState(value)
+    if (
+        !state ||
+        (rootSessionId !== 'unknown-root' &&
+            state.rootSessionId !== rootSessionId)
+    ) {
+        return []
+    }
+    return [...state.tasks]
+}
+
+function archivedAtOf(record: AgentRecord): number | undefined {
+    const value = (record as { archivedAt?: unknown }).archivedAt
+    return typeof value === 'number' && Number.isFinite(value) && value >= 0
+        ? value
+        : undefined
 }
 
 function terminalMessage(status: AgentStatus): string | undefined {
