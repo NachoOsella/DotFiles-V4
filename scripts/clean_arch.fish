@@ -7,9 +7,13 @@
 set -g JOURNAL_RETENTION 7d
 set -g TEMP_FILE_AGE 7
 set -g PACMAN_VERSIONS_KEEP 1
-set -g ZED_NODE_VERSIONS_KEEP 1
 set -g DOCKER_PRUNE_ALL 0
-set -g PROFILE aggressive
+# Safe by default. The aggressive profile deletes dependency caches that can hold
+# locally built artifacts (see clean_package_managers), so it must be opted into.
+set -g PROFILE balanced
+
+# Locate this script so the tracked clean_arch.conf applies without --config.
+set -g CLEAN_ARCH_DIR (dirname (status --current-filename))
 
 # Top-level entries under ~/.cache that may contain user state rather than
 # disposable performance data. Additional names can be supplied on the CLI.
@@ -44,7 +48,7 @@ set -g ROOT_TASKS_ENABLED 1
 set -g CURRENT_TASK ""
 set -g CURRENT_TASK_PREFIX ""
 set -g TASK_INDEX 0
-set -g TASK_TOTAL 19
+set -g TASK_TOTAL 18
 set -g SPINNER_PID 0
 set -g SUDO_KEEPALIVE_PID 0
 set -g LOCK_DIR "/tmp/clean_arch.lock"
@@ -194,7 +198,7 @@ function ui_settings_panel
     printf "  %s╭─%s%s╮%s\n" $D " Run plan " (string repeat -n (math "$inner - 11") "─") $R
     printf "  %s│%s %s%s│%s\n" $D $R (pad_plain "Mode: $mode" (math "$inner - 1")) $D $R
     printf "  %s│%s %s%s│%s\n" $D $R (pad_plain "Profile: $PROFILE   Journal: $JOURNAL_RETENTION   Temp age: $TEMP_FILE_AGE days" (math "$inner - 1")) $D $R
-    printf "  %s│%s %s%s│%s\n" $D $R (pad_plain "Pacman keep: $PACMAN_VERSIONS_KEEP   Zed node keep: $ZED_NODE_VERSIONS_KEEP   Docker: $docker" (math "$inner - 1")) $D $R
+    printf "  %s│%s %s%s│%s\n" $D $R (pad_plain "Pacman keep: $PACMAN_VERSIONS_KEEP   Docker: $docker" (math "$inner - 1")) $D $R
     printf "  %s│%s %s%s│%s\n" $D $R (pad_plain "Protected ~/.cache entries: "(string join ", " $PRESERVE_USER_CACHE) (math "$inner - 1")) $D $R
     printf "  %s│%s %s%s│%s\n" $D $R (pad_plain "Budget: $budget   Report: $report" (math "$inner - 1")) $D $R
     printf "  %s╰%s╯%s\n" $D (string repeat -n $inner "─") $R
@@ -408,7 +412,7 @@ function show_help
     echo "  $B TASK NAMES$R"
     echo "      orphans pacman yay package_managers docker system_cache user_cache"
     echo "      sandbox_caches app_caches steam_cache flatpak journal coredumps var_log"
-    echo "      user_logs temps trash zed_node vesktop"
+    echo "      user_logs temps trash vesktop"
     echo
 end
 
@@ -440,19 +444,16 @@ function apply_profile
             set -g JOURNAL_RETENTION 14d
             set -g TEMP_FILE_AGE 14
             set -g PACMAN_VERSIONS_KEEP 2
-            set -g ZED_NODE_VERSIONS_KEEP 2
             set -g DOCKER_PRUNE_ALL 0
         case balanced
             set -g JOURNAL_RETENTION 7d
             set -g TEMP_FILE_AGE 7
             set -g PACMAN_VERSIONS_KEEP 1
-            set -g ZED_NODE_VERSIONS_KEEP 1
             set -g DOCKER_PRUNE_ALL 0
         case aggressive
             set -g JOURNAL_RETENTION 3d
             set -g TEMP_FILE_AGE 3
             set -g PACMAN_VERSIONS_KEEP 1
-            set -g ZED_NODE_VERSIONS_KEEP 1
             set -g DOCKER_PRUNE_ALL 1
         case '*'
             printf "  $RED✗$R Invalid profile: %s\n\n" $PROFILE
@@ -489,7 +490,7 @@ function load_config
                 if test "$phase" = profile
                     set -g PROFILE "$value"
                 end
-            case JOURNAL_RETENTION TEMP_FILE_AGE PACMAN_VERSIONS_KEEP ZED_NODE_VERSIONS_KEEP DOCKER_PRUNE_ALL MAX_DELETE_GB
+            case JOURNAL_RETENTION TEMP_FILE_AGE PACMAN_VERSIONS_KEEP DOCKER_PRUNE_ALL MAX_DELETE_GB
                 if test "$phase" = settings
                     set -g $key "$value"
                 end
@@ -971,7 +972,10 @@ function clean_system_cache
     test $ok -eq 1; and return 0; or return 1
 end
 
-# Remove Spotify's disposable cache while retaining its user-state subtree.
+# Spotify keeps its login inside the embedded Chromium profile under
+# ~/.cache/spotify: Default/Cookies, Default/Login Data and Local State (the
+# os_crypt key those cookies are encrypted with). Wiping the profile logs the
+# user out, so only the disposable caches are removed here.
 function clean_spotify_user_cache
     set -l root "$HOME/.cache/spotify"
     if not test -d "$root"
@@ -979,11 +983,10 @@ function clean_spotify_user_cache
     end
 
     set -l ok 1
-    for entry in (find "$root" -mindepth 1 -maxdepth 1 -printf '%f\n' 2>/dev/null)
-        if test "$entry" = Users
-            continue
-        end
-        delete_path "$root/$entry"; or set ok 0
+    clean_electron_cache_root "$root"; or set ok 0
+    # Stream cache and CEF browser cache live beside the profile directories.
+    for path in "$root/Data" "$root/Browser"
+        delete_path "$path"; or set ok 0
     end
     test $ok -eq 1; and return 0; or return 1
 end
@@ -1171,9 +1174,13 @@ end
 
 function clean_var_log
     if test $DRY_RUN -eq 0
+        # Never truncate package-manager history. It is the only record of what
+        # was installed or upgraded, and nothing rotates it on a default Arch
+        # install, so it eventually crosses the 1M threshold above.
         sudo find /var/log -type f -size +1M \
             ! -path "/var/log/journal/*" \
             ! -name wtmp ! -name btmp ! -name lastlog \
+            ! -name 'pacman.log' \
             -exec truncate -s 0 {} + 2>/dev/null
         return $status
     end
@@ -1231,24 +1238,6 @@ function clean_trash
     return 0
 end
 
-function clean_zed_node
-    set -l zed_node_dir "$HOME/.local/share/zed/node"
-    if not test -d "$zed_node_dir"
-        return 10
-    end
-    set -l versions (ls -1 "$zed_node_dir" 2>/dev/null | sort -V -r)
-    if test (count $versions) -le $ZED_NODE_VERSIONS_KEEP
-        return 0
-    end
-    if test $DRY_RUN -eq 0
-        set -l to_delete $versions[(math $ZED_NODE_VERSIONS_KEEP + 1)..-1]
-        for version in $to_delete
-            command rm -rf "$zed_node_dir/$version" 2>/dev/null
-        end
-    end
-    return 0
-end
-
 function clean_vesktop
     set -l vesktop_root "$HOME/.config/vesktop"
     if not test -d "$vesktop_root"
@@ -1280,6 +1269,9 @@ end
 
 set -l config_path ""
 set -q _flag_config; and set config_path "$_flag_config"
+if test -z "$config_path"; and test -r "$CLEAN_ARCH_DIR/clean_arch.conf"
+    set config_path "$CLEAN_ARCH_DIR/clean_arch.conf"
+end
 load_config "$config_path" profile
 set -q _flag_profile; and set -g PROFILE "$_flag_profile"
 apply_profile
@@ -1375,7 +1367,6 @@ run_task var_log "Truncating /var/log" clean_var_log $do_privileged_logs
 run_task user_logs "Cleaning user application logs" clean_user_logs $do_logs
 run_task temps "Cleaning temp files" clean_temps $do_privileged_temps
 run_task trash "Emptying trash" clean_trash $do_trash
-run_task zed_node "Cleaning Zed old node versions" clean_zed_node $do_extras
 run_task vesktop "Cleaning Vesktop cache" clean_vesktop $do_extras
 
 set -l end_time (date +%s)

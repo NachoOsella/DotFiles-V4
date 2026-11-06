@@ -1,6 +1,7 @@
 import QtQuick
 import Quickshell
 import Quickshell.Hyprland
+import Quickshell.Io
 import Quickshell.Wayland
 import "../components"
 import "../config"
@@ -19,9 +20,12 @@ PanelWindow {
     property var captureCommand: []
     readonly property bool recordMode: RecordingService.recordMode
     property bool recordingCommand: false
+    readonly property bool popupActive: PopupManager.activePopup === "screenshot"
+    property bool frozen: false
+    property string frozenPath: ""
 
     screen: screenInfo
-    visible: PopupManager.activePopup === "screenshot"
+    visible: popupActive && frozen
     color: Theme.transparent
     aboveWindows: true
     WlrLayershell.namespace: "screenshot-overlay"
@@ -43,6 +47,44 @@ PanelWindow {
         else {
             RecordingService.selectionMode = "region";
             RecordingService.recordMode = false;
+        }
+    }
+
+    onPopupActiveChanged: {
+        if (popupActive)
+            freezeScreen();
+        else {
+            frozen = false;
+            frozenImage.source = "";
+        }
+    }
+
+    function freezeScreen(): void {
+        // Capture before the overlay maps so the frozen image has no selection UI baked in.
+        if (frozenPath.length > 0)
+            Quickshell.execDetached(["rm", "-f", frozenPath]);
+        frozenPath = "/tmp/quickshell-screenshot-" + screenInfo.name + "-" + Date.now() + ".png";
+        frozen = false;
+        frozenImage.source = "";
+        freezeCapture.exec(["grim", "-o", screenInfo.name, frozenPath]);
+    }
+
+    Image {
+        id: frozenImage
+        anchors.fill: parent
+        fillMode: Image.PreserveAspectCrop
+    }
+
+    Process {
+        id: freezeCapture
+        onExited: function(exitCode) {
+            if (exitCode !== 0) {
+                Quickshell.execDetached(["notify-send", "-u", "critical", "Screenshot failed", "Could not freeze the screen."]);
+                PopupManager.close();
+                return;
+            }
+            frozenImage.source = "file://" + root.frozenPath;
+            root.frozen = true;
         }
     }
 
@@ -93,11 +135,14 @@ PanelWindow {
             const width = Math.round(Math.abs(root.endX - root.startX));
             const height = Math.round(Math.abs(root.endY - root.startY));
             if (width > 0 && height > 0) {
-                const geometry = [root.screenInfo.name, String(x), String(y), String(width), String(height)];
-                if (root.recordMode)
-                    root.capture(["region"].concat(geometry), true);
-                else
-                    root.capture(["fish", "-i", "-c", "~/.config/hypr/scripts/screenshot-all.sh $argv", "--"].concat(geometry), false);
+                const selection = [String(x), String(y), String(width), String(height)];
+                if (root.recordMode) {
+                    root.capture(["region", root.screenInfo.name].concat(selection), true);
+                } else {
+                    // Crop the frozen frame so the saved image matches the selection.
+                    const logicalSize = [String(root.width), String(root.height)];
+                    root.capture(["fish", "-i", "-c", "~/.config/hypr/scripts/screenshot-all.sh --frozen $argv", "--", root.frozenPath].concat(logicalSize).concat(selection), false);
+                }
             } else {
                 root.selecting = false;
             }

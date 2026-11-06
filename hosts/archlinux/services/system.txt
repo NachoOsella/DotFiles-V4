@@ -2,6 +2,7 @@ docker.service
 fstrim.timer
 getty@.service
 iwd.service
+nftables.service
 power-profiles-daemon.service
 remote-fs.target
 sddm.service

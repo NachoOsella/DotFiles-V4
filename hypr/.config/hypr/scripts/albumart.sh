@@ -4,10 +4,16 @@
 cache_directory=${XDG_RUNTIME_DIR:-/tmp}/hyprlock-album-art
 album_path=$cache_directory/spotify-album.png
 url_path=$cache_directory/spotify-album.url
-fallback_path=$HOME/.config/hypr/assets/spotify.png
+# Hyprlock cannot hide an image widget, so idle state shows a transparent pixel.
+fallback_path=$HOME/.config/hypr/assets/empty.png
+players=spotifast,spotify
 
 mkdir -p "$cache_directory"
-art_url=$(playerctl -p spotatui,spotify metadata --format '{{mpris:artUrl}}' 2>/dev/null || true)
+
+art_url=
+if [[ $(playerctl -p "$players" status 2>/dev/null) == Playing ]]; then
+    art_url=$(playerctl -p "$players" metadata --format '{{mpris:artUrl}}' 2>/dev/null || true)
+fi
 
 if [[ -z $art_url ]]; then
     printf '%s\n' "$fallback_path"

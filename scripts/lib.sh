@@ -11,7 +11,6 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DOTFILES_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 PACKAGES_DIR="$DOTFILES_DIR/packages"
 HOSTS_DIR="$DOTFILES_DIR/hosts"
-SYSTEM_DIR="$DOTFILES_DIR/system"
 DEFAULT_HOST="${DOTFILES_HOST:-}"
 
 overlay_notice() {
@@ -117,11 +116,6 @@ host_services_dir() {
 	printf '%s/services\n' "$(host_root "$host")"
 }
 
-host_system_dir() {
-	local host="$1"
-	printf '%s/system\n' "$(host_root "$host")"
-}
-
 overlay_host_root() {
 	local host="$1"
 	local out_var="${2:-}"
@@ -177,19 +171,6 @@ overlay_host_services_dir() {
 		printf -v "$out_var" '%s/services' "$root"
 	else
 		printf '%s/services\n' "$root"
-	fi
-}
-
-overlay_host_system_dir() {
-	local host="$1"
-	local out_var="${2:-}"
-	local root
-
-	overlay_host_root "$host" root || return 1
-	if [[ -n "$out_var" ]]; then
-		printf -v "$out_var" '%s/system' "$root"
-	else
-		printf '%s/system\n' "$root"
 	fi
 }
 

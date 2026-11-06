@@ -27,7 +27,29 @@ capture_displays() (
     magick "${images[@]}" -resize "x${min_height}" +append "$file"
 )
 
-if (( $# == 5 )); then
+if (( $# == 8 )) && [[ $1 == "--frozen" ]]; then
+    # Crop the frame frozen by the overlay, mapping the logical selection to image pixels.
+    if ! read -r image_width image_height < <(magick identify -format '%w %h\n' "$2"); then
+        notify-send -u critical "Screenshot failed" "Could not read the frozen frame."
+        exit 1
+    fi
+    crop=$(awk -v iw="$image_width" -v ih="$image_height" -v lw="$3" -v lh="$4" \
+        -v x="$5" -v y="$6" -v w="$7" -v h="$8" 'BEGIN {
+            sx = iw / lw
+            sy = ih / lh
+            cx = int(x * sx + 0.5)
+            cy = int(y * sy + 0.5)
+            cw = int(w * sx + 0.5)
+            ch = int(h * sy + 0.5)
+            if (cx + cw > iw) cw = iw - cx
+            if (cy + ch > ih) ch = ih - cy
+            printf "%dx%d+%d+%d", cw, ch, cx, cy
+        }')
+    if ! magick "$2" -crop "$crop" +repage "$file"; then
+        notify-send -u critical "Screenshot failed" "Could not crop the frozen frame."
+        exit 1
+    fi
+elif (( $# == 5 )); then
     monitor_geometry=$(hyprctl monitors -j | jq -er --arg name "$1" '.[] | select(.name == $name) | "\(.x) \(.y)"')
     read -r monitor_x monitor_y <<< "$monitor_geometry"
     if ! grim -g "$((monitor_x + $2)),$((monitor_y + $3)) ${4}x${5}" "$file"; then

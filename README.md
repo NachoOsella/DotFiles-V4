@@ -116,7 +116,6 @@ Useful flags:
 
 ```bash
 ./scripts/bootstrap.sh --dry-run --skip-packages   # skip pacman and AUR
-./scripts/bootstrap.sh --skip-system               # skip files in /etc
 ./scripts/bootstrap.sh --skip-services             # skip systemd changes
 ./scripts/bootstrap.sh --host archlinux            # force a host overlay
 ```
@@ -142,10 +141,10 @@ dotfiles/
 │   └── aur.txt           # 8 AUR packages
 ├── hosts/archlinux/      # per-host overlays for packages and services
 └── scripts/
-    ├── bootstrap.sh      # full setup. packages + system + stow + services
+    ├── bootstrap.sh      # full setup. packages + stow + services
     ├── install-user.sh   # safe alias for stow.sh install
     ├── stow.sh           # conflict-aware wrapper around GNU Stow
-    ├── install-packages.sh / apply-system.sh / enable-services.sh
+    ├── install-packages.sh / enable-services.sh
     └── preflight.sh / check.sh
 ```
 
@@ -156,7 +155,6 @@ Host-specific things live under `hosts/<host>`. If your hostname matches, the sc
 No surprises. Each step is a separate script you can run on its own.
 
 - Installs packages from `packages/pacman.txt` and `packages/aur.txt`, plus any `hosts/<host>/packages` overlay.
-- Copies any versioned system files from `system` and `hosts/<host>/system` into `/` when present.
 - Links user configs with GNU Stow. It checks for conflicts first and will not overwrite your files silently.
 - Enables services listed in `hosts/<host>/services/system.txt` and `user.txt`, and masks units in `system-disable.txt` when a host defines it. On this host that means docker, iwd, systemd-networkd, sddm, power-profiles-daemon, sshd, and the PipeWire/WirePlumber user services.
 
@@ -165,7 +163,6 @@ Prefer the smaller scripts when you only want part of it:
 ```bash
 ./scripts/preflight.sh --dry-run
 ./scripts/install-packages.sh --dry-run
-./scripts/apply-system.sh --dry-run
 ./scripts/enable-services.sh --dry-run
 ```
 

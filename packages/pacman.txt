@@ -59,6 +59,7 @@ maven
 mkinitcpio
 nano
 neovim
+nftables
 noto-fonts
 noto-fonts-cjk
 noto-fonts-emoji

@@ -9,13 +9,12 @@ source "$SCRIPT_DIR/lib.sh"
 HOST="$(detect_host)"
 DRY_RUN=0
 SKIP_PACKAGES=0
-SKIP_SYSTEM=0
 SKIP_STOW=0
 SKIP_SERVICES=0
 
 usage() {
 	cat <<'EOF'
-Usage: ./scripts/preflight.sh [--host HOST] [--dry-run] [--skip-packages] [--skip-system] [--skip-stow] [--skip-services]
+Usage: ./scripts/preflight.sh [--host HOST] [--dry-run] [--skip-packages] [--skip-stow] [--skip-services]
 EOF
 }
 
@@ -31,9 +30,6 @@ while [[ $# -gt 0 ]]; do
 		;;
 	--skip-packages)
 		SKIP_PACKAGES=1
-		;;
-	--skip-system)
-		SKIP_SYSTEM=1
 		;;
 	--skip-stow)
 		SKIP_STOW=1
@@ -102,7 +98,7 @@ if ((!SKIP_SERVICES)); then
 	require_command systemctl
 fi
 
-if ((!DRY_RUN)) && ((!SKIP_PACKAGES || !SKIP_SYSTEM || !SKIP_SERVICES)); then
+if ((!DRY_RUN)) && ((!SKIP_PACKAGES || !SKIP_SERVICES)); then
 	require_command sudo
 	log "Validating sudo access"
 	sudo -v || die "Unable to obtain sudo privileges"

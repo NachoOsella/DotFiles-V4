@@ -9,14 +9,13 @@ source "$SCRIPT_DIR/lib.sh"
 HOST="$(detect_host)"
 DRY_RUN=0
 SKIP_PACKAGES=0
-SKIP_SYSTEM=0
 SKIP_STOW=0
 SKIP_SERVICES=0
 ASSUME_YES=0
 
 usage() {
 	cat <<'EOF'
-Usage: ./scripts/bootstrap.sh [--host HOST] [--dry-run] [--yes] [--skip-packages] [--skip-system] [--skip-stow] [--skip-services]
+Usage: ./scripts/bootstrap.sh [--host HOST] [--dry-run] [--yes] [--skip-packages] [--skip-stow] [--skip-services]
 
 The full bootstrap can install packages, write to /etc, and change systemd services.
 Use --dry-run to preview changes or --yes to confirm a non-interactive full run.
@@ -35,9 +34,6 @@ while [[ $# -gt 0 ]]; do
 		;;
 	--skip-packages)
 		SKIP_PACKAGES=1
-		;;
-	--skip-system)
-		SKIP_SYSTEM=1
 		;;
 	--skip-stow)
 		SKIP_STOW=1
@@ -70,9 +66,6 @@ if ((DRY_RUN)); then
 fi
 if ((SKIP_PACKAGES)); then
 	PREFLIGHT_ARGS+=(--skip-packages)
-fi
-if ((SKIP_SYSTEM)); then
-	PREFLIGHT_ARGS+=(--skip-system)
 fi
 if ((SKIP_STOW)); then
 	PREFLIGHT_ARGS+=(--skip-stow)
@@ -116,11 +109,6 @@ log_task "Bootstrapping Environment"
 if ((!SKIP_PACKAGES)); then
 	log_step "Installing Packages"
 	"$SCRIPT_DIR/install-packages.sh" --host "$HOST" $([[ $DRY_RUN -eq 1 ]] && printf '%s' --dry-run)
-fi
-
-if ((!SKIP_SYSTEM)); then
-	log_step "Applying System Configuration"
-	"$SCRIPT_DIR/apply-system.sh" --host "$HOST" $([[ $DRY_RUN -eq 1 ]] && printf '%s' --dry-run)
 fi
 
 if ((!SKIP_STOW)); then

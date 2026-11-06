@@ -1,11 +1,15 @@
 {
-  "lastChangelogVersion": "1.4.0",
-  "defaultTools": ["+codemode"],
+  "lastChangelogVersion": "1.5.0",
+  "defaultTools": [
+    "+codemode"
+  ],
   "theme": "gruvbox-material-dark-hard",
   "hideThinkingBlock": false,
   "quietStartup": false,
   "enableSkillCommands": true,
-  "skills": ["!skills/subagent-orchestration/**"],
+  "skills": [
+    "!skills/subagent-orchestration/**"
+  ],
   "steeringMode": "one-at-a-time",
   "terminal": {
     "showTerminalProgress": false,
@@ -18,7 +22,10 @@
     "mermaid": "streaming"
   },
   "fullscreenScrollbar": "always",
-  "packages": ["git:https://github.com/ShpetimA/pi-fff.git"],
+  "packages": [
+    "git:https://github.com/ShpetimA/pi-fff.git",
+    "https://github.com/earendil-works/pi-claude-code"
+  ],
   "modelThinkingLevels": {
     "openai-codex/gpt-5.6-terra": "high"
   },
@@ -30,5 +37,6 @@
     "maxConcurrentExecutions": 10,
     "maxAgents": 20
   },
-  "deviceId": "96101397-f7f0-46b9-bb6f-19c0e93b89a5"
+  "deviceId": "96101397-f7f0-46b9-bb6f-19c0e93b89a5",
+  "cacheWarming": "streaming"
 }
