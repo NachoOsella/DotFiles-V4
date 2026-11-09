@@ -1,3 +1,5 @@
+pragma ComponentBehavior: Bound
+
 import QtQuick
 import Quickshell
 import "../components"
@@ -8,19 +10,20 @@ PopupSurface {
     id: root
 
     popupName: "power"
-    surfaceWidth: 340
+    surfaceWidth: 420
+    needsKeyboardFocus: true
     property string confirmationAction: ""
 
     readonly property var actions: [
-        { key: "lock", icon: "", label: "Lock" },
-        { key: "suspend", icon: "", label: "Suspend" },
-        { key: "logout", icon: "", label: "Logout" },
-        { key: "reboot", icon: "", label: "Reboot" },
-        { key: "poweroff", icon: "", label: "Power off" }
+        { key: "lock", icon: "󰌾", label: "Lock", shortcut: "L" },
+        { key: "suspend", icon: "󰤄", label: "Sleep", shortcut: "S" },
+        { key: "logout", icon: "󰍃", label: "Log out", shortcut: "E" },
+        { key: "reboot", icon: "󰜉", label: "Reboot", shortcut: "R" },
+        { key: "poweroff", icon: "󰐥", label: "Off", shortcut: "P" }
     ]
 
     function requestAction(action: string): void {
-        if (action === "reboot" || action === "poweroff") {
+        if ((action === "reboot" || action === "poweroff") && confirmationAction !== action) {
             confirmationAction = action;
             return;
         }
@@ -30,82 +33,104 @@ PopupSurface {
     function executeAction(action: string): void {
         PopupManager.close();
         confirmationAction = "";
-        if (action === "lock")
-            Quickshell.execDetached(["loginctl", "lock-session"]);
-        else if (action === "suspend")
-            Quickshell.execDetached(["systemctl", "suspend"]);
-        else if (action === "logout")
-            Quickshell.execDetached(["hyprctl", "dispatch", "hl.dsp.exit()"]);
-        else if (action === "reboot")
-            Quickshell.execDetached(["systemctl", "reboot"]);
-        else if (action === "poweroff")
-            Quickshell.execDetached(["systemctl", "poweroff"]);
+        const commands = {
+            lock: ["loginctl", "lock-session"],
+            suspend: ["systemctl", "suspend"],
+            logout: ["hyprctl", "dispatch", "hl.dsp.exit()"],
+            reboot: ["systemctl", "reboot"],
+            poweroff: ["systemctl", "poweroff"]
+        };
+        Quickshell.execDetached(commands[action]);
     }
 
-    Column {
-        width: parent.width
-        spacing: 5
+    PopupHeader {
+        title: "Session"
+        detail: SystemService.uptime
+    }
 
-        StyledText {
-            text: "Session"
-            color: Theme.fg1
-            font.pixelSize: Settings.fontSize
-            font.weight: Font.Bold
-        }
+    Row {
+        id: actionRow
+        width: parent.width
+        spacing: 6
 
         Repeater {
             model: root.actions
 
-            delegate: PopupRow {
+            delegate: Rectangle {
+                id: action
+
                 required property var modelData
-                width: parent.width
-                icon: modelData.icon
-                iconColor: modelData.key === "poweroff" ? Theme.red : Theme.fg0
-                label: modelData.label
-                interactive: root.confirmationAction.length === 0
-                onClicked: root.requestAction(modelData.key)
-            }
-        }
+                readonly property bool destructive: modelData.key === "reboot" || modelData.key === "poweroff"
+                readonly property bool confirming: root.confirmationAction === modelData.key
 
-        Column {
-            visible: root.confirmationAction.length > 0
-            width: parent.width
-            spacing: 7
+                width: (actionRow.width - actionRow.spacing * 4) / 5
+                height: 80
+                color: pointer.pressed ? Theme.pressed : pointer.containsMouse ? Theme.hover : Theme.raised
+                border.width: 1
+                border.color: confirming ? Theme.critical : pointer.containsMouse ? Theme.bg4 : Theme.border
 
-            Separator { width: parent.width }
-
-            StyledText {
-                width: parent.width
-                text: root.confirmationAction === "reboot" ? "Reboot the system?" : "Power off the system?"
-                color: Theme.fg1
-                horizontalAlignment: Text.AlignHCenter
-            }
-
-            Row {
-                anchors.horizontalCenter: parent.horizontalCenter
-                spacing: 8
-
-                IconButton {
-                    icon: "󰅖"
-                    label: "Cancel"
-                    onClicked: root.confirmationAction = ""
+                StyledText {
+                    anchors.right: parent.right
+                    anchors.top: parent.top
+                    anchors.margins: 5
+                    text: action.modelData.shortcut
+                    color: Theme.bg4
+                    font.pixelSize: Theme.caption
                 }
 
-                IconButton {
-                    icon: "󰄬"
-                    label: "Confirm"
-                    foreground: Theme.red
-                    onClicked: root.executeAction(root.confirmationAction)
+                Column {
+                    anchors.centerIn: parent
+                    spacing: 6
+
+                    Icon {
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        text: action.modelData.icon
+                        color: action.confirming || (action.destructive && pointer.containsMouse) ? Theme.critical : Theme.fg0
+                        font.pixelSize: Theme.iconLarge
+                    }
+
+                    StyledText {
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        text: action.confirming ? "Confirm" : action.modelData.label
+                        color: action.confirming ? Theme.critical : Theme.grey1
+                        font.pixelSize: Theme.caption
+                    }
+                }
+
+                MouseArea {
+                    id: pointer
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: root.requestAction(action.modelData.key)
                 }
             }
         }
     }
 
-    Connections {
-        target: root
-        function onVisibleChanged(): void {
-            if (!root.visible)
-                root.confirmationAction = "";
+    StyledText {
+        visible: root.confirmationAction.length > 0
+        width: parent.width
+        text: "Press again to " + (root.confirmationAction === "reboot" ? "reboot" : "power off") + ", Esc to cancel"
+        color: Theme.critical
+        font.pixelSize: Theme.caption
+        horizontalAlignment: Text.AlignHCenter
+    }
+
+    Repeater {
+        model: root.actions
+
+        delegate: Item {
+            required property var modelData
+
+            Shortcut {
+                sequence: modelData.shortcut
+                enabled: root.shown
+                context: Qt.WindowShortcut
+                onActivated: root.requestAction(modelData.key)
+            }
         }
     }
+
+    onShownChanged: confirmationAction = ""
 }

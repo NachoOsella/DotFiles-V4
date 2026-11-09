@@ -1,22 +1,37 @@
-@import "~/.config/rofi/config.rasi"
+@import "config.rasi"
 
 configuration {
-    display-emoji: "󰞅";
+    show-icons: false;
 }
 
 window {
-    width: 720px;
+    width: 640px;
 }
 
-entry {
-    placeholder: "search emoji";
+mainbox {
+    children: [ "inputbar", "listview" ];
 }
 
+/* Grid of glyphs; rofi-emoji.sh passes names and keywords as hidden search metadata. */
 listview {
-    lines: 7;
-    fixed-height: false;
+    columns:       10;
+    lines:         6;
+    fixed-height:  true;
+    fixed-columns: true;
+    flow:          horizontal;
+    spacing:       4px;
 }
 
 element {
-    padding: 9px 12px;
+    padding:  0px;
+    border:   0px 0px 2px 0px;
+    children: [ "element-text" ];
+}
+
+/* A text font gives the cell its line height; emoji glyphs fall back to Noto Color Emoji. */
+element-text {
+    font:             "JetBrainsMono Nerd Font 18";
+    padding:          6px 0px;
+    horizontal-align: 0.5;
+    vertical-align:   0.5;
 }

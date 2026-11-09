@@ -1,4 +1,7 @@
+pragma ComponentBehavior: Bound
+
 import QtQuick
+import Quickshell.Services.UPower
 import "../components"
 import "../config"
 import "../services"
@@ -7,54 +10,36 @@ PopupSurface {
     id: root
 
     popupName: "bluetooth"
-    surfaceWidth: 420
+    surfaceWidth: 440
+
+    // Peripheral batteries reported by UPower (mice, keyboards, headsets).
+    readonly property var peripherals: UPower.devices.values.filter(device => device.ready && !device.isLaptopBattery && device.isPresent && device.percentage > 0)
+
+    PopupHeader {
+        title: "Bluetooth"
+        detail: BluetoothService.connectedDevices.length > 0 ? BluetoothService.connectedDevices.length + " connected" : ""
+
+        IconButton {
+            icon: BluetoothService.enabled ? "󰂯" : "󰂲"
+            selected: BluetoothService.enabled
+            enabled: BluetoothService.available
+            onClicked: BluetoothService.toggle()
+        }
+    }
+
+    StyledText {
+        visible: !BluetoothService.available || !BluetoothService.enabled || BluetoothService.devices.length === 0
+        width: parent.width
+        height: 40
+        text: !BluetoothService.available ? "Bluetooth unavailable" : !BluetoothService.enabled ? "Bluetooth is off" : "No paired devices"
+        color: Theme.grey0
+        horizontalAlignment: Text.AlignHCenter
+    }
 
     Column {
+        visible: BluetoothService.enabled && BluetoothService.devices.length > 0
         width: parent.width
-        spacing: 7
-
-        Row {
-            width: parent.width
-
-            StyledText {
-                width: parent.width - bluetoothToggle.width
-                text: "Bluetooth"
-                color: Theme.fg1
-                font.pixelSize: Settings.fontSize
-                font.weight: Font.Bold
-            }
-
-            IconButton {
-                id: bluetoothToggle
-                icon: BluetoothService.enabled ? "󰂯" : "󰂲"
-                foreground: BluetoothService.enabled ? Theme.blue : Theme.grey1
-                enabled: BluetoothService.available
-                onClicked: BluetoothService.toggle()
-            }
-        }
-
-        PopupRow {
-            width: parent.width
-            icon: BluetoothService.enabled ? "󰂯" : "󰂲"
-            iconColor: BluetoothService.enabled ? Theme.blue : Theme.grey1
-            label: BluetoothService.available ? BluetoothService.summary : "Bluetooth unavailable"
-            detail: BluetoothService.connectedDevices.length > 0 ? BluetoothService.connectedDevices.length + " connected" : ""
-        }
-
-        Separator { width: parent.width }
-
-        StyledText {
-            text: "Paired devices"
-            color: Theme.grey2
-            font.pixelSize: 12
-        }
-
-        StyledText {
-            visible: BluetoothService.enabled && BluetoothService.devices.length === 0
-            text: "No paired devices"
-            color: Theme.grey1
-            font.pixelSize: Settings.smallFontSize
-        }
+        spacing: 2
 
         Repeater {
             model: BluetoothService.devices
@@ -62,15 +47,34 @@ PopupSurface {
             delegate: PopupRow {
                 required property var modelData
                 width: parent.width
-                icon: modelData.icon && modelData.icon.includes("head") ? "" : "󰂱"
-                iconColor: modelData.connected ? Theme.green : Theme.grey2
+                icon: modelData.icon && modelData.icon.includes("head") ? "󰋋" : modelData.icon && modelData.icon.includes("mouse") ? "󰍽" : "󰂱"
                 label: modelData.name || modelData.deviceName
-                detail: modelData.batteryAvailable
-                    ? Math.round(modelData.battery * 100) + "%"
-                    : modelData.connected ? "Connected" : "Paired"
+                detail: modelData.batteryAvailable ? Math.round(modelData.battery * 100) + "%" : modelData.connected ? "Connected" : ""
                 selected: modelData.connected
-                interactive: BluetoothService.enabled
+                interactive: true
                 onClicked: BluetoothService.toggleDevice(modelData)
+            }
+        }
+    }
+
+    Column {
+        visible: root.peripherals.length > 0
+        width: parent.width
+        spacing: 2
+
+        SectionLabel { text: "Peripherals"; bottomPadding: 4 }
+
+        Repeater {
+            model: root.peripherals
+
+            delegate: PopupRow {
+                required property var modelData
+                readonly property int level: Math.round(modelData.percentage * 100)
+                width: parent.width
+                icon: modelData.type === UPowerDeviceType.Mouse ? "󰍽" : modelData.type === UPowerDeviceType.Keyboard ? "󰌌" : modelData.type === UPowerDeviceType.Headset || modelData.type === UPowerDeviceType.Headphones ? "󰋋" : "󰂄"
+                iconColor: level <= 15 ? Theme.critical : Theme.grey2
+                label: modelData.model || "Device"
+                detail: level + "%"
             }
         }
     }

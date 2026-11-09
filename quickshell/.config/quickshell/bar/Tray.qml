@@ -10,14 +10,14 @@ Item {
 
     required property var barWindow
 
-    implicitWidth: trayRow.implicitWidth > 0 ? trayRow.implicitWidth + 20 : 0
+    implicitWidth: visible ? trayRow.implicitWidth + 20 : 0
     implicitHeight: Settings.barHeight
     visible: SystemTray.items.values.length > 0
 
     Row {
         id: trayRow
         anchors.centerIn: parent
-        spacing: 6
+        spacing: 8
 
         Repeater {
             model: SystemTray.items
@@ -26,8 +26,8 @@ Item {
                 id: trayDelegate
 
                 required property var modelData
-                width: 20
-                height: 20
+                width: 18
+                height: 18
 
                 IconImage {
                     anchors.fill: parent

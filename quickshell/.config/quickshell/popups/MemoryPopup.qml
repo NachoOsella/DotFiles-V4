@@ -1,28 +1,19 @@
+pragma ComponentBehavior: Bound
+
 import QtQuick
-import Quickshell
 import "../components"
 import "../config"
 import "../services"
 
-PopupWindow {
+// Opens on hover over the memory module instead of through PopupManager.
+PopupSurface {
     id: root
 
-    required property Item anchorItem
     property bool anchorHovered: false
-    property bool popupHovered: false
-    property bool popupVisible: false
+    property bool hoverOpen: false
 
-    implicitWidth: 360
-    implicitHeight: content.implicitHeight + 28
-    visible: popupVisible
-    color: Theme.transparent
-    grabFocus: false
-
-    anchor.item: anchorItem
-    anchor.edges: Edges.Bottom
-    anchor.gravity: Edges.Bottom
-    anchor.margins.top: Settings.popupMargin
-    anchor.adjustment: PopupAdjustment.All
+    surfaceWidth: 380
+    shown: hoverOpen
 
     function setAnchorHovered(hovered: bool): void {
         anchorHovered = hovered;
@@ -31,183 +22,96 @@ PopupWindow {
             openTimer.restart();
         } else {
             openTimer.stop();
-            if (!popupHovered)
-                closeTimer.restart();
+            closeTimer.restart();
         }
     }
 
     function hide(): void {
         openTimer.stop();
         closeTimer.stop();
-        popupVisible = false;
+        hoverOpen = false;
     }
 
-    onVisibleChanged: {
-        if (visible) {
-            anchor.updateAnchor();
+    onHoveredChanged: {
+        if (hovered)
+            closeTimer.stop();
+        else if (!anchorHovered)
+            closeTimer.restart();
+    }
+
+    onShownChanged: {
+        if (shown)
             SystemService.refreshTopMemoryPrograms();
-            refreshTimer.restart();
-        } else {
-            refreshTimer.stop();
-        }
     }
 
-    Rectangle {
-        anchors.fill: parent
-        color: Theme.popupBackground
-        border.width: 1
-        border.color: Theme.border
-        radius: Settings.popupRadius
+    PopupHeader {
+        title: "Memory"
+        detail: SystemService.formatMemory(SystemService.memoryUsedGiB * 1048576) + " / " + SystemService.formatMemory(SystemService.memoryTotalGiB * 1048576)
+    }
 
-        HoverHandler {
-            onHoveredChanged: {
-                root.popupHovered = hovered;
-                if (hovered)
-                    closeTimer.stop();
-                else if (!root.anchorHovered)
-                    closeTimer.restart();
-            }
-        }
+    StyledSlider {
+        width: parent.width
+        value: SystemService.memoryPercentage
+        accent: SystemService.memoryPercentage >= Settings.memoryWarningRatio ? Theme.warning : Theme.accent
+        showHandle: false
+        enabled: true
+    }
 
-        Column {
-            id: content
+    Column {
+        width: parent.width
+        spacing: 0
 
-            anchors.left: parent.left
-            anchors.right: parent.right
-            anchors.top: parent.top
-            anchors.margins: 14
-            spacing: 6
+        Repeater {
+            model: SystemService.topMemoryPrograms
 
-            Item {
+            delegate: Item {
+                required property int index
+                required property var modelData
+
                 width: parent.width
-                height: Math.max(memoryIcon.implicitHeight, memoryTitle.implicitHeight, memorySummary.implicitHeight)
+                height: 30
 
                 StyledText {
-                    id: memoryIcon
-
                     anchors.left: parent.left
-                    anchors.verticalCenter: parent.verticalCenter
-                    text: ""
-                    color: Theme.grey2
-                    font.family: Theme.iconFontFamily
-                }
-
-                StyledText {
-                    id: memoryTitle
-
-                    anchors.left: memoryIcon.right
-                    anchors.leftMargin: 8
-                    anchors.right: memorySummary.left
+                    anchors.right: memoryValue.left
                     anchors.rightMargin: 8
                     anchors.verticalCenter: parent.verticalCenter
-                    text: "Top memory usage"
-                    color: Theme.fg1
-                    font.pixelSize: Settings.smallFontSize + 1
-                    font.weight: Font.Bold
-                    elide: Text.ElideRight
+                    text: modelData.name
+                    color: index === 0 ? Theme.fg1 : Theme.fg0
+                    font.pixelSize: Theme.label
                 }
 
                 StyledText {
-                    id: memorySummary
-
+                    id: memoryValue
                     anchors.right: parent.right
                     anchors.verticalCenter: parent.verticalCenter
-                    text: SystemService.formatMemory(SystemService.memoryUsedGiB * 1024 * 1024)
-                        + " / " + SystemService.formatMemory(SystemService.memoryTotalGiB * 1024 * 1024)
+                    text: SystemService.formatMemory(modelData.pssKiB)
                     color: Theme.grey1
-                    font.pixelSize: Settings.smallFontSize - 2
+                    font.pixelSize: Theme.label
                 }
-            }
-
-            Separator { width: parent.width }
-
-            Repeater {
-                model: SystemService.topMemoryPrograms
-
-                delegate: Item {
-                    required property int index
-                    required property var modelData
-
-                    width: parent.width
-                    height: 27
-
-                    StyledText {
-                        anchors.left: parent.left
-                        anchors.verticalCenter: parent.verticalCenter
-                        width: 24
-                        text: (index + 1).toString()
-                        color: Theme.grey1
-                        font.pixelSize: Settings.smallFontSize - 2
-                    }
-
-                    StyledText {
-                        anchors.left: parent.left
-                        anchors.leftMargin: 24
-                        anchors.right: memoryValue.left
-                        anchors.rightMargin: 8
-                        anchors.verticalCenter: parent.verticalCenter
-                        text: modelData.name
-                        color: Theme.fg0
-                        font.pixelSize: Settings.smallFontSize
-                        elide: Text.ElideRight
-                    }
-
-                    StyledText {
-                        id: memoryValue
-
-                        anchors.right: parent.right
-                        anchors.verticalCenter: parent.verticalCenter
-                        text: SystemService.formatMemory(modelData.pssKiB)
-                        color: Theme.aqua
-                        font.pixelSize: Settings.smallFontSize - 1
-                    }
-                }
-            }
-
-            StyledText {
-                visible: SystemService.memoryProgramsBusy
-                width: parent.width
-                text: "Reading processes..."
-                color: Theme.grey1
-                font.pixelSize: Settings.smallFontSize
-            }
-
-            StyledText {
-                visible: !SystemService.memoryProgramsBusy && SystemService.topMemoryPrograms.length === 0
-                width: parent.width
-                text: "No memory data available"
-                color: Theme.grey1
-                font.pixelSize: Settings.smallFontSize
             }
         }
     }
 
     Timer {
         id: openTimer
-
         interval: 300
-        onTriggered: {
-            if (root.anchorHovered)
-                root.popupVisible = true;
-        }
+        onTriggered: root.hoverOpen = root.anchorHovered
     }
 
     Timer {
         id: closeTimer
-
-        interval: 600
+        interval: 500
         onTriggered: {
-            if (!root.anchorHovered && !root.popupHovered)
-                root.popupVisible = false;
+            if (!root.anchorHovered && !root.hovered)
+                root.hoverOpen = false;
         }
     }
 
     Timer {
-        id: refreshTimer
-
         interval: 3000
         repeat: true
-        running: root.visible
+        running: root.shown
         onTriggered: SystemService.refreshTopMemoryPrograms()
     }
 }

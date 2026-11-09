@@ -59,4 +59,14 @@ hl.window_rule({ name = "steam-main-size", match = { class = "steam", title = "S
 -- Disable animations for screenshot and selection layers.
 hl.layer_rule({ name = "hyprpicker-no-animation", match = { namespace = "^(hyprpicker)$" }, no_anim = true })
 hl.layer_rule({ name = "selection-no-animation", match = { namespace = "^(selection)$" }, no_anim = true })
-hl.layer_rule({ name = "screenshot-overlay-no-animation", match = { namespace = "^(screenshot-overlay)$" }, no_anim = true })
+hl.layer_rule({ name = "screenshot-overlay-no-animation", match = { namespace = "^(quickshell:screenshot)$" }, no_anim = true })
+
+-- Quickshell and rofi surfaces are translucent; blur what is behind them and let QML own the motion.
+hl.layer_rule({
+    name = "quickshell-blur",
+    match = { namespace = "^(quickshell:(bar|notifications|osd)|rofi)$" },
+    blur = true,
+    blur_popups = true,
+    ignore_alpha = 0.3,
+    no_anim = true,
+})

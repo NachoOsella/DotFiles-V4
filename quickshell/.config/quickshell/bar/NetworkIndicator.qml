@@ -8,19 +8,11 @@ ModuleButton {
 
     required property string screenName
 
-    StyledText {
-        text: NetworkService.wiredConnected ? "󰈀" : NetworkService.wifiIcon(NetworkService.signalStrength)
-        color: NetworkService.connected ? Theme.aqua : Theme.grey1
-        font.family: Theme.iconFontFamily
-        // Compensate for the Wi-Fi glyph's optical baseline.
-        transform: Translate { y: -1 }
-    }
+    active: PopupManager.isOpen("network", screenName)
 
-    StyledText {
-        visible: NetworkService.connected && NetworkService.downloadBitsPerSecond >= 0
-        text: NetworkService.formatRate(NetworkService.downloadBitsPerSecond)
-        color: Theme.aqua
-        font.pixelSize: Settings.smallFontSize
+    Icon {
+        text: NetworkService.wiredConnected ? "󰈀" : NetworkService.wifiIcon(NetworkService.signalStrength)
+        color: NetworkService.connected ? Theme.fg0 : Theme.critical
     }
 
     onClicked: function(mouse) {

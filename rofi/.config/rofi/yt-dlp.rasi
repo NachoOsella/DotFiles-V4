@@ -1,17 +1,27 @@
-@import "~/.config/rofi/config.rasi"
+@import "config.rasi"
 
 window {
-    width: 620px;
+    width:    560px;
 }
 
 mainbox {
-    children: [ "inputbar" ];
+    children: [ "inputbar", "listview" ];
+}
+
+inputbar {
+    children: [ "prompt", "entry" ];
 }
 
 prompt {
-    str: "";
+    text-color: @grey1;
+    vertical-align: 0.5;
 }
 
 entry {
-    placeholder: "paste a video link";
+    placeholder: "Video link";
+}
+
+listview {
+    lines:   2;
+    dynamic: true;
 }

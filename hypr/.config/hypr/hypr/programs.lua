@@ -4,6 +4,6 @@
 return {
     terminal = "kitty",
     file_manager = "kitty -e yazi",
-    menu = "rofi -show drun",
+    menu = "~/.config/rofi/rofi-launcher.sh",
     main_mod = "SUPER",
 }

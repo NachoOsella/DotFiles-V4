@@ -5,5 +5,7 @@ BluetoothPopup 1.0 BluetoothPopup.qml
 ControlCenter 1.0 ControlCenter.qml
 CalendarPopup 1.0 CalendarPopup.qml
 NotificationCenter 1.0 NotificationCenter.qml
+ClipboardPopup 1.0 ClipboardPopup.qml
+CalculatorPopup 1.0 CalculatorPopup.qml
 PowerMenu 1.0 PowerMenu.qml
 MemoryPopup 1.0 MemoryPopup.qml

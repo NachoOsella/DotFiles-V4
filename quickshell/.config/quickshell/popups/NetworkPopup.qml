@@ -1,3 +1,5 @@
+pragma ComponentBehavior: Bound
+
 import QtQuick
 import "../components"
 import "../config"
@@ -7,8 +9,8 @@ PopupSurface {
     id: root
 
     popupName: "network"
-    surfaceWidth: 440
-    needsKeyboardFocus: pendingNetwork !== null
+    surfaceWidth: 460
+    needsKeyboardFocus: true
     property var pendingNetwork: null
     property string connectionError: ""
     readonly property var sortedNetworks: NetworkService.networks.slice().sort((a, b) => {
@@ -31,156 +33,136 @@ PopupSurface {
         }
     }
 
+    PopupHeader {
+        title: "Network"
+        detail: NetworkService.connected && NetworkService.downloadBitsPerSecond > 0
+            ? "↓ " + NetworkService.formatRate(NetworkService.downloadBitsPerSecond) + "  ↑ " + NetworkService.formatRate(NetworkService.uploadBitsPerSecond)
+            : ""
+
+        IconButton {
+            icon: "󰑓"
+            enabled: NetworkService.wifiEnabled
+            onClicked: NetworkService.refreshScan()
+        }
+
+        IconButton {
+            icon: NetworkService.wifiEnabled ? "󰖩" : "󰖪"
+            selected: NetworkService.wifiEnabled
+            enabled: NetworkService.wifiAvailable
+            onClicked: NetworkService.toggleWifi()
+        }
+    }
+
+    PopupRow {
+        width: parent.width
+        icon: NetworkService.wiredConnected ? "󰈀" : NetworkService.wifiIcon(NetworkService.signalStrength)
+        iconColor: NetworkService.connected ? Theme.accent : Theme.critical
+        label: NetworkService.connectionLabel
+        detail: NetworkService.connected ? NetworkService.address : ""
+    }
+
+    StyledText {
+        visible: root.connectionError.length > 0
+        width: parent.width
+        text: root.connectionError
+        color: Theme.warning
+        font.pixelSize: Theme.label
+        wrapMode: Text.Wrap
+    }
+
     Column {
         width: parent.width
-        spacing: 7
+        spacing: 2
 
-        Row {
+        SectionLabel { text: "Wi-Fi"; bottomPadding: 4 }
+
+        StyledText {
+            visible: !NetworkService.wifiAvailable || !NetworkService.wifiEnabled
             width: parent.width
-
-            StyledText {
-                width: parent.width - wifiToggle.width - scanButton.width
-                text: "Network"
-                color: Theme.fg1
-                font.pixelSize: Settings.fontSize
-                font.weight: Font.Bold
-            }
-
-            IconButton {
-                id: scanButton
-                icon: "󰑓"
-                enabled: NetworkService.wifiEnabled
-                onClicked: NetworkService.refreshScan()
-            }
-
-            IconButton {
-                id: wifiToggle
-                icon: NetworkService.wifiEnabled ? "󰖪" : "󰖩"
-                foreground: NetworkService.wifiEnabled ? Theme.green : Theme.grey1
-                enabled: NetworkService.wifiAvailable
-                onClicked: NetworkService.toggleWifi()
-            }
-        }
-
-        PopupRow {
-            width: parent.width
-            icon: NetworkService.wiredConnected ? "󰈀" : NetworkService.wifiIcon(NetworkService.signalStrength)
-            iconColor: NetworkService.connected ? Theme.aqua : Theme.grey1
-            label: NetworkService.connectionLabel
-            detail: NetworkService.connected ? NetworkService.address : ""
-        }
-
-        Separator { width: parent.width }
-
-        StyledText {
-            text: "Wi-Fi networks"
-            color: Theme.grey2
-            font.pixelSize: 12
-        }
-
-        StyledText {
-            visible: !NetworkService.wifiAvailable
-            text: "Wi-Fi unavailable"
-            color: Theme.grey1
-            font.pixelSize: Settings.smallFontSize
-        }
-
-        StyledText {
-            visible: NetworkService.wifiAvailable && !NetworkService.wifiEnabled
-            text: "Wi-Fi is disabled"
-            color: Theme.grey1
-            font.pixelSize: Settings.smallFontSize
-        }
-
-        StyledText {
-            visible: root.connectionError.length > 0
-            width: parent.width
-            text: root.connectionError
-            color: Theme.orange
-            font.pixelSize: Settings.smallFontSize
-            wrapMode: Text.Wrap
+            height: 38
+            text: !NetworkService.wifiAvailable ? "Wi-Fi unavailable" : "Wi-Fi is off"
+            color: Theme.grey0
         }
 
         Repeater {
-            model: root.sortedNetworks
+            model: NetworkService.wifiEnabled ? root.sortedNetworks : []
 
             delegate: PopupRow {
                 required property var modelData
                 width: parent.width
                 icon: NetworkService.wifiIcon(modelData.signalStrength)
-                iconColor: modelData.connected ? Theme.green : Theme.grey2
                 label: modelData.name
-                detail: (modelData.type === "open" ? "" : "  ") + Math.round(modelData.signalStrength * 100) + "%"
+                detail: (modelData.type === "open" ? "" : "󰌾  ") + Math.round(modelData.signalStrength * 100) + "%"
                 selected: modelData.connected
                 interactive: !modelData.stateChanging
                 onClicked: root.activateNetwork(modelData)
+            }
+        }
+    }
 
+    Column {
+        width: parent.width
+        spacing: 8
+        visible: root.pendingNetwork !== null
+
+        Separator { width: parent.width }
+
+        SectionLabel { text: root.pendingNetwork ? root.pendingNetwork.name : "" }
+
+        Rectangle {
+            width: parent.width
+            height: 38
+            color: Theme.bg0
+            border.width: 1
+            border.color: passwordInput.activeFocus ? Theme.accent : Theme.border
+
+            TextInput {
+                id: passwordInput
+                anchors.fill: parent
+                anchors.leftMargin: 10
+                anchors.rightMargin: 10
+                color: Theme.fg1
+                selectionColor: Theme.bg4
+                selectedTextColor: Theme.fg1
+                font.family: Theme.fontFamily
+                font.pixelSize: Theme.body
+                verticalAlignment: TextInput.AlignVCenter
+                echoMode: TextInput.Password
+                clip: true
+                onAccepted: connectButton.clicked()
+
+                StyledText {
+                    visible: passwordInput.text.length === 0
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: "Password"
+                    color: Theme.grey0
+                }
             }
         }
 
-        Column {
+        Row {
             width: parent.width
+            layoutDirection: Qt.RightToLeft
             spacing: 6
-            visible: root.pendingNetwork !== null
 
-            Separator { width: parent.width }
-
-            StyledText {
-                text: root.pendingNetwork ? "Password for " + root.pendingNetwork.name : "Password"
-                color: Theme.fg0
-                font.pixelSize: Settings.smallFontSize
-            }
-
-            Rectangle {
-                width: parent.width
-                height: 38
-                color: Theme.bg0
-                border.width: 1
-                border.color: passwordInput.activeFocus ? Theme.aqua : Theme.border
-                radius: 4
-
-                TextInput {
-                    id: passwordInput
-                    anchors.fill: parent
-                    anchors.leftMargin: 8
-                    anchors.rightMargin: 8
-                    color: Theme.fg1
-                    selectionColor: Theme.bg5
-                    selectedTextColor: Theme.fg1
-                    font.family: Theme.fontFamily
-                    font.pixelSize: Settings.smallFontSize
-                    verticalAlignment: TextInput.AlignVCenter
-                    echoMode: TextInput.Password
-                    clip: true
-                    onAccepted: connectButton.clicked()
+            IconButton {
+                id: connectButton
+                label: "Connect"
+                foreground: Theme.accent
+                bordered: true
+                enabled: passwordInput.text.length > 0
+                onClicked: {
+                    NetworkService.connectNetwork(root.pendingNetwork, passwordInput.text);
+                    passwordInput.text = "";
+                    root.pendingNetwork = null;
                 }
             }
 
-            Row {
-                width: parent.width
-                layoutDirection: Qt.RightToLeft
-                spacing: 6
-
-                IconButton {
-                    id: connectButton
-                    icon: "󰌷"
-                    label: "Connect"
-                    foreground: Theme.green
-                    enabled: passwordInput.text.length > 0
-                    onClicked: {
-                        NetworkService.connectNetwork(root.pendingNetwork, passwordInput.text);
-                        passwordInput.text = "";
-                        root.pendingNetwork = null;
-                    }
-                }
-
-                IconButton {
-                    icon: "󰅖"
-                    label: "Cancel"
-                    onClicked: {
-                        passwordInput.text = "";
-                        root.pendingNetwork = null;
-                    }
+            IconButton {
+                label: "Cancel"
+                onClicked: {
+                    passwordInput.text = "";
+                    root.pendingNetwork = null;
                 }
             }
         }
@@ -193,16 +175,13 @@ PopupSurface {
         }
     }
 
-    Connections {
-        target: root
-        function onVisibleChanged(): void {
-            if (root.visible)
-                NetworkService.refreshScan();
-            else {
-                passwordInput.text = "";
-                root.pendingNetwork = null;
-                root.connectionError = "";
-            }
+    onShownChanged: {
+        if (shown) {
+            NetworkService.refreshScan();
+        } else {
+            passwordInput.text = "";
+            pendingNetwork = null;
+            connectionError = "";
         }
     }
 }

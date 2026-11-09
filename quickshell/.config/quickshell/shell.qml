@@ -1,15 +1,10 @@
 //@ pragma UseQApplication
 
-// THESIS: Preserve the compact 38 px bar at rest and reveal shell depth only through interaction; refuse dashboard-first desktop shells.
-// OWN-WORLD: Gruvbox Material Dark Hard, JetBrainsMono Nerd Font, flat bar modules, one-pixel separators, modest popup radii, and restrained green/aqua state accents.
-// STORY: A developer reads familiar workspaces and status at a glance, then opens contextual controls without leaving the bar.
-// FIRST VIEWPORT: Arch, workspaces, and active title sit left; media is mathematically centered per monitor; compact system state remains right.
-// FORM: An established-world extension in operate mode, derived directly from the established desktop rather than a replacement visual concept.
-
 import QtQuick
 import Quickshell
 import Quickshell.Hyprland
 import Quickshell.Io
+import Quickshell.Wayland
 import "bar"
 import "notifications"
 import "osd"
@@ -25,7 +20,14 @@ ShellRoot {
         return Quickshell.screens.length > 0 ? Quickshell.screens[0].name : "";
     }
 
+    // Keep-awake toggle. The inhibitor needs a mapped surface, so it attaches to the first bar.
+    IdleInhibitor {
+        enabled: SessionService.idleInhibited
+        window: bars.instances.length > 0 ? bars.instances[0] : null
+    }
+
     Variants {
+        id: bars
         model: Quickshell.screens
 
         delegate: Bar {
@@ -76,8 +78,26 @@ ShellRoot {
             PopupManager.toggle("power", focusedScreenName());
         }
 
+        function toggleCalculator(): void {
+            PopupManager.toggle("calculator", focusedScreenName());
+        }
+
+        function toggleClipboard(): void {
+            PopupManager.toggle("clipboard", focusedScreenName());
+        }
+
         function toggleScreenshotMenu(): void {
             PopupManager.toggle("screenshot", focusedScreenName());
+        }
+
+        // Stops a running recording, otherwise opens the overlay in record mode.
+        function toggleRecording(): void {
+            if (RecordingService.running) {
+                RecordingService.stop();
+                return;
+            }
+            RecordingService.recordModeRequested = true;
+            PopupManager.open("screenshot", focusedScreenName());
         }
 
         function togglePopup(name: string): void {

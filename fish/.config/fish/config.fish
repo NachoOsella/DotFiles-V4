@@ -4,7 +4,6 @@ starship init fish | source
 zoxide init fish | source
 
 # Environment Variables
-set -x HYPRSHOT_DIR "$HOME/Documents/imagenes/screenshots/"
 set -x QT_QPA_PLATFORMTHEME qt6ct
 set -x MOZ_ENABLE_WAYLAND 1
 set -x GTK_THEME Adwaita:dark

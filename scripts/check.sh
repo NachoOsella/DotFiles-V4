@@ -59,9 +59,12 @@ SHELL_SCRIPTS=(
 	"$DOTFILES_DIR/scripts/check.sh"
 	"$DOTFILES_DIR/scripts/lib.sh"
 	"$DOTFILES_DIR/scripts/set-wallpaper.sh"
-	"$DOTFILES_DIR/rofi/.config/rofi/rofi-power-menu.sh"
-	"$DOTFILES_DIR/rofi/.config/rofi/rofi-wifi-menu.sh"
+	"$DOTFILES_DIR/rofi/.config/rofi/rofi-yt-dlp.sh"
+	"$DOTFILES_DIR/rofi/.config/rofi/rofi-launcher.sh"
+	"$DOTFILES_DIR/rofi/.config/rofi/rofi-emoji.sh"
 	"$DOTFILES_DIR/hypr/.config/hypr/scripts/songdetail.sh"
+	"$DOTFILES_DIR/hypr/.config/hypr/scripts/screenshot-all.sh"
+	"$DOTFILES_DIR/hypr/.config/hypr/scripts/screen-record.sh"
 )
 
 for script in "${SHELL_SCRIPTS[@]}"; do

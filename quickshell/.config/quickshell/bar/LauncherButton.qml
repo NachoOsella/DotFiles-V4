@@ -4,24 +4,13 @@ import "../components"
 import "../config"
 
 ModuleButton {
-    id: root
+    implicitWidth: Settings.barHeight + 6
 
-    implicitWidth: 42
-    baseColor: Theme.green
-    hoverColor: Theme.aqua
-    pressedColor: Theme.yellow
-    horizontalPadding: 7
-
-    StyledText {
-        text: ""
-        color: Theme.bg0
-        font.family: Theme.iconFontFamily
-        font.pixelSize: 22
-        font.weight: Font.DemiBold
+    Icon {
+        text: "\uf303"
+        color: Theme.accent
+        font.pixelSize: Theme.iconLarge
     }
 
-    onClicked: Quickshell.execDetached([
-        "rofi", "-show", "drun", "-theme",
-        Quickshell.env("HOME") + "/.config/rofi/config.rasi"
-    ])
+    onClicked: Quickshell.execDetached(Settings.launcherCommand)
 }

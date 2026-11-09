@@ -8,7 +8,7 @@ Item {
     property string icon: ""
     property string label: ""
     property string detail: ""
-    property color iconColor: Theme.fg0
+    property color iconColor: Theme.grey2
     property bool interactive: false
     property bool selected: false
 
@@ -19,46 +19,58 @@ Item {
 
     Rectangle {
         anchors.fill: parent
-        radius: 2
-        color: pointer.pressed ? Theme.bg4 : pointer.containsMouse || root.selected ? Theme.statusline2 : Theme.transparent
+        color: pointer.pressed ? Theme.pressed : pointer.containsMouse ? Theme.hover : Theme.transparent
 
         Behavior on color {
             ColorAnimation { duration: Settings.animationFast; easing.type: Easing.OutCubic }
         }
     }
 
-    Row {
+    Rectangle {
+        visible: root.selected
         anchors.left: parent.left
-        anchors.leftMargin: 7
+        anchors.top: parent.top
+        anchors.bottom: parent.bottom
+        width: 2
+        color: Theme.accent
+    }
+
+    Icon {
+        id: leadingIcon
+        visible: root.icon.length > 0
+        anchors.left: parent.left
+        anchors.leftMargin: 10
         anchors.verticalCenter: parent.verticalCenter
-        spacing: 8
+        width: 20
+        text: root.icon
+        color: root.selected ? Theme.accent : root.iconColor
+    }
 
-        StyledText {
-            visible: root.icon.length > 0
-            text: root.icon
-            color: root.iconColor
-            font.family: Theme.iconFontFamily
-        }
-
-        StyledText {
-            text: root.label
-            color: Theme.fg0
-            font.pixelSize: Settings.smallFontSize
-        }
+    StyledText {
+        id: labelText
+        anchors.left: leadingIcon.visible ? leadingIcon.right : parent.left
+        anchors.leftMargin: 10
+        anchors.verticalCenter: parent.verticalCenter
+        // The label keeps its natural width up to the space left after a capped detail.
+        width: Math.min(implicitWidth, root.width - x - trailing.width - 20)
+        text: root.label
+        color: root.selected ? Theme.fg1 : Theme.fg0
     }
 
     Row {
         id: trailing
         anchors.right: parent.right
-        anchors.rightMargin: 7
+        anchors.rightMargin: 10
         anchors.verticalCenter: parent.verticalCenter
         spacing: 6
 
         StyledText {
             visible: root.detail.length > 0
+            // At most half the row so the label is never covered.
+            width: Math.min(implicitWidth, root.width / 2)
             text: root.detail
-            color: Theme.grey2
-            font.pixelSize: Settings.smallFontSize
+            color: Theme.grey1
+            font.pixelSize: Theme.label
         }
     }
 

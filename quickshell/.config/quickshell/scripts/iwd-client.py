@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Share iwd's D-Bus interface between Quickshell and the Rofi Wi-Fi menu."""
+"""Expose iwd's D-Bus interface to Quickshell as JSON over stdin and stdout."""
 
 import json
 import os
@@ -64,11 +64,12 @@ class Client:
         return self.interface("/", "org.freedesktop.DBus.ObjectManager").GetManagedObjects()
 
     def station(self, objects):
-        stations = [(path, data) for path, data in objects.items() if STATION in data]
-        stations.sort(key=lambda item: item[1][STATION].get("State") != "connected")
-        if not stations:
-            raise RuntimeError("No iwd Wi-Fi station is available")
-        return stations[0]
+        # iwd removes the Station interface while a device is powered off, so fall back to the bare device.
+        devices = [(path, data) for path, data in objects.items() if DEVICE in data and data[DEVICE].get("Mode", "station") == "station"]
+        devices.sort(key=lambda item: str(item[1].get(STATION, {}).get("State")) != "connected")
+        if not devices:
+            raise RuntimeError("No iwd Wi-Fi device is available")
+        return devices[0]
 
     def snapshot(self):
         objects = self.objects()
@@ -77,10 +78,10 @@ class Client:
         except RuntimeError:
             return {"wifiAvailable": False, "networks": []}
         device = data[DEVICE]
-        station = data[STATION]
+        station = data.get(STATION, {})
         connected_path = str(station.get("ConnectedNetwork", ""))
         interface = str(device["Name"])
-        ordered = self.interface(path, STATION).GetOrderedNetworks() if device["Powered"] else []
+        ordered = self.interface(path, STATION).GetOrderedNetworks() if STATION in data else []
         networks = []
         for network_path, strength in ordered:
             network = objects.get(network_path, {}).get(NETWORK)
@@ -179,6 +180,8 @@ class Client:
                     self.agent = Agent(self.bus, network_path, password)
                     self.interface("/net/connman/iwd", SERVICE + ".AgentManager").RegisterAgent(self.agent.path)
                 self.interface(network_path, NETWORK).Connect(reply_handler=done, error_handler=done, timeout=90)
+            elif action in ("disconnect", "scan") and STATION not in data:
+                raise RuntimeError("Wi-Fi is off")
             elif action == "disconnect":
                 self.interface(path, STATION).Disconnect(reply_handler=done, error_handler=done)
             elif action == "scan":
@@ -217,44 +220,6 @@ class Client:
             self.clear_agent()
 
 
-def rofi_menu(client):
-    theme = os.environ.get("ROFI_WIFI_THEME", str(Path.home() / ".config/rofi/wifi-menu.rasi"))
-
-    def choose(prompt, text="", password=False):
-        args = ["rofi", "-dmenu", "-i", "-p", prompt, "-theme", theme]
-        args += ["-password"] if password else ["-format", "i", "-no-custom"]
-        result = subprocess.run(args, input=text, capture_output=True, text=True, check=False)
-        return result.stdout.rstrip("\n") if result.returncode == 0 else None
-
-    status = client.snapshot()
-    if not status.get("wifiAvailable"):
-        raise RuntimeError("No iwd Wi-Fi station is available")
-    networks = status["networks"]
-    labels = ["Disable Wi-Fi" if status["wifiEnabled"] else "Enable Wi-Fi", "Scan", "Disconnect"]
-    for network in networks:
-        suffix = " [connected]" if network["connected"] else " [saved]" if network["known"] else ""
-        labels.append(network["name"].replace("\n", " ") + suffix)
-    selected = choose("Wi-Fi", "\n".join(labels))
-    if selected is None:
-        return
-    index = int(selected)
-    if index < 3:
-        command = {"action": ["toggle", "scan", "disconnect"][index]}
-    else:
-        network = networks[index - 3]
-        command = {"action": "disconnect" if network["connected"] else "connect", "path": network["path"]}
-        if not network["connected"] and not network["known"] and network["type"] != "open":
-            if network["type"] != "psk":
-                raise RuntimeError("Configure this enterprise network with iwctl first")
-            password = choose("Password", password=True)
-            if password is None:
-                return
-            command["password"] = password
-    client.request(command, client.loop.quit)
-    if client.pending:
-        client.loop.run()
-
-
 def main():
     action = sys.argv[1] if len(sys.argv) > 1 else "status"
     errors = []
@@ -271,8 +236,6 @@ def main():
             client.watch()
         elif action == "status":
             client.publish()
-        elif action == "menu":
-            rofi_menu(client)
         else:
             command = {"action": action}
             if action == "connect":
@@ -285,11 +248,7 @@ def main():
     finally:
         client.clear_agent()
     if errors:
-        message = "\n".join(errors)
-        if action == "menu":
-            subprocess.run(["notify-send", "Wi-Fi", message], check=False)
-        else:
-            print(message, file=sys.stderr)
+        print("\n".join(errors), file=sys.stderr)
     return 1 if errors else client.exit_code
 
 

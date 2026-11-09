@@ -1,7 +1,6 @@
 pragma ComponentBehavior: Bound
 
 import QtQuick
-import QtQuick.Controls as Controls
 import "../components"
 import "../config"
 import "../services"
@@ -10,85 +9,115 @@ PopupSurface {
     id: root
 
     popupName: "control"
-    surfaceWidth: 430
-    needsKeyboardFocus: true
+    surfaceWidth: 460
+
+    PopupHeader {
+        title: "Control center"
+
+        IconButton {
+            icon: "󰒓"
+            onClicked: PopupManager.open("audio", root.screenName)
+        }
+    }
+
+    Grid {
+        id: toggles
+        width: parent.width
+        columns: 2
+        columnSpacing: 8
+        rowSpacing: 8
+
+        readonly property real tileWidth: (width - columnSpacing) / 2
+
+        Toggle {
+            width: toggles.tileWidth
+            icon: NetworkService.wifiEnabled ? "󰖩" : "󰖪"
+            label: "Wi-Fi"
+            detail: NetworkService.connectionLabel
+            checked: NetworkService.wifiEnabled
+            enabled: NetworkService.wifiAvailable
+            hasMenu: true
+            onToggled: NetworkService.toggleWifi()
+            onMenuRequested: PopupManager.open("network", root.screenName)
+        }
+
+        Toggle {
+            width: toggles.tileWidth
+            icon: BluetoothService.enabled ? "󰂯" : "󰂲"
+            label: "Bluetooth"
+            detail: BluetoothService.summary
+            checked: BluetoothService.enabled
+            enabled: BluetoothService.available
+            hasMenu: true
+            onToggled: BluetoothService.toggle()
+            onMenuRequested: PopupManager.open("bluetooth", root.screenName)
+        }
+
+        Toggle {
+            width: toggles.tileWidth
+            icon: NotificationService.doNotDisturb ? "󰂛" : "󰂚"
+            label: "Do not disturb"
+            detail: NotificationService.doNotDisturb ? "On" : NotificationService.count > 0 ? NotificationService.count + " unread" : "Off"
+            checked: NotificationService.doNotDisturb
+            hasMenu: true
+            onToggled: NotificationService.doNotDisturb = !NotificationService.doNotDisturb
+            onMenuRequested: PopupManager.open("notifications", root.screenName)
+        }
+
+        Toggle {
+            width: toggles.tileWidth
+            icon: "󰅶"
+            label: "Keep awake"
+            detail: SessionService.idleInhibited ? "On" : "Off"
+            checked: SessionService.idleInhibited
+            onToggled: SessionService.toggleIdleInhibit()
+        }
+
+        Toggle {
+            width: toggles.tileWidth
+            icon: "󰖔"
+            label: "Night light"
+            detail: !SessionService.nightLightAvailable ? "Install hyprsunset" : SessionService.nightLight ? SessionService.nightLightTemperature + "K" : "Off"
+            checked: SessionService.nightLight
+            enabled: SessionService.nightLightAvailable
+            onToggled: SessionService.toggleNightLight()
+        }
+
+        Toggle {
+            width: toggles.tileWidth
+            icon: "󰓅"
+            label: "Performance"
+            detail: BatteryService.automaticProfiles ? "Auto · " + BatteryService.powerProfileName : "On"
+            checked: !BatteryService.automaticProfiles
+            enabled: BatteryService.hasPerformanceProfile
+            onToggled: BatteryService.automaticProfiles ? BatteryService.setPerformanceMode() : BatteryService.setAutomaticMode()
+        }
+    }
+
+    Separator { width: parent.width }
 
     Column {
         width: parent.width
-        spacing: 7
+        spacing: 4
 
-        StyledText {
-            text: "Control center"
-            color: Theme.fg1
-            font.pixelSize: Settings.fontSize
-            font.weight: Font.Bold
-        }
-
-        PopupRow {
-            width: parent.width
-            icon: NetworkService.wifiIcon(NetworkService.signalStrength)
-            iconColor: NetworkService.connected ? Theme.aqua : Theme.grey1
-            label: "Wi-Fi"
-            detail: NetworkService.connectionLabel
-            interactive: NetworkService.wifiAvailable
-            onClicked: PopupManager.open("network", root.screenName)
-        }
-
-        PopupRow {
-            width: parent.width
-            icon: BluetoothService.enabled ? "󰂯" : "󰂲"
-            iconColor: BluetoothService.connectedDevices.length > 0 ? Theme.green : BluetoothService.enabled ? Theme.blue : Theme.grey1
-            label: "Bluetooth"
-            detail: BluetoothService.summary
-            interactive: BluetoothService.available
-            onClicked: PopupManager.open("bluetooth", root.screenName)
-        }
-
-        PopupRow {
-            width: parent.width
-            icon: "󰂚"
-            iconColor: NotificationService.count > 0 ? Theme.blue : Theme.grey1
-            label: "Notifications"
-            detail: NotificationService.count > 0 ? NotificationService.count.toString() : "None"
-            interactive: true
-            onClicked: PopupManager.open("notifications", root.screenName)
-        }
-
-        Separator { width: parent.width }
-
-        PopupRow {
-            width: parent.width
+        SliderRow {
             icon: AudioService.volumeIcon(AudioService.volume, AudioService.muted)
-            iconColor: AudioService.muted ? Theme.grey1 : Theme.yellow
-            label: "Volume"
-            detail: Math.round(AudioService.volume * 100) + "%"
-            interactive: AudioService.sinkReady
-            onClicked: AudioService.toggleMute()
-        }
-
-        StyledSlider {
-            width: parent.width
             value: AudioService.volume
             to: 1.5
-            accent: Theme.yellow
+            valueText: AudioService.muted ? "mute" : Math.round(AudioService.volume * 100) + "%"
+            muted: AudioService.muted
             enabled: AudioService.sinkReady
+            onIconClicked: AudioService.toggleMute()
             onMoved: value => AudioService.setVolume(value)
         }
 
-        PopupRow {
-            width: parent.width
+        SliderRow {
+            visible: BrightnessService.available
             icon: BrightnessService.iconFor(BrightnessService.percentage)
-            iconColor: Theme.fg0
-            label: "Brightness"
-            detail: BrightnessService.available ? BrightnessService.percentage + "%" : "Unavailable"
-        }
-
-        StyledSlider {
-            width: parent.width
             value: BrightnessService.percentage
             to: 100
-            accent: Theme.fg0
-            enabled: BrightnessService.available && !BrightnessService.busy
+            valueText: BrightnessService.percentage + "%"
+            enabled: !BrightnessService.busy
             onMoved: value => BrightnessService.setBrightness(value)
         }
 
@@ -96,105 +125,84 @@ PopupSurface {
             visible: BrightnessService.errorMessage.length > 0
             width: parent.width
             text: BrightnessService.errorMessage
-            color: Theme.orange
-            font.pixelSize: 12
+            color: Theme.warning
+            font.pixelSize: Theme.caption
             wrapMode: Text.Wrap
         }
+    }
 
-        Column {
-            width: parent.width
-            spacing: 7
-            visible: BatteryService.available
+    Item {
+        visible: BatteryService.available
+        width: parent.width
+        height: 20
 
-            Separator { width: parent.width }
+        StyledText {
+            anchors.left: parent.left
+            anchors.verticalCenter: parent.verticalCenter
+            text: BatteryService.percentage + "%" + (BatteryService.full ? "  ·  Full"
+                : BatteryService.timeRemaining > 0 ? "  ·  " + (BatteryService.charging ? "Full in " : "") + BatteryService.formatDuration(BatteryService.timeRemaining) + (BatteryService.charging ? "" : " left")
+                : BatteryService.charging ? "  ·  Charging" : "")
+            color: Theme.grey1
+            font.pixelSize: Theme.label
+        }
 
-            PopupRow {
-                width: parent.width
-                icon: BatteryService.iconFor(BatteryService.percentage)
-                iconColor: BatteryService.charging ? Theme.green : BatteryService.percentage <= 15 ? Theme.red : Theme.fg0
-                label: "Battery"
-                detail: BatteryService.percentage + "%"
-            }
+        StyledText {
+            anchors.right: parent.right
+            anchors.verticalCenter: parent.verticalCenter
+            text: [BatteryService.rate > 0 ? BatteryService.rate.toFixed(1) + " W" : "",
+                BatteryService.health >= 0 ? "health " + BatteryService.health + "%" : ""].filter(part => part).join("  ·  ")
+            color: Theme.grey0
+            font.pixelSize: Theme.label
+        }
+    }
 
-            PopupRow {
-                width: parent.width
-                label: "Power mode"
-                detail: BatteryService.powerProfileName
-            }
+    component SliderRow: Item {
+        id: sliderRow
 
-            Row {
-                id: powerModes
+        property string icon
+        property real value
+        property real to: 1
+        property string valueText
+        property bool muted: false
+        property bool enabled: true
 
-                width: parent.width
-                spacing: 7
+        signal moved(real value)
+        signal iconClicked()
 
-                Repeater {
-                    model: ["Automatic", "Performance"]
+        width: parent.width
+        height: 36
 
-                    delegate: Controls.Button {
-                        id: modeButton
+        IconButton {
+            id: sliderIcon
+            anchors.left: parent.left
+            anchors.verticalCenter: parent.verticalCenter
+            icon: sliderRow.icon
+            foreground: sliderRow.muted ? Theme.warning : Theme.fg0
+            onClicked: sliderRow.iconClicked()
+        }
 
-                        required property int index
-                        required property string modelData
-                        readonly property bool automatic: index === 0
+        StyledSlider {
+            anchors.left: sliderIcon.right
+            anchors.leftMargin: 8
+            anchors.right: sliderValue.left
+            anchors.rightMargin: 12
+            anchors.verticalCenter: parent.verticalCenter
+            value: sliderRow.value
+            to: sliderRow.to
+            accent: sliderRow.muted ? Theme.grey0 : Theme.accent
+            enabled: sliderRow.enabled
+            onMoved: value => sliderRow.moved(value)
+        }
 
-                        width: (powerModes.width - powerModes.spacing) / 2
-                        height: 36
-                        text: modelData
-                        checkable: true
-                        autoExclusive: true
-                        checked: automatic ? BatteryService.automaticProfiles : !BatteryService.automaticProfiles
-                        enabled: automatic || BatteryService.hasPerformanceProfile
-                        hoverEnabled: true
-                        focus: checked
-
-                        onClicked: {
-                            if (automatic)
-                                BatteryService.setAutomaticMode();
-                            else
-                                BatteryService.setPerformanceMode();
-                        }
-
-                        contentItem: StyledText {
-                            text: modeButton.text
-                            color: !modeButton.enabled ? Theme.grey1 : modeButton.checked ? Theme.bg0 : Theme.fg0
-                            font.pixelSize: Settings.smallFontSize
-                            font.weight: modeButton.checked ? Font.DemiBold : Font.Normal
-                            horizontalAlignment: Text.AlignHCenter
-                            verticalAlignment: Text.AlignVCenter
-                            elide: Text.ElideRight
-                        }
-
-                        background: Rectangle {
-                            radius: 2
-                            color: modeButton.checked ? (modeButton.down ? Theme.aqua : Theme.green)
-                                : modeButton.hovered || modeButton.down ? Theme.bg4 : Theme.statusline2
-                            border.width: modeButton.activeFocus ? 1 : 0
-                            border.color: Theme.fg0
-                        }
-                    }
-                }
-            }
-
-            PopupRow {
-                width: parent.width
-                label: BatteryService.charging ? "Time to full" : "Remaining"
-                detail: BatteryService.formatDuration(BatteryService.timeRemaining)
-            }
-
-            PopupRow {
-                visible: BatteryService.health >= 0
-                width: parent.width
-                label: "Health"
-                detail: BatteryService.health + "%"
-            }
-
-            PopupRow {
-                visible: BatteryService.rate > 0
-                width: parent.width
-                label: "Energy rate"
-                detail: BatteryService.rate.toFixed(1) + " W"
-            }
+        StyledText {
+            id: sliderValue
+            anchors.right: parent.right
+            anchors.verticalCenter: parent.verticalCenter
+            width: 48
+            horizontalAlignment: Text.AlignRight
+            text: sliderRow.valueText
+            color: Theme.grey2
+            font.pixelSize: Theme.label
         }
     }
 }

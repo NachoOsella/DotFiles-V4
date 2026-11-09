@@ -46,6 +46,8 @@
 
 ## Reliable file editing
 
+- Change file content only with `edit` or `write`. Never write file content through bash (`cat >`, `tee`, `sed -i`, `python` or `node` write-back, heredocs).
+- Use `read` for file contents and `grep` or `find_files` for searching. Use `cat`, `sed -n`, `head`, `tail` or `rg` in bash only when the dedicated tool cannot do the job.
 - Before editing an existing file, work from the latest file content you have actually read. Never reconstruct `oldText` from memory.
 - For the native `edit` tool, use `{ "path": "...", "edits": [{ "oldText": "...", "newText": "..." }] }`. Both text fields must be strings.
 - Copy `oldText` exactly from the latest read, preserving indentation, whitespace, blank lines, quotes, Unicode, and newlines.

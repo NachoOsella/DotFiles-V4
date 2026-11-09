@@ -9,26 +9,22 @@ ModuleButton {
     required property string screenName
 
     visible: BatteryService.available
+    active: PopupManager.isOpen("control", screenName) || PopupManager.isOpen("bluetooth", screenName)
 
-    readonly property color stateColor: {
-        if (BatteryService.charging)
-            return Theme.green;
-        if (BatteryService.percentage <= 15)
-            return Theme.red;
-        if (BatteryService.percentage <= 30)
-            return Theme.yellow;
-        return Theme.fg0;
-    }
+    readonly property color stateColor: BatteryService.charging ? Theme.accent
+        : BatteryService.percentage <= 15 ? Theme.critical
+        : BatteryService.percentage <= 30 ? Theme.warning : Theme.fg0
 
-    StyledText {
+    Icon {
         text: BatteryService.iconFor(BatteryService.percentage)
         color: root.stateColor
-        font.family: Theme.iconFontFamily
     }
 
-    StyledText {
+    FixedText {
         text: BatteryService.percentage + "%"
+        reserve: "100%"
         color: root.stateColor
+        font.pixelSize: Theme.body
     }
 
     onClicked: PopupManager.toggle("control", screenName)

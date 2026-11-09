@@ -4,33 +4,37 @@ import "../components"
 import "../config"
 import "../services"
 
+// Only visible under memory pressure; the popup lists the heaviest programs.
 ModuleButton {
     id: root
 
-    required property string screenName
     property var memoryPopup
+
+    visible: SystemService.memoryPercentage >= Settings.memoryWarningRatio
+    implicitWidth: visible ? contentWidth + horizontalPadding * 2 : 0
 
     onHoveredChanged: {
         if (memoryPopup)
             memoryPopup.setAnchorHovered(hovered);
     }
 
-    StyledText {
-        text: ""
-        color: Theme.grey2
-        font.family: Theme.iconFontFamily
+    Icon {
+        text: "\uefc5"
+        color: Theme.warning
     }
 
-    StyledText {
+    FixedText {
         text: Math.round(SystemService.memoryPercentage * 100) + "%"
-        color: Theme.grey2
+        reserve: "100%"
+        color: Theme.warning
+        font.pixelSize: Theme.body
     }
 
     onClicked: function(mouse) {
-        if (mouse.button === Qt.LeftButton) {
-            if (memoryPopup)
-                memoryPopup.hide();
-            Quickshell.execDetached(["kitty", "-e", "btop"]);
-        }
+        if (mouse.button !== Qt.LeftButton)
+            return;
+        if (memoryPopup)
+            memoryPopup.hide();
+        Quickshell.execDetached(["kitty", "-e", "btop"]);
     }
 }

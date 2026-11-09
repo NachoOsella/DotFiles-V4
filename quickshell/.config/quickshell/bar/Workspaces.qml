@@ -1,14 +1,16 @@
 import QtQuick
+import Quickshell
 import Quickshell.Hyprland
 import "../components"
 import "../config"
 
-Rectangle {
+Item {
     id: root
 
-    implicitWidth: workspaceRow.implicitWidth + 6
+    readonly property int persistentCount: Quickshell.screens.length > 1 ? Settings.persistentWorkspacesDual : Settings.persistentWorkspaces
+
+    implicitWidth: workspaceRow.implicitWidth + 8
     implicitHeight: Settings.barHeight
-    color: Theme.bg1
 
     function workspaceById(workspaceId: int): var {
         return Hyprland.workspaces.values.find(workspace => workspace.id === workspaceId) ?? null;
@@ -22,42 +24,44 @@ Rectangle {
         Repeater {
             model: Settings.workspaceCount
 
-            delegate: Rectangle {
+            delegate: Item {
                 id: workspaceButton
 
                 required property int index
                 readonly property int workspaceId: index + 1
                 readonly property var workspace: root.workspaceById(workspaceId)
-                readonly property bool active: workspace !== null && workspace.active
                 readonly property bool focused: workspace !== null && workspace.focused
+                readonly property bool active: workspace !== null && workspace.active
                 readonly property bool urgent: workspace !== null && workspace.urgent
                 readonly property bool occupied: workspace !== null && workspace.toplevels.values.length > 0
 
-                visible: active || occupied || urgent
-                width: visible ? 29 : 0
+                // Beyond the persistent range, show a workspace only while it has windows or is on screen.
+                visible: workspaceId <= root.persistentCount || occupied || active || urgent
+                width: 28
                 height: workspaceRow.height
-                color: pointer.pressed ? Theme.bg4 : pointer.containsMouse || focused ? Theme.statusline2 : Theme.transparent
 
-                Behavior on color {
-                    ColorAnimation { duration: Settings.animationFast; easing.type: Easing.OutCubic }
+                Rectangle {
+                    anchors.fill: parent
+                    color: pointer.pressed ? Theme.pressed
+                        : pointer.containsMouse ? Theme.hover
+                        : workspaceButton.focused ? Theme.bg2 : Theme.transparent
+
+                    Behavior on color {
+                        ColorAnimation { duration: Settings.animationFast; easing.type: Easing.OutCubic }
+                    }
                 }
 
                 StyledText {
-                    anchors.centerIn: parent
+                    anchors.fill: parent
+                    horizontalAlignment: Text.AlignHCenter
                     text: workspaceButton.workspaceId
-                    color: workspaceButton.urgent ? Theme.red : workspaceButton.focused ? Theme.fg1 : workspaceButton.occupied || workspaceButton.active ? Theme.fg0 : Theme.grey1
-                    font.pixelSize: Settings.smallFontSize + 1
-                }
-
-                Rectangle {
-                    anchors.left: parent.left
-                    anchors.leftMargin: 4
-                    anchors.right: parent.right
-                    anchors.rightMargin: 4
-                    anchors.bottom: parent.bottom
-                    anchors.bottomMargin: 3
-                    height: 3
-                    color: workspaceButton.urgent ? Theme.red : workspaceButton.focused ? Theme.green : Theme.transparent
+                    // Focused stands out by color alone; the other monitor's visible workspace stays a step above occupied.
+                    color: workspaceButton.urgent ? Theme.critical
+                        : workspaceButton.focused ? Theme.accent
+                        : workspaceButton.active ? Theme.fg0
+                        : workspaceButton.occupied ? Theme.grey1 : Theme.bg4
+                    font.pixelSize: Theme.body
+                    font.weight: workspaceButton.focused ? Font.Bold : Font.Normal
                 }
 
                 MouseArea {
@@ -73,9 +77,7 @@ Rectangle {
 
     MouseArea {
         anchors.fill: parent
-        hoverEnabled: true
         acceptedButtons: Qt.NoButton
-        cursorShape: Qt.PointingHandCursor
         onWheel: wheel => Hyprland.dispatch(wheel.angleDelta.y > 0 ? "hl.dsp.focus({workspace = \"e-1\"})" : "hl.dsp.focus({workspace = \"e+1\"})")
     }
 }

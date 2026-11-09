@@ -1,5 +1,6 @@
 import QtQuick
 import Quickshell
+import Quickshell.Hyprland
 import "../config"
 import "../services"
 
@@ -8,18 +9,21 @@ PopupWindow {
 
     default property alias contentData: body.data
     required property Item anchorItem
-    required property string popupName
-    required property string screenName
+    property string popupName: ""
+    property string screenName: ""
+    property bool shown: PopupManager.isOpen(popupName, screenName)
     property int surfaceWidth: Settings.popupWidth
-    property int contentPadding: 14
+    property int contentPadding: Settings.popupPadding
     property bool needsKeyboardFocus: false
     property bool pointerEntered: false
+    property real progress: shown ? 1 : 0
+    readonly property alias hovered: popupHover.hovered
 
-    visible: PopupManager.isOpen(popupName, screenName)
+    // Stay mapped until the fade-out finishes.
+    visible: progress > 0
     implicitWidth: surfaceWidth
-    implicitHeight: body.implicitHeight + contentPadding * 2
+    implicitHeight: body.implicitHeight + contentPadding * 2 + 2
     color: Theme.transparent
-    grabFocus: needsKeyboardFocus
 
     anchor.item: anchorItem
     anchor.edges: Edges.Bottom
@@ -27,22 +31,37 @@ PopupWindow {
     anchor.margins.top: Settings.popupMargin
     anchor.adjustment: PopupAdjustment.All
 
-    onVisibleChanged: {
+    Behavior on progress {
+        NumberAnimation { duration: Settings.animationFast; easing.type: Easing.OutCubic }
+    }
+
+    onShownChanged: {
         pointerEntered = false;
-        if (visible)
+        if (shown)
             anchor.updateAnchor();
     }
     onClosed: {
-        if (PopupManager.isOpen(popupName, screenName))
+        if (popupName.length > 0 && PopupManager.isOpen(popupName, screenName))
             PopupManager.close();
     }
 
     Rectangle {
-        anchors.fill: parent
-        color: Theme.popupBackground
+        id: frame
+        width: parent.width
+        height: parent.height
+        y: (1 - root.progress) * -6
+        opacity: root.progress
+        color: Theme.surface
         border.width: 1
         border.color: Theme.border
-        radius: Settings.popupRadius
+
+        Rectangle {
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.top: parent.top
+            height: 2
+            color: Theme.accent
+        }
 
         HoverHandler {
             id: popupHover
@@ -58,14 +77,27 @@ PopupWindow {
             anchors.right: parent.right
             anchors.top: parent.top
             anchors.margins: root.contentPadding
-            spacing: 8
+            anchors.topMargin: root.contentPadding + 2
+            spacing: 10
         }
     }
 
-    // Avoid keyboard grabs while still dismissing a popup after deliberate pointer use.
+    // Hyprland's focus grab gives the popup keyboard input even when it was opened from a shortcut,
+    // where Qt's xdg_popup grab fails because the bar never received input. Clicking outside clears it.
+    HyprlandFocusGrab {
+        active: root.needsKeyboardFocus && root.shown
+        windows: [root]
+        onCleared: {
+            if (root.popupName.length > 0 && PopupManager.isOpen(root.popupName, root.screenName))
+                PopupManager.close();
+        }
+    }
+
+    // Dismiss after deliberate pointer use without grabbing the keyboard.
     Timer {
         interval: 700
-        running: root.visible
+        running: root.shown
+            && root.popupName.length > 0
             && root.pointerEntered
             && !popupHover.hovered
             && !(root.anchorItem && root.anchorItem.hovered)

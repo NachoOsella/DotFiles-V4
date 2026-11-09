@@ -1,5 +1,6 @@
 import QtQuick
 import Quickshell
+import Quickshell.Wayland
 import "../components"
 import "../config"
 import "../popups"
@@ -7,6 +8,11 @@ import "../services"
 
 PanelWindow {
     id: root
+
+    readonly property string screenName: screen.name
+    readonly property int groupGap: 16
+    // Widest centered module that still clears both side groups; shrinks as the logical width drops at higher scales.
+    readonly property real centerSpace: Math.max(0, 2 * Math.min(width / 2 - leftFixed.width - groupGap, rightModules.x - width / 2 - groupGap))
 
     anchors {
         top: true
@@ -18,6 +24,7 @@ PanelWindow {
     aboveWindows: true
     focusable: false
     color: Theme.transparent
+    WlrLayershell.namespace: "quickshell:bar"
 
     Rectangle {
         anchors.fill: parent
@@ -28,27 +35,35 @@ PanelWindow {
             anchors.right: parent.right
             anchors.bottom: parent.bottom
             height: 1
-            color: Theme.bg3
+            color: Theme.border
         }
     }
 
     Row {
-        id: leftModules
+        id: leftFixed
         anchors.left: parent.left
         anchors.top: parent.top
         anchors.bottom: parent.bottom
 
         LauncherButton { }
         Workspaces { }
-        ActiveWindow { screenInfo: root.screen }
+    }
+
+    // Anchor for popups opened from shortcuts rather than from a bar module.
+    Item {
+        id: centerAnchor
+        anchors.horizontalCenter: parent.horizontalCenter
+        width: 1
+        height: parent.height
     }
 
     MediaIndicator {
-        id: centeredMedia
+        id: mediaIndicator
         anchors.horizontalCenter: parent.horizontalCenter
         anchors.top: parent.top
         anchors.bottom: parent.bottom
-        screenName: root.screen.name
+        screenName: root.screenName
+        maxWidth: Math.min(Settings.mediaMaxWidth, root.centerSpace)
     }
 
     Row {
@@ -57,73 +72,27 @@ PanelWindow {
         anchors.top: parent.top
         anchors.bottom: parent.bottom
 
-        IconButton {
-            visible: RecordingService.running
-            icon: "󰓛"
-            foreground: Theme.red
-            buttonHeight: Settings.barHeight
-            onClicked: RecordingService.stop()
-        }
+        StatusIndicators { }
+        Tray { barWindow: root }
         Separator { vertical: true; height: parent.height }
-        NetworkIndicator { id: networkIndicator; screenName: root.screen.name }
-        AudioIndicator { id: audioIndicator; screenName: root.screen.name }
-        MemoryIndicator {
-            id: memoryIndicator
-            screenName: root.screen.name
-            memoryPopup: memoryPopup
-        }
-        BatteryIndicator { id: batteryIndicator; screenName: root.screen.name }
-        Separator { vertical: true; height: parent.height; visible: tray.visible }
-        Tray { id: tray; barWindow: root }
+        NetworkIndicator { id: networkIndicator; screenName: root.screenName }
+        AudioIndicator { id: audioIndicator; screenName: root.screenName }
+        MemoryIndicator { id: memoryIndicator; memoryPopup: memoryPopup }
+        BatteryIndicator { id: batteryIndicator; screenName: root.screenName }
         Separator { vertical: true; height: parent.height }
-        Clock { id: clockIndicator; screenName: root.screen.name }
-        Separator { vertical: true; height: parent.height }
-        PowerButton { id: powerIndicator; screenName: root.screen.name }
+        Clock { id: clockIndicator; screenName: root.screenName }
+        PowerButton { id: powerIndicator; screenName: root.screenName }
     }
 
-    MemoryPopup {
-        id: memoryPopup
-        anchorItem: memoryIndicator
-    }
-
-    MediaPopup {
-        anchorItem: centeredMedia
-        screenName: root.screen.name
-    }
-
-    AudioPopup {
-        anchorItem: audioIndicator
-        screenName: root.screen.name
-    }
-
-    NetworkPopup {
-        anchorItem: networkIndicator
-        screenName: root.screen.name
-    }
-
-    BluetoothPopup {
-        anchorItem: batteryIndicator
-        screenName: root.screen.name
-    }
-
-    ControlCenter {
-        anchorItem: batteryIndicator
-        screenName: root.screen.name
-    }
-
-    CalendarPopup {
-        anchorItem: clockIndicator
-        screenName: root.screen.name
-    }
-
-    NotificationCenter {
-        anchorItem: clockIndicator
-        screenName: root.screen.name
-    }
-
-    PowerMenu {
-        anchorItem: powerIndicator
-        screenName: root.screen.name
-    }
-
+    MemoryPopup { id: memoryPopup; anchorItem: memoryIndicator }
+    MediaPopup { anchorItem: mediaIndicator; screenName: root.screenName }
+    AudioPopup { anchorItem: audioIndicator; screenName: root.screenName }
+    NetworkPopup { anchorItem: networkIndicator; screenName: root.screenName }
+    BluetoothPopup { anchorItem: batteryIndicator; screenName: root.screenName }
+    ControlCenter { anchorItem: batteryIndicator; screenName: root.screenName }
+    CalendarPopup { anchorItem: clockIndicator; screenName: root.screenName }
+    NotificationCenter { anchorItem: clockIndicator; screenName: root.screenName }
+    ClipboardPopup { anchorItem: clockIndicator; screenName: root.screenName }
+    CalculatorPopup { anchorItem: centerAnchor; screenName: root.screenName }
+    PowerMenu { anchorItem: powerIndicator; screenName: root.screenName }
 }

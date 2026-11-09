@@ -7,48 +7,53 @@ Item {
     property real from: 0
     property real to: 1
     property real value: 0
-    property color accent: Theme.green
+    property color accent: Theme.accent
     property bool enabled: true
     property bool showHandle: true
+    property int trackHeight: 4
+    readonly property real ratio: Math.max(0, Math.min(1, (value - from) / Math.max(0.001, to - from)))
 
     signal moved(real value)
 
     implicitWidth: 150
-    implicitHeight: 22
-    opacity: enabled ? 1 : 0.45
+    implicitHeight: 18
+    opacity: enabled ? 1 : 0.4
 
     function valueForPosition(position: real): real {
-        const ratio = Math.max(0, Math.min(1, position / Math.max(1, width)));
-        return from + ratio * (to - from);
+        const positionRatio = Math.max(0, Math.min(1, position / Math.max(1, width)));
+        return from + positionRatio * (to - from);
     }
 
     Rectangle {
         anchors.verticalCenter: parent.verticalCenter
         width: parent.width
-        height: 4
-        radius: 2
-        color: Theme.bg5
+        height: root.trackHeight
+        color: Theme.bg3
     }
 
     Rectangle {
         anchors.verticalCenter: parent.verticalCenter
-        width: Math.max(0, Math.min(parent.width, parent.width * (root.value - root.from) / Math.max(0.001, root.to - root.from)))
-        height: 4
-        radius: 2
+        width: parent.width * root.ratio
+        height: root.trackHeight
         color: root.accent
+
+        Behavior on width {
+            enabled: !pointer.pressed
+            NumberAnimation { duration: Settings.animationFast; easing.type: Easing.OutCubic }
+        }
     }
 
     Rectangle {
-        visible: root.showHandle
-        x: Math.max(0, Math.min(root.width - width, root.width * (root.value - root.from) / Math.max(0.001, root.to - root.from) - width / 2))
+        visible: root.showHandle && (pointer.containsMouse || pointer.pressed)
+        x: Math.max(0, Math.min(root.width - width, root.width * root.ratio - width / 2))
         anchors.verticalCenter: parent.verticalCenter
-        width: 10
-        height: 10
-        radius: 5
-        color: root.enabled ? Theme.fg1 : Theme.grey0
+        width: 4
+        height: 14
+        color: Theme.fg1
     }
 
     MouseArea {
+        id: pointer
         anchors.fill: parent
         enabled: root.enabled
         hoverEnabled: true

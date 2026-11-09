@@ -2,55 +2,50 @@ import QtQuick
 import QtQuick.Layouts
 import "../config"
 
-Rectangle {
+// Flat, full-height bar module. The bottom accent marks the module whose popup is open.
+Item {
     id: root
 
     default property alias contentData: content.data
-    property color baseColor: Theme.transparent
-    property color hoverColor: Theme.hoverBackground
-    property color pressedColor: Theme.bg3
-    property int horizontalPadding: 9
-    property int contentHorizontalOffset: 0
-    property int contentVerticalOffset: 0
+    property int horizontalPadding: 10
     property bool interactive: true
-    property color bottomAccentColor: Theme.transparent
-    property int bottomAccentHeight: 0
+    property bool active: false
     property alias hovered: pointer.containsMouse
     property alias acceptedButtons: pointer.acceptedButtons
+    readonly property real contentWidth: content.implicitWidth
 
     signal clicked(var mouse)
     signal wheel(var wheel)
 
-    implicitWidth: content.implicitWidth + horizontalPadding * 2
+    implicitWidth: contentWidth + horizontalPadding * 2
     implicitHeight: Settings.barHeight
-    color: Theme.transparent
 
     Rectangle {
-        id: surface
         anchors.fill: parent
-        color: !root.interactive ? root.baseColor : pointer.pressed ? root.pressedColor : pointer.containsMouse ? root.hoverColor : root.baseColor
+        color: !root.interactive ? Theme.transparent : pointer.pressed ? Theme.pressed : pointer.containsMouse || root.active ? Theme.hover : Theme.transparent
 
         Behavior on color {
             ColorAnimation { duration: Settings.animationFast; easing.type: Easing.OutCubic }
         }
     }
 
-    RowLayout {
-        id: content
-        anchors.horizontalCenter: parent.horizontalCenter
-        anchors.horizontalCenterOffset: root.contentHorizontalOffset
-        anchors.verticalCenter: parent.verticalCenter
-        anchors.verticalCenterOffset: root.contentVerticalOffset
-        height: implicitHeight
-        spacing: 6
-    }
-
     Rectangle {
         anchors.left: parent.left
         anchors.right: parent.right
-        anchors.bottom: surface.bottom
-        height: root.bottomAccentHeight
-        color: root.bottomAccentColor
+        anchors.bottom: parent.bottom
+        height: 2
+        color: Theme.accent
+        opacity: root.active ? 1 : 0
+
+        Behavior on opacity {
+            NumberAnimation { duration: Settings.animationFast }
+        }
+    }
+
+    RowLayout {
+        id: content
+        anchors.centerIn: parent
+        spacing: 6
     }
 
     MouseArea {

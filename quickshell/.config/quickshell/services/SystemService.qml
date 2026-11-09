@@ -12,6 +12,7 @@ Singleton {
     property real memoryTotalGiB: 0
     property var topMemoryPrograms: []
     property bool memoryProgramsBusy: false
+    property string uptime: ""
 
     function formatMemory(memoryKiB: real): string {
         if (memoryKiB >= 1048576)
@@ -63,6 +64,24 @@ Singleton {
         memoryTotalGiB = totalKiB / 1048576;
     }
 
+    function updateUptime(contents: string): void {
+        const seconds = Math.floor(Number(contents.split(" ")[0]));
+        if (!Number.isFinite(seconds))
+            return;
+        const days = Math.floor(seconds / 86400);
+        const hours = Math.floor(seconds % 86400 / 3600);
+        const minutes = Math.floor(seconds % 3600 / 60);
+        uptime = "up " + (days > 0 ? days + "d " : "") + (days > 0 || hours > 0 ? hours + "h " : "") + minutes + "m";
+    }
+
+    FileView {
+        id: uptimeFile
+        path: "/proc/uptime"
+        preload: true
+        printErrors: false
+        onLoaded: root.updateUptime(text())
+    }
+
     FileView {
         id: memoryFile
         path: "/proc/meminfo"
@@ -87,6 +106,9 @@ Singleton {
         interval: 10000
         repeat: true
         running: true
-        onTriggered: memoryFile.reload()
+        onTriggered: {
+            memoryFile.reload();
+            uptimeFile.reload();
+        }
     }
 }

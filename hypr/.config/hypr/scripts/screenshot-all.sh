@@ -1,73 +1,78 @@
 #!/usr/bin/env bash
+# Take a screenshot, save it, and copy it to the clipboard.
+# Usage:
+#   screenshot-all.sh                         all monitors side by side
+#   screenshot-all.sh monitor <name>          one monitor
+#   screenshot-all.sh window                  the focused window
+#   screenshot-all.sh --frozen <image> [<logical_w> <logical_h> <x> <y> <w> <h>]
+#                                             a frame frozen by the Quickshell overlay, optionally cropped
 set -euo pipefail
 
-directory="${HYPRSHOT_DIR:-${XDG_PICTURES_DIR:-$HOME/Pictures}}"
+directory="$HOME/Documents/imagenes/screenshots"
 mkdir -p "$directory"
-file="$directory/screenshot-$(date +%Y%m%d-%H%M%S-%N).png"
+file="$directory/screenshot-$(date +%Y%m%d-%H%M%S-%3N).png"
+# Fast zlib level: files are ~25% larger than grim's default but encode several times faster.
+png_options=(-define png:compression-level=1)
 
-capture_displays() (
-    local temp_dir monitor height min_height=0 image
-    local -a monitors images=()
-    temp_dir=$(mktemp -d)
-    trap 'rm -rf "$temp_dir"' EXIT
+fail() {
+    notify-send -a Screenshot -u critical "Screenshot failed" "$1"
+    exit 1
+}
 
-    mapfile -t monitors < <(hyprctl monitors -j | jq -r 'sort_by(.x, .y) | .[].name')
-    (( ${#monitors[@]} > 0 )) || return 1
-
-    for monitor in "${monitors[@]}"; do
-        image="$temp_dir/${#images[@]}.png"
-        grim -o "$monitor" "$image" || return 1
-        height=$(magick identify -format '%h' "$image") || return 1
-        if (( min_height == 0 || height < min_height )); then
-            min_height=$height
+case "${1:-all}" in
+    all)
+        temp_dir=$(mktemp -d)
+        trap 'rm -rf "$temp_dir"' EXIT
+        mapfile -t monitors < <(hyprctl monitors -j | jq -r 'sort_by(.x, .y) | .[].name')
+        (( ${#monitors[@]} > 0 )) || fail "No monitors found."
+        images=()
+        for monitor in "${monitors[@]}"; do
+            images+=("$temp_dir/$monitor.ppm")
+            grim -t ppm -o "$monitor" "${images[-1]}" &
+        done
+        wait || fail "Could not capture the displays."
+        # Scale every monitor to the shortest height so they line up side by side.
+        min_height=$(magick identify -format '%h\n' "${images[@]}" | sort -n | head -n 1)
+        magick "${images[@]}" -resize "x$min_height" +append "${png_options[@]}" "$file" \
+            || fail "Could not combine the displays."
+        ;;
+    monitor)
+        grim -l 1 -o "$2" "$file" || fail "Could not capture $2."
+        ;;
+    window)
+        geometry=$(hyprctl activewindow -j | jq -er 'select(.mapped) | "\(.at[0]),\(.at[1]) \(.size[0])x\(.size[1])"') \
+            || fail "No window is focused."
+        grim -l 1 -g "$geometry" "$file" || fail "Could not capture the window."
+        ;;
+    --frozen)
+        if (( $# == 2 )); then
+            magick "$2" "${png_options[@]}" "$file" || fail "Could not save the frozen frame."
+        elif (( $# == 8 )); then
+            # Map the logical selection to pixels of the frozen frame.
+            read -r image_width image_height < <(magick identify -format '%w %h\n' "$2") \
+                || fail "Could not read the frozen frame."
+            crop=$(awk -v iw="$image_width" -v ih="$image_height" -v lw="$3" -v lh="$4" \
+                -v x="$5" -v y="$6" -v w="$7" -v h="$8" 'BEGIN {
+                    sx = iw / lw
+                    sy = ih / lh
+                    cx = int(x * sx + 0.5)
+                    cy = int(y * sy + 0.5)
+                    cw = int(w * sx + 0.5)
+                    ch = int(h * sy + 0.5)
+                    if (cx + cw > iw) cw = iw - cx
+                    if (cy + ch > ih) ch = ih - cy
+                    printf "%dx%d+%d+%d", cw, ch, cx, cy
+                }')
+            magick "$2" -crop "$crop" +repage "${png_options[@]}" "$file" || fail "Could not crop the frozen frame."
+        else
+            exit 2
         fi
-        images+=("$image")
-    done
+        ;;
+    *)
+        exit 2
+        ;;
+esac
 
-    magick "${images[@]}" -resize "x${min_height}" +append "$file"
-)
-
-if (( $# == 8 )) && [[ $1 == "--frozen" ]]; then
-    # Crop the frame frozen by the overlay, mapping the logical selection to image pixels.
-    if ! read -r image_width image_height < <(magick identify -format '%w %h\n' "$2"); then
-        notify-send -u critical "Screenshot failed" "Could not read the frozen frame."
-        exit 1
-    fi
-    crop=$(awk -v iw="$image_width" -v ih="$image_height" -v lw="$3" -v lh="$4" \
-        -v x="$5" -v y="$6" -v w="$7" -v h="$8" 'BEGIN {
-            sx = iw / lw
-            sy = ih / lh
-            cx = int(x * sx + 0.5)
-            cy = int(y * sy + 0.5)
-            cw = int(w * sx + 0.5)
-            ch = int(h * sy + 0.5)
-            if (cx + cw > iw) cw = iw - cx
-            if (cy + ch > ih) ch = ih - cy
-            printf "%dx%d+%d+%d", cw, ch, cx, cy
-        }')
-    if ! magick "$2" -crop "$crop" +repage "$file"; then
-        notify-send -u critical "Screenshot failed" "Could not crop the frozen frame."
-        exit 1
-    fi
-elif (( $# == 5 )); then
-    monitor_geometry=$(hyprctl monitors -j | jq -er --arg name "$1" '.[] | select(.name == $name) | "\(.x) \(.y)"')
-    read -r monitor_x monitor_y <<< "$monitor_geometry"
-    if ! grim -g "$((monitor_x + $2)),$((monitor_y + $3)) ${4}x${5}" "$file"; then
-        notify-send -u critical "Screenshot failed" "Could not capture the region."
-        exit 1
-    fi
-elif (( $# == 0 )); then
-    if ! capture_displays; then
-        notify-send -u critical "Screenshot failed" "Could not capture the displays."
-        exit 1
-    fi
-else
-    exit 1
-fi
-
-if ! wl-copy --type image/png < "$file"; then
-    notify-send -u critical "Screenshot saved" "Could not copy it to the clipboard: $file"
-    exit 1
-fi
-
-notify-send -a Hyprshot -i "$file" "Screenshot saved" "Saved to $file and copied to the clipboard."
+wl-copy --type image/png < "$file" || fail "Saved to $file but could not copy it to the clipboard."
+# The notification is fire-and-forget so the script exits as soon as the image is on the clipboard.
+notify-send -a Screenshot -i "$file" "Screenshot copied" "$(basename "$file")" &

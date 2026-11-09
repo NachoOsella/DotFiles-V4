@@ -7,7 +7,12 @@ import Quickshell.Services.Mpris
 Singleton {
     id: root
 
+    // Players with useful metadata, Spotify first.
     readonly property list<var> players: Mpris.players.values
+        .filter(candidate => candidate.trackTitle.length > 0 || candidate.trackArtist.length > 0)
+        .sort((first, second) => Number(isSpotifyPlayer(second)) - Number(isSpotifyPlayer(first)))
+    // Temporary pick from the media popup switcher; cleared when the popup closes.
+    property var preferredPlayer: null
     readonly property var player: selectPlayer()
     readonly property bool available: player !== null && (player.trackTitle.length > 0 || player.trackArtist.length > 0)
     readonly property bool playing: available && player.isPlaying
@@ -17,13 +22,6 @@ Singleton {
     readonly property string identity: player ? (player.identity || player.desktopEntry || "") : ""
     readonly property bool spotifyPlayer: player !== null && isSpotifyPlayer(player)
     readonly property string artUrl: available ? player.trackArtUrl : ""
-    readonly property string trackText: {
-        if (!available)
-            return "";
-        if (artist.length > 0 && title.length > 0)
-            return artist + "  —  " + title;
-        return title || artist;
-    }
     readonly property string icon: spotifyPlayer ? "" : "󰎈"
 
     function isSpotifyPlayer(candidate: var): bool {
@@ -33,24 +31,19 @@ Singleton {
             .filter(value => value)
             .join(" ")
             .toLowerCase();
-        return playerIdentity.includes("spotify") || playerIdentity.includes("spotatui");
+        return ["spotify", "spotifast", "spotatui"].some(name => playerIdentity.includes(name));
     }
 
     function selectPlayer(): var {
         const currentPlayers = Mpris.players.values;
-        for (const candidate of currentPlayers) {
-            if (candidate.isPlaying && (candidate.trackTitle.length > 0 || candidate.trackArtist.length > 0))
-                return candidate;
-        }
-        for (const candidate of currentPlayers) {
-            if (isSpotifyPlayer(candidate))
-                return candidate;
-        }
-        for (const candidate of currentPlayers) {
-            if (candidate.trackTitle.length > 0 || candidate.trackArtist.length > 0)
-                return candidate;
-        }
-        return null;
+        if (preferredPlayer && currentPlayers.includes(preferredPlayer))
+            return preferredPlayer;
+        // Spotify wins over other players in the same state: playing Spotify, other playing, paused Spotify, anything.
+        return players.find(candidate => candidate.isPlaying && isSpotifyPlayer(candidate))
+            ?? players.find(candidate => candidate.isPlaying)
+            ?? players.find(candidate => isSpotifyPlayer(candidate))
+            ?? players[0]
+            ?? null;
     }
 
     function toggle(): void {
@@ -66,6 +59,18 @@ Singleton {
     function previous(): void {
         if (player && player.canGoPrevious)
             player.previous();
+    }
+
+    function toggleShuffle(): void {
+        if (player && player.shuffleSupported)
+            player.shuffle = !player.shuffle;
+    }
+
+    function cycleLoop(): void {
+        if (!player || !player.loopSupported)
+            return;
+        player.loopState = player.loopState === MprisLoopState.None ? MprisLoopState.Playlist
+            : player.loopState === MprisLoopState.Playlist ? MprisLoopState.Track : MprisLoopState.None;
     }
 
     function seek(position: real): void {

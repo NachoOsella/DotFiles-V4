@@ -1,6 +1,7 @@
 import QtQuick
 import Quickshell
 import Quickshell.Hyprland
+import Quickshell.Wayland
 import "../components"
 import "../config"
 import "../services"
@@ -14,19 +15,20 @@ PanelWindow {
     property int percentage: 0
     property int maximum: 100
     property bool muted: false
-    property bool hiding: false
+    property bool shown: false
 
     screen: screenInfo
-    visible: false
-    implicitWidth: 240
-    implicitHeight: 78
+    visible: shown || surface.opacity > 0
+    implicitWidth: 320
+    implicitHeight: 44
     color: Theme.transparent
     aboveWindows: true
     exclusiveZone: 0
     exclusionMode: ExclusionMode.Ignore
     focusable: false
     anchors.bottom: true
-    margins.bottom: 120
+    margins.bottom: 96
+    WlrLayershell.namespace: "quickshell:osd"
 
     function showOsd(newIcon: string, newPercentage: int, isMuted: bool, newMaximum: int): void {
         if (!monitor || !monitor.focused)
@@ -35,21 +37,19 @@ PanelWindow {
         percentage = Math.max(0, Math.min(150, newPercentage));
         muted = isMuted;
         maximum = newMaximum;
-        hiding = false;
-        visible = true;
-        surface.opacity = 1;
-        surface.y = 0;
+        shown = true;
         hideTimer.restart();
     }
 
     Rectangle {
         id: surface
-        anchors.fill: parent
-        color: Theme.bg1
+        width: parent.width
+        height: parent.height
+        y: root.shown ? 0 : 6
+        opacity: root.shown ? 1 : 0
+        color: Theme.surface
         border.width: 1
         border.color: Theme.border
-        radius: 7
-        opacity: 0
 
         Behavior on opacity {
             NumberAnimation { duration: Settings.animationFast; easing.type: Easing.OutCubic }
@@ -59,54 +59,46 @@ PanelWindow {
             NumberAnimation { duration: Settings.animationFast; easing.type: Easing.OutCubic }
         }
 
-        Column {
-            anchors.centerIn: parent
-            width: parent.width - 28
-            spacing: 5
+        Icon {
+            id: osdIcon
+            anchors.left: parent.left
+            anchors.leftMargin: 14
+            anchors.verticalCenter: parent.verticalCenter
+            width: 18
+            text: root.icon
+            color: root.muted ? Theme.warning : Theme.fg1
+        }
 
-            StyledText {
-                width: parent.width
-                text: root.icon
-                color: root.muted ? Theme.grey1 : Theme.fg1
-                font.family: Theme.iconFontFamily
-                font.pixelSize: 19
-                horizontalAlignment: Text.AlignHCenter
-            }
+        StyledText {
+            id: osdValue
+            anchors.right: parent.right
+            anchors.rightMargin: 14
+            anchors.verticalCenter: parent.verticalCenter
+            width: 40
+            horizontalAlignment: Text.AlignRight
+            text: root.muted ? "mute" : root.percentage
+            color: root.muted ? Theme.warning : Theme.fg0
+            font.pixelSize: Theme.label
+        }
 
-            StyledSlider {
-                width: parent.width
-                value: root.muted ? 0 : root.percentage
-                to: root.maximum
-                accent: root.muted ? Theme.grey1 : Theme.green
-                enabled: false
-                showHandle: false
-            }
-
-            StyledText {
-                width: parent.width
-                text: root.muted ? "Muted" : root.percentage + "%"
-                color: Theme.fg0
-                font.pixelSize: 12
-                horizontalAlignment: Text.AlignHCenter
-            }
+        StyledSlider {
+            anchors.left: osdIcon.right
+            anchors.leftMargin: 12
+            anchors.right: osdValue.left
+            anchors.rightMargin: 12
+            anchors.verticalCenter: parent.verticalCenter
+            value: root.muted ? 0 : root.percentage
+            to: root.maximum
+            accent: root.percentage > 100 ? Theme.warning : Theme.accent
+            enabled: true
+            showHandle: false
         }
     }
 
     Timer {
         id: hideTimer
-        interval: 1000
-        onTriggered: {
-            root.hiding = true;
-            surface.opacity = 0;
-            surface.y = 4;
-            closeTimer.restart();
-        }
-    }
-
-    Timer {
-        id: closeTimer
-        interval: Settings.animationFast
-        onTriggered: root.visible = false
+        interval: 1200
+        onTriggered: root.shown = false
     }
 
     Connections {

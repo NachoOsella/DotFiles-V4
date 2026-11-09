@@ -17,8 +17,9 @@ Singleton {
     readonly property bool microphoneMuted: sourceReady ? source.audio.muted : false
     readonly property string sinkName: sinkReady ? sink.description || sink.nickname || sink.name : "No output"
     readonly property string sourceName: sourceReady ? source.description || source.nickname || source.name : "No microphone"
-    readonly property list<var> outputNodes: Pipewire.nodes.values.filter(node => node && node.isSink && !node.isStream)
-    readonly property list<var> streamNodes: Pipewire.nodes.values.filter(node => node && node.isStream)
+    // Hardware outputs only; virtual processing sinks are not useful choices.
+    readonly property list<var> outputNodes: Pipewire.nodes.values.filter(node => node && node.isSink && !node.isStream && node.properties["node.virtual"] !== "true")
+    readonly property list<var> streamNodes: Pipewire.nodes.values.filter(node => node && node.isStream && node.isSink)
 
     property bool sinkObserved: false
     property bool sourceObserved: false
@@ -73,6 +74,23 @@ Singleton {
 
     function showVolumeOsd(): void {
         osdRequested(volumeIcon(volume, muted), Math.round(volume * 100), muted);
+    }
+
+    // Shorten ALSA descriptions such as "Core Ultra 200V Series Processors HD Audio Speaker".
+    function nodeLabel(node: var): string {
+        if (!node)
+            return "";
+        const description = node.description || node.nickname || node.name || "";
+        const hdmi = description.match(/HDMI \/ DisplayPort (\d+)/);
+        if (hdmi)
+            return "HDMI " + hdmi[1];
+        return description.replace(/^.*HD Audio /, "").replace(/ Analog Stereo$/, "");
+    }
+
+    function streamLabel(node: var): string {
+        const properties = node.properties;
+        const name = properties["application.name"] || properties["node.name"] || node.name || "";
+        return name.split(".")[0].replace(/^\w/, letter => letter.toUpperCase());
     }
 
     function setDefaultOutput(node: var): void {

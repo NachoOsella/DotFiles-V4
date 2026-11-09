@@ -9,16 +9,18 @@ ModuleButton {
 
     required property string screenName
 
-    StyledText {
+    active: PopupManager.isOpen("audio", screenName)
+
+    Icon {
         text: AudioService.volumeIcon(AudioService.volume, AudioService.muted)
-        color: AudioService.muted ? Theme.grey1 : Theme.yellow
-        font.family: Theme.iconFontFamily
+        color: AudioService.muted ? Theme.warning : Theme.fg0
     }
 
-    StyledText {
-        visible: !AudioService.muted
-        text: Math.round(AudioService.volume * 100) + "%"
-        color: Theme.yellow
+    FixedText {
+        text: AudioService.muted ? "mute" : Math.round(AudioService.volume * 100) + "%"
+        reserve: "100%"
+        color: AudioService.muted ? Theme.warning : Theme.fg0
+        font.pixelSize: Theme.body
     }
 
     onClicked: function(mouse) {

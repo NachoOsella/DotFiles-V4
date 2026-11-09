@@ -4,20 +4,18 @@ import Quickshell
 
 Singleton {
     readonly property int barHeight: 38
-    readonly property int moduleHeight: barHeight
-    readonly property int fontSize: 17
-    readonly property int smallFontSize: 15
-    readonly property int activeWindowMaxWidth: 310
-    readonly property int mediaMaxWidth: 500
-    readonly property int popupWidth: 410
-    readonly property int popupMargin: 7
-    readonly property int popupRadius: 4
-    readonly property int animationFast: 140
-    readonly property int animationNormal: 180
-    readonly property int workspaceCount: 7
+    readonly property int mediaMaxWidth: 520
+    readonly property int popupWidth: 440
+    readonly property int popupMargin: 6
+    readonly property int popupPadding: 16
+    readonly property int animationFast: 120
+    readonly property int animationNormal: 200
+    // SUPER+1..0 map to workspaces 1..10. The first ones stay visible even when empty; with two monitors
+    // workspace 6 is the laptop's default (hypr/monitors.lua), so it joins them.
+    readonly property int workspaceCount: 10
+    readonly property int persistentWorkspaces: 5
+    readonly property int persistentWorkspacesDual: 6
     readonly property int volumeStep: 5
-    readonly property string clockTimeZone: "America/Argentina/Cordoba"
-    readonly property bool notificationServerEnabled: true
-    readonly property string rofiCommand: "rofi"
-    readonly property list<string> rofiArguments: ["-show", "drun", "-theme", Quickshell.env("HOME") + "/.config/rofi/config.rasi"]
+    readonly property real memoryWarningRatio: 0.8
+    readonly property list<string> launcherCommand: [Quickshell.env("HOME") + "/.config/rofi/rofi-launcher.sh"]
 }
