@@ -48,6 +48,7 @@ lib32-vulkan-intel
 libappindicator
 libnotify
 libpulse
+libqalculate
 libva-intel-driver
 libvpl
 linux

@@ -26,7 +26,7 @@ import {
   formatToolSummary,
 } from "./src/formatter.js";
 import { defaultDumpPath, writeReportToFile } from "./src/file-writer.js";
-import { showInOverlayOrNotify } from "./src/ui.js";
+import { deskReport, showInOverlayOrNotify } from "./src/ui.js";
 
 type PromptSubcommand =
   "summary" | "full" | "tools" | "skills" | "save" | "help";
@@ -109,7 +109,7 @@ async function handlePromptCommand(
         // Use notify + custom overlay for readability
         // Show via notify first for quick feedback, then overlay
         await showInOverlayOrNotify(ctx, "Prompt Inspector — resumen", text);
-      } else {
+      } else if (!deskReport(ctx, "Prompt Inspector — resumen", text)) {
         console.log(text);
         ctx.ui.notify("Resumen impreso en stdout", "info");
       }
@@ -121,7 +121,7 @@ async function handlePromptCommand(
       if (ctx.hasUI && ctx.mode === "tui") {
         await showInOverlayOrNotify(ctx, header, content);
       } else {
-        console.log(content);
+        if (!deskReport(ctx, header, content)) console.log(content);
         // Also save for convenience in non-tui
         const fallback = defaultDumpPath(ctx.cwd);
         try {

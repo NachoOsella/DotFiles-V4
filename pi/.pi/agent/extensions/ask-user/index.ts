@@ -5,6 +5,12 @@ import { Type, type Static } from 'typebox'
 import { QuestionnaireComponent } from './component.ts'
 import { CUSTOM_OPTION_LABEL, type StoredAnswer } from './state.ts'
 import {
+    buildDeskPayload,
+    DESK_ASK_USER_TITLE,
+    isPiDesk,
+    parseDeskReply,
+} from './desk.ts'
+import {
     ASK_USER_PARAMETER_DESCRIPTIONS,
     ASK_USER_PROMPT_GUIDELINES,
     ASK_USER_PROMPT_SNIPPET,
@@ -142,6 +148,40 @@ export default function askUser(pi: ExtensionAPI) {
                     [],
                     'aborted'
                 )
+            }
+
+            if (ctx.mode === 'rpc' && isPiDesk()) {
+                // pi-desk renders every question in one native card. An
+                // unusable reply falls through to the plain select flow below.
+                const raw = await ctx.ui.editor(
+                    DESK_ASK_USER_TITLE,
+                    buildDeskPayload(params.questions)
+                )
+                if (signal?.aborted) {
+                    return reply(
+                        buildAskUserResultMessage({ kind: 'aborted' }),
+                        [],
+                        'aborted'
+                    )
+                }
+                const parsed = parseDeskReply(raw, params.questions)
+                if (parsed.kind === 'dismissed') {
+                    return reply(
+                        buildAskUserResultMessage({ kind: 'dismissed' }),
+                        [],
+                        'dismissed'
+                    )
+                }
+                if (parsed.kind === 'answered') {
+                    return reply(
+                        buildAskUserResultMessage({
+                            kind: 'answered',
+                            answers: parsed.answers,
+                        }),
+                        parsed.answers,
+                        'answered'
+                    )
+                }
             }
 
             if (ctx.mode === 'rpc') {

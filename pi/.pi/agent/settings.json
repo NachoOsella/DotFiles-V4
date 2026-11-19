@@ -1,5 +1,5 @@
 {
-  "lastChangelogVersion": "1.5.0",
+  "lastChangelogVersion": "1.5.2",
   "defaultTools": [
     "+codemode"
   ],
@@ -35,7 +35,7 @@
   "followUpMode": "one-at-a-time",
   "subagents": {
     "maxConcurrentExecutions": 10,
-    "maxAgents": 20
+    "maxAgents": 200
   },
   "deviceId": "96101397-f7f0-46b9-bb6f-19c0e93b89a5",
   "cacheWarming": "streaming"

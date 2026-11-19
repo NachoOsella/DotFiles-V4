@@ -28,6 +28,11 @@ import type {
 import { getMarkdownTheme } from "@earendil-works/pi-coding-agent";
 import { Markdown, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
+import {
+  BACKGROUND_TERMINALS_CHANNEL,
+  REFRESH_CHANNEL,
+} from "../shared/dashboard-state.ts";
+import { createThrottledPublisher } from "./src/dashboard.ts";
 import type { TerminalSnapshot } from "./src/domain.ts";
 import { TerminalManager, type TerminalManagerShape } from "./src/manager.ts";
 import {
@@ -102,6 +107,15 @@ export default function (pi: ExtensionAPI) {
   let ui: ExtensionUIContext | undefined;
   let unsubStatus: (() => void) | undefined;
   const resultDelivery = createDeferredResultDelivery<TerminalSnapshot>();
+  // Metadata-only snapshot for GUI hosts (pi-desk). No listener in the TUI,
+  // so emitting is a no-op there.
+  const dashboard = createThrottledPublisher((state) => {
+    try {
+      pi.events?.emit(BACKGROUND_TERMINALS_CHANNEL, state);
+    } catch {
+      // Advisory only.
+    }
+  });
 
   const getRuntime = () => (runtime ??= createTerminalRuntime());
 
@@ -112,8 +126,12 @@ export default function (pi: ExtensionAPI) {
       .then((manager) => {
         manager.view.setOnSettled(onSettled);
         unsubStatus?.();
-        unsubStatus = manager.view.subscribe(() => updateWidget(manager));
+        unsubStatus = manager.view.subscribe(() => {
+          updateWidget(manager);
+          dashboard.request(() => manager.view.list());
+        });
         updateWidget(manager);
+        dashboard.request(() => manager.view.list());
         return manager;
       });
     return managerPromise;
@@ -209,6 +227,14 @@ export default function (pi: ExtensionAPI) {
   pi.on("session_start", (_event, ctx) => {
     sessionContext = ctx;
     if (ctx.hasUI) ui = ctx.ui;
+  });
+
+  // Optional chaining: test doubles and older hosts may lack the event bus.
+  pi.events?.on(REFRESH_CHANNEL, () => {
+    // Only report when the manager already exists; never spawn it for a refresh.
+    void managerPromise?.then((manager) =>
+      dashboard.force(() => manager.view.list()),
+    );
   });
 
   // Drain deferred results when the agent settles: together with the
@@ -503,9 +529,26 @@ export default function (pi: ExtensionAPI) {
 
   pi.registerCommand("ps", {
     description: "List and inspect background terminals",
-    handler: async (_args, ctx) => {
+    handler: async (args, ctx) => {
       const manager = await getManager();
       if (ctx.mode !== "tui") {
+        // Non-TUI hosts (pi-desk) stop a terminal with `/ps kill <id...>`.
+        // The settlement is delivered to the model as usual.
+        const [sub, ...ids] = (args ?? "").trim().split(/\s+/).filter(Boolean);
+        if (sub === "kill") {
+          const known = ids.filter((id) => manager.view.get(id));
+          if (known.length === 0) {
+            if (ctx.hasUI)
+              ctx.ui.notify(`Unknown terminal id(s): ${ids.join(", ") || "none"}`, "warning");
+            return;
+          }
+          const report = await runTool(getRuntime(), manager.kill(known), {
+            signal: ctx.signal,
+            interruptMessage: "Kill wait aborted; termination continues in the background.",
+          });
+          if (ctx.hasUI) ctx.ui.notify(buildKillReport(report), "info");
+          return;
+        }
         if (ctx.hasUI) {
           const terminals = manager.view.list();
           ctx.ui.notify(

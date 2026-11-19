@@ -261,3 +261,81 @@ function sanitizeSubagentLimits(
     unlimited: value.unlimited !== false,
   };
 }
+
+// ---------------------------------------------------------------------------
+// Channels added for GUI hosts (pi-desk). Producers emit them unconditionally;
+// with no listener (plain TUI) an emit is a no-op, so TUI behavior is unchanged.
+
+export const BACKGROUND_TERMINALS_CHANNEL = "dashboard:background-terminals";
+export const FAST_MODE_CHANNEL = "dashboard:fast-mode";
+
+export interface BackgroundTerminalStreamInfo {
+  totalBytes: number;
+  truncatedBytes: number;
+  /** Full on-disk capture, when spilling works. Hosts may tail it. */
+  spillPath?: string;
+}
+
+export interface BackgroundTerminalInfo {
+  id: string;
+  title: string;
+  command: string;
+  cwd: string;
+  pid?: number;
+  status: string;
+  createdAt: number;
+  settledAt?: number;
+  exitCode?: number;
+  signal?: string;
+  errorText?: string;
+  stdout: BackgroundTerminalStreamInfo;
+  stderr: BackgroundTerminalStreamInfo;
+}
+
+export interface BackgroundTerminalsState {
+  running: number;
+  terminals: BackgroundTerminalInfo[];
+}
+
+export interface FastModeState {
+  active: boolean;
+}
+
+export function emptyBackgroundTerminalsState(): BackgroundTerminalsState {
+  return { running: 0, terminals: [] };
+}
+
+function isStreamInfo(value: unknown): value is BackgroundTerminalStreamInfo {
+  return (
+    isRecord(value) &&
+    typeof value.totalBytes === "number" &&
+    typeof value.truncatedBytes === "number" &&
+    (value.spillPath === undefined || typeof value.spillPath === "string")
+  );
+}
+
+export function isBackgroundTerminalsState(
+  value: unknown,
+): value is BackgroundTerminalsState {
+  return (
+    isRecord(value) &&
+    typeof value.running === "number" &&
+    Array.isArray(value.terminals) &&
+    value.terminals.every(
+      (t) =>
+        isRecord(t) &&
+        typeof t.id === "string" &&
+        typeof t.title === "string" &&
+        typeof t.command === "string" &&
+        typeof t.cwd === "string" &&
+        typeof t.status === "string" &&
+        typeof t.createdAt === "number" &&
+        isStreamInfo(t.stdout) &&
+        isStreamInfo(t.stderr),
+    )
+  );
+}
+
+export function isFastModeState(value: unknown): value is FastModeState {
+  return isRecord(value) && typeof value.active === "boolean";
+}

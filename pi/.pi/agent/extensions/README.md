@@ -39,6 +39,20 @@ Preserve:
 | `pi-diff-minimal`  | `pi-diff-minimal/src/index.ts` | Package-style extension; renderer is the main remaining monolith.                                                       |
 | `pi-engram-memory` | `pi-engram-memory/index.ts`    | Largest extension; config, types, pure utilities, row formatting, and tool renderers are split out.                     |
 
+## GUI hosts (pi-desk)
+
+`pi-desk/` is inert unless `PI_DESK=1` (set by the pi-desk GUI, RPC mode). In the TUI it registers nothing.
+Under pi-desk it forwards every `dashboard:*` channel to the GUI as `setStatus("pi-desk:<channel>", json)`,
+and adds `/desk-goto <entryId>`. It does not gate tool calls: pi-desk runs every tool without asking.
+
+GUI-facing additions in other extensions, all no-ops without a listener or outside pi-desk:
+
+- `shared/dashboard-state.ts`: `dashboard:background-terminals` and `dashboard:fast-mode` channels.
+- `background-terminals`: publishes metadata-only snapshots (with spill-file paths) on that channel; `/ps kill <id...>` outside the TUI.
+- `gpt-fast-mode`: publishes `{ active }` on toggle, session start and refresh.
+- `ask-user`: with `PI_DESK=1` in RPC mode, sends all questions in one `ctx.ui.editor("pi-desk:ask_user", json)` request (`ask-user/desk.ts`); otherwise the existing one-select-per-question flow.
+- `prompt-inspector`: under pi-desk, reports go to the GUI as a notification (report sheet) instead of stdout, which RPC redirects.
+
 ## Module conventions
 
 - Keep extension entry files focused on Pi registration and event wiring.
@@ -69,6 +83,7 @@ Preserve:
 | `extensions/subagents/src/ui`          | `extensions/subagents/src/ui/*.test.ts`          |
 | `extensions/ui-customization`          | `extensions/ui-customization/*.test.ts`          |
 | `extensions/shared`                    | `extensions/shared/*.test.ts`                    |
+| `extensions/pi-desk`                   | `extensions/pi-desk/*.test.ts`                   |
 
 The selector intentionally excludes `prompt-inspector`, `pi-zen-free`, `discord-activity`, and `session-stats`. This selector is offline only. It does not run live provider checks or visual terminal checks.
 

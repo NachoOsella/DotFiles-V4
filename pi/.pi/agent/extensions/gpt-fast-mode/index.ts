@@ -2,14 +2,31 @@ import type {
     ExtensionAPI,
     ExtensionContext,
 } from '@earendil-works/pi-coding-agent'
+import {
+    FAST_MODE_CHANNEL,
+    REFRESH_CHANNEL,
+} from '../shared/dashboard-state.ts'
 import { defaultEnabled, shortcuts } from './config.js'
 import { isCodexModel, isCodexRequest } from './request.js'
 
 export default function gptFastMode(pi: ExtensionAPI): void {
     let enabled = defaultEnabled()
 
+    // GUI hosts (pi-desk) show a fast-mode chip from this channel. With no
+    // listener (plain TUI) the emit is a no-op. Optional chaining keeps test
+    // doubles and older hosts without an event bus working.
+    const publish = () => {
+        try {
+            pi.events?.emit(FAST_MODE_CHANNEL, { active: enabled })
+        } catch {
+            // Advisory only.
+        }
+    }
+    pi.events?.on(REFRESH_CHANNEL, publish)
+
     function toggle(ctx: ExtensionContext): void {
         enabled = !enabled
+        publish()
         if (!ctx.hasUI) return
         if (!enabled) {
             ctx.ui.notify('GPT Fast mode disabled.', 'info')
@@ -49,6 +66,7 @@ export default function gptFastMode(pi: ExtensionAPI): void {
 
     pi.on('session_start', () => {
         enabled = defaultEnabled()
+        publish()
     })
 
     pi.on('before_provider_request', (event, ctx) => {

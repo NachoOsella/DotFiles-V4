@@ -1,11 +1,27 @@
 /** TUI overlay for displaying long prompt content. Kept separate from entry for testability. */
 
+/**
+ * pi-desk (PI_DESK=1, RPC) shows multi-line notifications as a report sheet,
+ * so the content goes to the GUI instead of stdout (which RPC redirects).
+ * Returns true when it handled the report.
+ */
+export function deskReport(
+  ctx: import("@earendil-works/pi-coding-agent").ExtensionCommandContext,
+  title: string,
+  content: string,
+): boolean {
+  if (process.env.PI_DESK !== "1" || ctx.mode !== "rpc" || !ctx.hasUI) return false;
+  ctx.ui.notify(`${title}\n\n${content}`, "info");
+  return true;
+}
+
 export async function showInOverlayOrNotify(
   ctx: import("@earendil-works/pi-coding-agent").ExtensionCommandContext,
   title: string,
   content: string,
 ): Promise<void> {
   if (!ctx.hasUI || ctx.mode !== "tui") {
+    if (deskReport(ctx, title, content)) return;
     console.log(`\n${title}\n${"=".repeat(title.length)}\n${content}\n`);
     ctx.ui.notify(title, "info");
     return;
